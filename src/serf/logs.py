@@ -1,4 +1,4 @@
-"""Centralized logging configuration for Abzu."""
+"""Centralized logging configuration for SERF."""
 
 import logging
 import sys

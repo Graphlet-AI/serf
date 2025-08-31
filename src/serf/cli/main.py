@@ -2,7 +2,7 @@
 
 import click
 
-from serf.logs import get_logger
+from serf.logs import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
@@ -11,7 +11,7 @@ logger = get_logger(__name__)
 @click.version_option()
 def cli() -> None:
     """SERF: Semantic Entity Resolution Framework CLI."""
-    pass
+    setup_logging()
 
 
 @cli.command()

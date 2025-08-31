@@ -48,7 +48,7 @@ class Config:
     def reload(self) -> None:
         """Reload the configuration file."""
         try:
-            with open(self.config_file, "r") as f:
+            with open(self.config_file, "r", encoding="utf-8") as f:
                 self._config = yaml.safe_load(f)
         except FileNotFoundError:
             raise FileNotFoundError(f"Configuration file not found: {self.config_file}")

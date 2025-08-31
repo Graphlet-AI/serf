@@ -1,0 +1,17 @@
+[project]
+name = "serf"
+version = "0.1.0"
+description = "SERF: Semantic Entity Resolution Framework"
+authors = [
+    {name = "Russell Jurney",email = "rjurney@graphlet.ai"}
+]
+license = {text = "COMMERCIAL"}
+readme = "README.md"
+requires-python = "3.12"
+dependencies = [
+]
+
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"

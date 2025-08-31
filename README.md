@@ -1,9 +1,9 @@
 # SERF: Semantic Entity Resolution Framework
 
-This project aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities across various data sources.
+This project aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities across various data sources. It follows from the work performed in [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a).
 
 <center>
-    <img src="assets/entity_resolution.png" alt="Stages of entity resolution: blocking, matching, merging" width="600" />
+    <img src="assets/entity_resolution.png" alt="Stages of entity resolution: blocking, matching, merging" width="600px" />
     <p><em>Source: <a href="https://medium.com/data-science/entity-resolution-identifying-real-world-entities-in-noisy-data-3e8c59f4f41c">Entity Resolution: Identifying Real-World Entities in Noisy Data</a></em></p>
 </center>
 
@@ -18,8 +18,13 @@ Phase 2 - Schema Alignment, Matching and Merging with Large Language Models
 - **Schema Alignment** - Aligns schemas of common entities with different formats
 - **Entity Matching** - Matches entire blocks of records
 - **Entity Merging** - Merges matched entities in entire blocks of records
+- **Match Evaluation** - Evaluates the quality of matches using various metrics
 
 All three operations occur in a single prompt guided by metadata from [DSPy](http://dspy.ai/) signatures, in [BAML](https://github.com/BoundaryML/baml) format with [Google Gemini models](https://ai.google.dev/gemini-api/docs/models).
+
+Phase 3 - Edge Resolution
+
+- **Edge Resolution** - Merging nodes results in duplicate edges.
 
 ## System Requirements
 

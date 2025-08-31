@@ -1,22 +1,21 @@
-[project]
+[tool.poetry]
 name = "serf"
 version = "0.1.0"
 description = "SERF: Semantic Entity Resolution Framework"
-authors = [
-    {name = "Russell Jurney",email = "rjurney@graphlet.ai"}
-]
-license = {text = "COMMERCIAL"}
+authors = ["Russell Jurney <rjurney@graphlet.ai>"]
+license = "COMMERCIAL"
 readme = "README.md"
-requires-python = ">=3.12,<3.14"
-dependencies = [
-    "baml-py (>=0.206.1,<0.207.0)",
-    "dspy-ai (>=3.0.2,<4.0.0)",
-    "sentence-transformers (>=5.1.0,<6.0.0)"
-]
+packages = [{include = "serf", from = "src"}]
 
-[build-system]
-requires = ["poetry-core>=2.0.0,<3.0.0"]
-build-backend = "poetry.core.masonry.api"
+[tool.poetry.dependencies]
+python = "^3.12,<3.14"
+baml-py = "^0.206.1"
+dspy-ai = "^3.0.2"
+sentence-transformers = "^5.1.0"
+click = "^8.1.7"
+pyyaml = "^6.0.1"
+pyspark = "^3.5.5"
+ipython = "^9.5.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest-asyncio = "^1.1.0"
@@ -25,4 +24,29 @@ pre-commit = "^4.3.0"
 black = "^25.1.0"
 flake8 = "^7.3.0"
 mypy = "^1.17.1"
+isort = "^5.13.2"
+types-pyyaml = "^6.0.12"
 
+[tool.poetry.scripts]
+serf = "serf.cli.main:cli"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ['py312']
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+check_untyped_defs = true
+ignore_missing_imports = true

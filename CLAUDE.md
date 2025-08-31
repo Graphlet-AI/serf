@@ -181,7 +181,7 @@ In addition, when writing PySpark code:
 ### Python Dependencies
 
 - Python 3.12 required
-- Core packages: pyspark==3.5.5+, baml-py, dspy-ai, pyspark, sentence-transformers, transformers, pytorch
+- Core packages: baml-py, dspy-ai, pyspark, sentence-transformers, transformers, pytorch
 - Development tools: poetry, black, isort, flake8, mypy, pytest
 - See pyproject.toml for complete dependency list
 

@@ -93,4 +93,4 @@ Commands:
 
 ### Docker Setup
 
-The easiest way to get started with Abzu is using Docker and `docker compose`. This ensures a consistent development environment.
+The easiest way to get started with SERF is using Docker and `docker compose`. This ensures a consistent development environment.

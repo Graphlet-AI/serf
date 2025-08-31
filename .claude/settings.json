@@ -32,7 +32,6 @@
       "Bash(poetry install)",
       "Bash(poetry update:*)",
       "Bash(touch:*)",
-      "Bash(touch:*__init__.py)",
       "Bash(echo:*)",
       "Bash(echo -ne:*)",
       "Write(__init__.py)",

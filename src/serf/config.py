@@ -1,4 +1,4 @@
-"""Configuration management for Abzu."""
+"""Configuration management for SERF."""
 
 import os
 import re

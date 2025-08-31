@@ -1,11 +1,11 @@
 # SERF: Semantic Entity Resolution Framework
 
-This project aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities across various data sources. It follows from the work performed in [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a).
+This project aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities across various data sources. It is based on the blog post [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a).
 
-<center>
+<div align="center">
     <img src="assets/entity_resolution.png" alt="Stages of entity resolution: blocking, matching, merging" width="600px" />
     <p><em>Source: <a href="https://medium.com/data-science/entity-resolution-identifying-real-world-entities-in-noisy-data-3e8c59f4f41c">Entity Resolution: Identifying Real-World Entities in Noisy Data</a></em></p>
-</center>
+</div>
 
 ## Features
 
@@ -71,6 +71,26 @@ poetry install
 pre-commit install
 ```
 
+## CLI
+
+The SERF CLI provides commands for running the entity resolution pipeline:
+
+```bash
+$ serf --help
+Usage: serf [OPTIONS] COMMAND [ARGS]...
+
+  SERF: Semantic Entity Resolution Framework CLI.
+
+Options:
+  --version  Show the version and exit.
+  --help     Show this message and exit.
+
+Commands:
+  block  Perform semantic blocking on input data.
+  edges  Resolve edges after node merging.
+  match  Align schemas, match entities, and merge within blocks.
+```
+
 ### Docker Setup
 
-The easiest way to get started with Abzu is using Docker and `docker compose`. This ensures a consistent development environment.
+The easiest way to get started with SERF is using Docker and `docker compose`. This ensures a consistent development environment.

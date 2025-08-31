@@ -9,7 +9,7 @@ import yaml
 
 
 class Config:
-    """Configuration management for Abzu.
+    """Configuration management for SERF.
 
     Loads configuration from config.yml and provides methods to access
     configuration values. Configuration values can use variable interpolation

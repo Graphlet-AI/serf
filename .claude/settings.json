@@ -31,23 +31,24 @@
       "Bash(poetry install:*)",
       "Bash(poetry update:*)",
       "Bash(touch:*)",
-      "Bash(touch *__init__.py)",
+      "Bash(touch:*__init__.py)",
       "Bash(echo:*)",
       "Bash(echo -ne:*)",
-      "Write(*/__init__.py)",
       "Write(__init__.py)",
       "Bash(serf:*)",
       "WebFetch(domain:*.readthedocs.io)",
+      "WebFetch(domain:*.google.com)",
       "Bash(python -c:*)",
       "WebFetch",
       "Bash(poetry run serf:*)",
-      "poetry",
       "Bash(poetry:*)",
       "Bash(jq:*)",
       "Bash(length:*)",
       "Bash(head:*)",
       "Bash(echo:*)",
-      "Bash(poetry run:*)"
+      "Bash(poetry run:*)",
+      "Bash(git log:*)",
+      "Bash(mkdir:*)"
     ],
     "deny": [
       "Bash(pip install:*)"

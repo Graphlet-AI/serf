@@ -77,7 +77,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Tests: Don't make a class to contain unit tests. Just write the tests in pytest style.
 - Type hints: Use Python 3.9 type hints for all function parameters and return types. Use `list`, `dict`, `tuple`, etc. instead of `List`, `Dict`, `Tuple` from the `typing` module. Use `Optional` from the `typing` module for optional parameters.
 - Type checking: Use mypy for type checking, run mypy before committing code
-- Logging: Use logging for error handling, avoid print statements. Always use `from sef.logs import get_logger` and `logger = get_logger(__name__)`
+- Logging: Use logging for error handling, avoid print statements. Always use `from serf.logs import get_logger` and `logger = get_logger(__name__)`
 - Documentation: Use Sphinx for documentation, include docstrings in all public functions/classes
 - Code style: Follow PEP 8 for Python code style, use flake8 for linting
 - Mypy: Use mypy for type checking, run mypy before committing code. Configure it in `pyproject.toml`, not `mypy.ini`.

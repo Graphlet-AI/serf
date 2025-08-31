@@ -46,10 +46,7 @@
       "Bash(jq:*)",
       "Bash(length:*)",
       "Bash(head:*)",
-      "Bash(echo:*)",
       "Bash(poetry run:*)",
-      "Bash(git log:*)",
-      "Bash(mkdir:*)",
       "Bash(poetry run serf --help)"
     ],
     "deny": [

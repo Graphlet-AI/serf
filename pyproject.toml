@@ -7,11 +7,22 @@ authors = [
 ]
 license = {text = "COMMERCIAL"}
 readme = "README.md"
-requires-python = "3.12"
+requires-python = ">=3.12,<3.14"
 dependencies = [
+    "baml-py (>=0.206.1,<0.207.0)",
+    "dspy-ai (>=3.0.2,<4.0.0)",
+    "sentence-transformers (>=5.1.0,<6.0.0)"
 ]
-
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.group.dev.dependencies]
+pytest-asyncio = "^1.1.0"
+pytest = "^8.4.1"
+pre-commit = "^4.3.0"
+black = "^25.1.0"
+flake8 = "^7.3.0"
+mypy = "^1.17.1"
+

@@ -71,6 +71,26 @@ poetry install
 pre-commit install
 ```
 
+## CLI
+
+The SERF CLI provides commands for running the entity resolution pipeline:
+
+```bash
+$ serf --help
+Usage: serf [OPTIONS] COMMAND [ARGS]...
+
+  SERF: Semantic Entity Resolution Framework CLI.
+
+Options:
+  --version  Show the version and exit.
+  --help     Show this message and exit.
+
+Commands:
+  block  Perform semantic blocking on input data.
+  edges  Resolve edges after node merging.
+  match  Align schemas, match entities, and merge within blocks.
+```
+
 ### Docker Setup
 
 The easiest way to get started with Abzu is using Docker and `docker compose`. This ensures a consistent development environment.

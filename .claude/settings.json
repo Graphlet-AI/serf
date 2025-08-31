@@ -29,6 +29,7 @@
       "Bash(mkdir -p:*)",
       "Bash(poetry add:*)",
       "Bash(poetry install:*)",
+      "Bash(poetry install)",
       "Bash(poetry update:*)",
       "Bash(touch:*)",
       "Bash(touch:*__init__.py)",
@@ -48,10 +49,12 @@
       "Bash(echo:*)",
       "Bash(poetry run:*)",
       "Bash(git log:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(poetry run serf --help)"
     ],
     "deny": [
       "Bash(pip install:*)"
-    ]
+    ],
+    "ask": []
   }
 }

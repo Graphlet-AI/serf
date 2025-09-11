@@ -6,7 +6,6 @@ This opinionated guide to PySpark code style presents common situations we've en
 
 Beyond PySpark specifics, the general practices of clean code are important in PySpark repositories- the Google [PyGuide](https://github.com/google/styleguide/blob/gh-pages/pyguide.md) is a strong starting point for learning more about these practices.
 
-
 # Prefer implicit column selection to direct access, except for disambiguation
 
 ```python
@@ -29,12 +28,38 @@ In many situations the first style can be simpler, shorter and visually less pol
 - Column expressions involving the dataframe aren't reusable and can't be used for defining abstract functions;
 - Renaming a dataframe variable can be error-prone, as all column references must be updated in tandem.
 
-Additionally, the dot syntax encourages use of short and non-descriptive variable names for the dataframes, which we have found to be harmful for maintainability. Remember that dataframes are containers for data, and descriptive names is a helpful way to quickly set expectations about what's contained within. 
+Additionally, the dot syntax encourages use of short and non-descriptive variable names for the dataframes, which we have found to be harmful for maintainability. Remember that dataframes are containers for data, and descriptive names is a helpful way to quickly set expectations about what's contained within.
 
 By contrast, `F.col('colA')` will always reference a column designated `colA` in the dataframe being operated on, named `df`, in this case. It does not require keeping track of other dataframes' states at all, so the code becomes more local and less susceptible to "spooky interaction at a distance," which is often challenging to debug.
+
 ### Caveats
 
 In some contexts there may be access to columns from more than one dataframe, and there may be an overlap in names. A common example is in matching expressions like `df.join(df2, on=(df.key == df2.key), how='left')`. In such cases it is fine to reference columns by their dataframe directly. You can also disambiguate joins using dataframe aliases (see more in the **Joins** section in this guide).
+
+# Use struct.* whenever possible. Avoid long lists of columns
+
+Long lists of columns for `pyspark.sql.DataFrame.select()` calls quickly become outdated and introduce bugs.
+
+Always avoid:
+
+```python
+# bad
+columns = ["one", "two", "three", "four", "five", "six"]
+df2 = df.select(*columns)
+```
+
+Instead, whenever possible do:
+
+```python
+# good
+df2 = df.select("*", F.length("list_col").alias("list_length"))
+
+# Use struct.* on structs
+df2 = df.select("struct_col.*", F.length("struct_col.list").alias("list_length"))
+
+# Even better
+df2 = df.withColumn("list_length", F.length("struct_col.list"))
+```
 
 # Make Assumptions About Input Data
 
@@ -79,7 +104,6 @@ Note how the `F.when` expression is now succinct and readable and the desired be
 
 There is still some duplication of code in the final example: how to remove that duplication is an exercise for the reader.
 
-
 # Use `select` statements to specify a schema contract
 
 Doing a select at the beginning of a PySpark transform, or before returning, is considered good practice. This `select` statement specifies the contract with both the reader and the code about the expected dataframe schema for inputs and outputs. Any select should be seen as a cleaning operation that is preparing the dataframe for consumption by the next step in the transform.
@@ -87,7 +111,6 @@ Doing a select at the beginning of a PySpark transform, or before returning, is 
 Keep select statements as simple as possible. Due to common SQL idioms, allow only *one* function from `spark.sql.function` to be used per selected column, plus an optional `.alias()` to give it a meaningful name. Keep in mind that this should be used sparingly. If there are more than *three* such uses in the same select, refactor it into a separate function like `clean_<dataframe name>()` to encapsulate the operation.
 
 Expressions involving more than one dataframe, or conditional operations like `.when()` are discouraged to be used in a select, unless required for performance reasons.
-
 
 ```python
 # bad
@@ -125,7 +148,6 @@ The `select()` statement redefines the schema of a dataframe, so it naturally su
 
 Instead of calling `withColumnRenamed()`, use aliases:
 
-
 ```python
 #bad
 df.select('key', 'comments').withColumnRenamed('comments', 'num_comments')
@@ -135,6 +157,7 @@ df.select('key', F.col('comments').alias('num_comments'))
 ```
 
 Instead of using `withColumn()` to redefine type, cast in the select:
+
 ```python
 # bad
 df.select('comments').withColumn('comments', F.col('comments').cast('double'))
@@ -144,6 +167,7 @@ df.select(F.col('comments').cast('double'))
 ```
 
 But keep it simple:
+
 ```python
 # bad
 df.select(
@@ -158,7 +182,7 @@ df.withColumn(
 )
 ```
 
-Avoid including columns in the select statement if they are going to remain unused and choose instead an explicit set of columns - this is a preferred alternative to using `.drop()` since it guarantees that schema mutations won't cause unexpected columns to bloat your dataframe. However, dropping columns isn't inherently discouraged in all cases; for instance, it is commonly appropriate to drop columns after joins since it is common for joins to introduce redundant columns. 
+Avoid including columns in the select statement if they are going to remain unused and choose instead an explicit set of columns - this is a preferred alternative to using `.drop()` since it guarantees that schema mutations won't cause unexpected columns to bloat your dataframe. However, dropping columns isn't inherently discouraged in all cases; for instance, it is commonly appropriate to drop columns after joins since it is common for joins to introduce redundant columns.
 
 Finally, instead of adding new columns via the select statement, using `.withColumn()` is recommended instead for single columns. When adding or manipulating tens or hundreds of columns, use a single `.select()` for performance reasons.
 
@@ -167,7 +191,6 @@ Finally, instead of adding new columns via the select statement, using `.withCol
 If you need to add an empty column to satisfy a schema, always use `F.lit(None)` for populating that column. Never use an empty string or some other string signalling an empty value (such as `NA`).
 
 Beyond being semantically correct, one practical reason for using `F.lit(None)` is preserving the ability to use utilities like `isNull`, instead of having to verify empty strings, nulls, and `'NA'`, etc.
-
 
 ```python
 # bad
@@ -220,14 +243,13 @@ for c in cols:
 
 # UDFs (user defined functions)
 
-If you can do something without a UDF, try to do so unless I say otherwise. In most situations, logic that seems to necessitate a UDF can be refactored to use only native PySpark functions.
+If you can do something without a UDF, try to do so. In most situations, logic that seems to necessitate a UDF can be refactored to use only native PySpark functions. On the other hand if a UDF makes for a simpler, more performant implementation... use a UDF.
 
 # Joins
 
 Be careful with joins! If you perform a left join, and the right side has multiple matches for a key, that row will be duplicated as many times as there are matches. This is called a "join explosion" and can dramatically bloat the output of your transforms job. Always double check your assumptions to see that the key you are joining on is unique, unless you are expecting the multiplication.
 
 Bad joins are the source of many tricky-to-debug issues. There are some things that help like specifying the `how` explicitly, even if you are using the default value `(inner)`:
-
 
 ```python
 # bad
@@ -315,6 +337,7 @@ df.select('key', F.last('num').over(w2).alias('last')).collect()
 ```
 
 It is much safer to always specify an explicit frame:
+
 ```python
 # good
 w3 = W.partitionBy('key').orderBy('num').rowsBetween(W.unboundedPreceding, 0)
@@ -336,6 +359,7 @@ df.select('key', F.last('num').over(w4).alias('last')).collect()
 ## Dealing with nulls
 
 While nulls are ignored for aggregate functions (like `F.sum()` and `F.max()`), they will generally impact the result of analytic functions (like `F.first()` and `F.lead()`):
+
 ```python
 df_nulls = spark.createDataFrame([('a', None), ('a', 1), ('a', 2), ('a', None)], ['key', 'num'])
 
@@ -347,6 +371,7 @@ df_nulls.select('key', F.last('num').over(w4).alias('last')).collect()
 ```
 
 Best to avoid this problem by enabling the `ignorenulls` flag:
+
 ```python
 df_nulls.select('key', F.first('num', ignorenulls=True).over(w4).alias('first')).collect()
 # => [Row(key='a', first=1), Row(key='a', first=1), Row(key='a', first=1), Row(key='a', first=1)]
@@ -356,6 +381,7 @@ df_nulls.select('key', F.last('num', ignorenulls=True).over(w4).alias('last')).c
 ```
 
 Also be mindful of explicit ordering of nulls to make sure the expected results are obtained:
+
 ```python
 w5 = W.partitionBy('key').orderBy(F.asc_nulls_first('num')).rowsBetween(W.currentRow, W.unboundedFollowing)
 w6 = W.partitionBy('key').orderBy(F.asc_nulls_last('num')).rowsBetween(W.currentRow, W.unboundedFollowing)
@@ -492,7 +518,6 @@ The rationale for why we've set these limits on chaining:
 4. If you are using an IDE, it makes it easier to use automatic extractions or do code movements (i.e: `cmd + shift + up` in pycharm)
 5. Large chains are hard to read and maintain, particularly if chains are nested.
 
-
 # Multi-line expressions
 
 The reason you can chain expressions is because PySpark was developed from Spark, which comes from JVM languages. This meant some design patterns were transported, specifically chainability. However, Python doesn't support multiline expressions gracefully and the only alternatives are to either provide explicit line breaks, or wrap the expression in parentheses. You only need to provide explicit line breaks if the chain happens at the root node. For example:
@@ -526,7 +551,6 @@ df = (
 )
 ```
 
-
 # Other Considerations and Recommendations
 
 0. Do not split a single file's dataflow into multiple functions. Just implement a linear dataflow. If you have to repeat the same code of more than three lines more than two times, implement a function for that logic.
@@ -553,5 +577,6 @@ df = (
 
 WIP - To enforce consistent code style, each main repository should have [Pylint](https://www.pylint.org/) enabled, with the same configuration. We provide some PySpark specific checkers you can include in your Pylint to match the rules listed in this document. These checkers for Pylint still need some more energy put into them, but feel free to contribute and improve them.
 
+# Data formats - Save data in Parquet and JSON Lines
 
-[pylint]: https://www.pylint.org/
+Save all datasets in both Parquet and JSON Lines formats. This ensures we can easily inspect the data in a human-readable format (JSON Lines) with `jq` while also benefiting from the performance and storage efficiency of Parquet.

@@ -14,7 +14,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Test single: `poetry run pytest tests/path_to_test.py::test_name`
 - Lint: `pre-commit run --all-files`, `poetry run flake8 src tests`
 - Format: `poetry run black src tests`, `poetry run isort src tests`
-- Type check: `poetry run mypy src tests`
+- Type check: `poetry run zuban check src tests`
 
 ### Docker Development (via Taskfile)
 
@@ -76,11 +76,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Tests: Use pytest for testing, include type hints in test functions, use fixtures for setup/teardown
 - Tests: Don't make a class to contain unit tests. Just write the tests in pytest style.
 - Type hints: Use Python 3.9 type hints for all function parameters and return types. Use `list`, `dict`, `tuple`, etc. instead of `List`, `Dict`, `Tuple` from the `typing` module. Use `Optional` from the `typing` module for optional parameters.
-- Type checking: Use mypy for type checking, run mypy before committing code
+- Type checking: Use zuban for type checking, run zuban before committing code. It is mypy compatible.
 - Logging: Use logging for error handling, avoid print statements. Always use `from serf.logs import get_logger` and `logger = get_logger(__name__)`
 - Documentation: Use Sphinx for documentation, include docstrings in all public functions/classes
 - Code style: Follow PEP 8 for Python code style, use flake8 for linting
-- Mypy: Use mypy for type checking, run mypy before committing code. Configure it in `pyproject.toml`, not `mypy.ini`.
+- Zuban: Use zuban for type checking, run zuban before committing code. Configure it in `pyproject.toml`.
 - Pre-commit: Use pre-commit for linting and formatting, configure it in `.pre-commit-config.yaml`
 - Git: Use git for version control, commit often with clear messages, use branches for new features/bug fixes. Always test new features in the CLI before you commit them.
 - Poetry: Use poetry for dependency management and packaging, configure it in `pyproject.toml`
@@ -110,7 +110,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Flake8 - fix flake8 errors without being asked and without my verification.
 - Black - fix black errors without being asked and without my verification.
 - Isort - fix isort errors without being asked and without my verification.
-- Mypy - fix mypy errors without being asked and without my verification.
+- Zuban - fix mypy errors without being asked and without my verification.
 - Pre-commit - fix pre-commit errors without being asked and without my verification.
 - New Modules - create a folder for a new module without being asked and without my verification.
 - **init**.py - add these files to new module directories without being asked and without my verification.
@@ -182,7 +182,7 @@ In addition, when writing PySpark code:
 
 - Python 3.12 required
 - Core packages: baml-py, dspy-ai, pyspark, sentence-transformers, transformers, pytorch
-- Development tools: poetry, black, isort, flake8, mypy, pytest
+- Development tools: poetry, black, isort, flake8, zuban, pytest
 - See pyproject.toml for complete dependency list
 
 ### Environment Variables

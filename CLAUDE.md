@@ -44,7 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 ### Key Technologies
 
 - **LLM Integration**: BAML (Boundary AI Markup Language) for structured extraction
-- **DSPy**: Programming—not prompting—LMs - a framework for building and optimizing LLM pipelines
+- **DSPy**: Programming—not prompting—LMs - a framework for building and optimizing LLM pipelines. See the Project's @assets/DSPy.md [DSPy Programming Guide](assets/DSPy.md) and read the docs at [DSPy Documentation](https://dspy.ai/api/).
 - **Sentence Transformers**: A library for state-of-the-art sentence embeddings
 - **Qwen3 Embeddings**: Top MTEB leaderboard embedding across most categories.
 - **Gemini Models**: Advanced models for matching and merging entities

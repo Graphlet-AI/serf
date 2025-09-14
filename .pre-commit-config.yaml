@@ -22,15 +22,15 @@ repos:
         types: [python]
   - repo: local
     hooks:
-      - id: mypy
-        name: mypy
-        entry: mypy
+      - id: zuban
+        name: zuban
+        entry: zuban
         language: system
         types: [python]
-  # - repo: local
-  #   hooks:
-  #     - id: pytest
-  #       name: pytest
-  #       entry: pytest
-  #       language: system
-  #       types: [python]
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest
+        entry: pytest
+        language: system
+        types: [python]

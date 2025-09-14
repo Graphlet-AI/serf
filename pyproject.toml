@@ -26,6 +26,7 @@ flake8 = "^7.3.0"
 mypy = "^1.17.1"
 isort = "^5.13.2"
 types-pyyaml = "^6.0.12"
+zuban = "^0.0.23"
 
 [tool.poetry.scripts]
 serf = "serf.cli.main:cli"
@@ -42,7 +43,7 @@ target-version = ['py312']
 profile = "black"
 line_length = 100
 
-[tool.mypy]
+[tool.zuban]
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
@@ -50,3 +51,8 @@ disallow_untyped_defs = true
 disallow_any_generics = true
 check_untyped_defs = true
 ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+asyncio_mode = "strict"
+asyncio_default_fixture_loop_scope = "function"
+include = ["tests"]

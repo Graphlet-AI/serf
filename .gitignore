@@ -7,3 +7,6 @@ data
 # Ignore Claude Code Settings and MCP setup
 .mcp.json
 .claude
+
+# Ignore Mac crap
+.DS_Store

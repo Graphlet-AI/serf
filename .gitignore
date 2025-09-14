@@ -1,2 +1,9 @@
+# serf.logs.setup_logging() configures logs go to logs/app.log
 logs
+
+# Any data we store in the course of an ER pipeline
 data
+
+# Ignore Claude Code Settings and MCP setup
+.mcp.json
+.claude

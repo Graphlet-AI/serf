@@ -24,7 +24,7 @@ repos:
     hooks:
       - id: zuban
         name: zuban
-        entry: zuban
+        entry: zuban check src/serf tests
         language: system
         types: [python]
   - repo: local

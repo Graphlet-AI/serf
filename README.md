@@ -15,17 +15,17 @@ Phase 1 - Semantic Blocking
 
 Phase 2 - Schema Alignment, Matching and Merging with Large Language Models
 
-- **Schema Alignment** - Aligns schemas of common entities with different formats
-- **Entity Matching** - Matches entire blocks of records
-- **Entity Merging** - Merges matched entities in entire blocks of records, guided by entity signature descriptions.
-- **Match Evaluation** - Evaluates the quality of matches using various metrics
+- **Schema Alignment** - Align schemas of common entities with different formats
+- **Entity Matching** - Match within entire blocks of records at once
+- **Entity Merging** - Merge matched entities in entire blocks of records, guided by entity signature descriptions.
+- **Match Evaluation** - Evaluate the quality of matches using rigorous metrics
 
 All three operations occur in a single prompt guided by metadata from [DSPy](http://dspy.ai/) signatures, in [BAML](https://github.com/BoundaryML/baml) format with [Google Gemini models](https://ai.google.dev/gemini-api/docs/models).
 
 Phase 3 - Edge Resolution - Deduplicate edge duplicates produced by merging nodes.
 
 - **Edge Blocking** - A sinple GROUP BY on `src`, `dst` and edge `type`.
-- **Edge Merging** - edges are merged by sn LLM guided by edge signature descriptions.
+- **Edge Merging** - edges are merged by an LLM guided by edge signature descriptions.
 
 ## System Requirements
 

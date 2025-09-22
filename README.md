@@ -11,6 +11,8 @@ Serf aims to provide a comprehensive framework for semantic entity resolution, e
 
 ## Features
 
+Serf runs multiple rounds of entity resolution until the dataset converges to a stable state.
+
 Phase 1 - Semantic Blocking
 
 - **Semantic Clustering** - Clusters records using sentence embeddings to group them into efficient blocks for pairwise comparison at quadratic complexity.

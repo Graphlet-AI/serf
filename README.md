@@ -2,7 +2,7 @@
 
 Note: this project is new and still in a setup phase.
 
-This project aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities in the same dataaset or across different datasets. It is based on the blog post [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a) which was featured on [Towards Data Science](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/).
+Serf aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities in the same dataaset or across different datasets. It is based on the blog post [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a) which was featured on [Towards Data Science](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/).
 
 <div align="center">
     <img src="assets/entity_resolution.png" alt="Stages of entity resolution: blocking, matching, merging" width="600px" />

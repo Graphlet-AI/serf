@@ -1,4 +1,4 @@
-# SERF: Semantic Entity Resolution Framework
+# Semantic Entity Resolution Framework (Serf)
 
 This project aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities across various data sources. It is based on the blog post [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a).
 

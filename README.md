@@ -24,8 +24,8 @@ All three operations occur in a single prompt guided by metadata from [DSPy](htt
 
 Phase 3 - Edge Resolution - Deduplicate edge duplicates produced by merging nodes.
 
-- **Edge Blocking** - A sinple GROUP BY on `src`, `dst` and edge `type`.
-- **Edge Merging** - edges are merged by an LLM guided by edge signature descriptions.
+- **Edge Blocking** - A simple GROUP BY on `src`, `dst` and edge `type`.
+- **Edge Merging** - Edges are merged by an LLM guided by edge signature descriptions.
 
 ## System Requirements
 

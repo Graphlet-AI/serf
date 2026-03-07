@@ -16,6 +16,7 @@ click = "^8.1.7"
 pyyaml = "^6.0.1"
 pyspark = "^3.5.5"
 ipython = "^9.5.0"
+pyspark-mcp = ">=0.0.6"
 
 [tool.poetry.group.dev.dependencies]
 pytest-asyncio = "^1.1.0"

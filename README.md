@@ -1,6 +1,8 @@
-# SERF: Semantic Entity Resolution Framework
+# Semantic Entity Resolution Framework (Serf)
 
-This project aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities across various data sources. It is based on the blog post [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a).
+Note: this project is new and still in a setup phase.
+
+Serf aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities in the same dataaset or across different datasets. It is based on the blog post [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a) which was featured on [Towards Data Science](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/).
 
 <div align="center">
     <img src="assets/entity_resolution.png" alt="Stages of entity resolution: blocking, matching, merging" width="600px" />
@@ -9,22 +11,25 @@ This project aims to provide a comprehensive framework for semantic entity resol
 
 ## Features
 
+Serf runs multiple rounds of entity resolution until the dataset converges to a stable state.
+
 Phase 1 - Semantic Blocking
 
 - **Semantic Clustering** - Clusters records using sentence embeddings to group them into efficient blocks for pairwise comparison at quadratic complexity.
 
 Phase 2 - Schema Alignment, Matching and Merging with Large Language Models
 
-- **Schema Alignment** - Aligns schemas of common entities with different formats
-- **Entity Matching** - Matches entire blocks of records
-- **Entity Merging** - Merges matched entities in entire blocks of records
-- **Match Evaluation** - Evaluates the quality of matches using various metrics
+- **Schema Alignment** - Align schemas of common entities with different formats
+- **Entity Matching** - Match within entire blocks of records at once
+- **Entity Merging** - Merge matched entities in entire blocks of records, guided by entity signature descriptions.
+- **Match Evaluation** - Evaluate the quality of matches using rigorous metrics
 
 All three operations occur in a single prompt guided by metadata from [DSPy](http://dspy.ai/) signatures, in [BAML](https://github.com/BoundaryML/baml) format with [Google Gemini models](https://ai.google.dev/gemini-api/docs/models).
 
-Phase 3 - Edge Resolution
+Phase 3 - Edge Resolution - Deduplicate edge duplicates produced by merging nodes.
 
-- **Edge Resolution** - Merging nodes results in duplicate edges.
+- **Edge Blocking** - A simple GROUP BY on `src`, `dst` and edge `type`.
+- **Edge Merging** - Edges are merged by an LLM guided by edge signature descriptions.
 
 ## System Requirements
 
@@ -93,4 +98,4 @@ Commands:
 
 ### Docker Setup
 
-The easiest way to get started with SERF is using Docker and `docker compose`. This ensures a consistent development environment.
+The easiest way to get started with Serf is using Docker and `docker compose`. This ensures a consistent development environment.

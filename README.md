@@ -116,15 +116,13 @@ result = matcher(block_records=block_json, schema_info=schema, few_shot_examples
 
 ## Benchmark Results
 
-Baseline performance using Qwen3-Embedding-0.6B cosine similarity matching (no LLM) on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution):
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses Qwen3-Embedding-0.6B name-only embeddings + FAISS IVF. Matching uses Gemini 2.0 Flash via DSPy BlockMatch.
 
-| Dataset          | Domain        | Left  | Right  | Matches | Precision | Recall | F1         |
-| ---------------- | ------------- | ----- | ------ | ------- | --------- | ------ | ---------- |
-| **DBLP-ACM**     | Bibliographic | 2,616 | 2,294  | 2,224   | 0.8436    | 0.8219 | **0.8326** |
-| **Abt-Buy**      | Products      | 1,081 | 1,092  | 1,097   | 0.3268    | 0.8049 | **0.4649** |
-| **DBLP-Scholar** | Bibliographic | 2,616 | 64,263 | 5,347   | 0.9495    | 0.8539 | **0.8992** |
+| Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
+| ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
+| **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8950    | 0.6246 | **0.7357** |
 
-These are embedding-only baselines — semantic blocking with FAISS IVF + cosine similarity thresholding within blocks. No LLM matching was used. LLM-based matching with Gemini 2.0 Flash via DSPy signatures is expected to significantly improve precision on hard datasets like Abt-Buy.
+Blocking uses name-only embeddings for tighter semantic clusters. All matching decisions are made by the LLM — no embedding similarity thresholds.
 
 ## Project Structure
 

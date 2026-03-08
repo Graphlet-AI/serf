@@ -924,10 +924,17 @@ def _benchmark_llm_matching(
 
     predicted_pairs: set[tuple[int, int]] = set()
     for r in resolutions:
+        # Extract from explicit match decisions
         for m in r.matches:
             if m.is_match:
                 a, b = m.entity_a_id, m.entity_b_id
                 predicted_pairs.add((min(a, b), max(a, b)))
+        # Also extract from merged entities' source_ids
+        # (LLM may merge entities without explicit MatchDecision objects)
+        for e in r.resolved_entities:
+            if e.source_ids:
+                for sid in e.source_ids:
+                    predicted_pairs.add((min(e.id, sid), max(e.id, sid)))
 
     click.echo(f"    Predicted {len(predicted_pairs)} match pairs")
     return predicted_pairs

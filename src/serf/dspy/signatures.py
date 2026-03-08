@@ -75,15 +75,19 @@ class GenerateERConfig(dspy.Signature):
     completeness, uniqueness, sample values, and record count, produce
     a YAML configuration that specifies:
     - name_field: which column contains the entity name/title
-    - text_fields: which columns should be used for embedding text
-    - entity_type: what kind of entities these are
-    - blocking parameters (target_block_size, max_block_size)
-    - matching model recommendation
-    - max_iterations and convergence_threshold
-
-    Choose the name_field as the column most likely to be a name or title.
-    Choose text_fields as columns useful for distinguishing entities.
-    Set target_block_size based on dataset size (smaller for small datasets).
+    - text_fields: which text columns should be used for embedding (exclude
+      numeric fields like year, IDs, and non-semantic fields)
+    - entity_type: what kind of entities these are (e.g. "Publication",
+      "Product", "Company", "Person")
+    - blocking parameters:
+      - target_block_size: aim for 30 entities per block
+      - max_block_size: hard cap at 100 entities per block
+    - matching model: use "gemini/gemini-2.0-flash"
+    - max_iterations: at most 5 iterations
+    - convergence_threshold: a SMALL number like 0.01 to 0.05, representing
+      the minimum fraction of entities reduced per round before stopping.
+      For example 0.01 means stop when less than 1% of entities are merged
+      in a round. Do NOT set this to a high number like 0.99.
     """
 
     dataset_profile: str = dspy.InputField(
@@ -92,8 +96,10 @@ class GenerateERConfig(dspy.Signature):
     )
     sample_records: str = dspy.InputField(desc="JSON array of 5-10 sample records from the dataset")
     er_config_yaml: str = dspy.OutputField(
-        desc="YAML configuration for entity resolution with keys: "
-        "name_field, text_fields, entity_type, blocking (method, "
-        "target_block_size, max_block_size), matching (model), "
-        "max_iterations, convergence_threshold"
+        desc="YAML configuration for entity resolution. Required keys: "
+        "name_field (str), text_fields (list of str), entity_type (str), "
+        "blocking: {method: semantic, target_block_size: 30, max_block_size: 100}, "
+        "matching: {model: gemini/gemini-2.0-flash}, "
+        "max_iterations (int, at most 5), "
+        "convergence_threshold (float, small number like 0.01-0.05)"
     )

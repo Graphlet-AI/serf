@@ -10,8 +10,8 @@ models:
 er:
   blocking:
     method: semantic
-    target_block_size: 50
-    max_block_size: 200
+    target_block_size: 30
+    max_block_size: 100
     min_block_size: 2
     auto_scale_by_iteration: true
 

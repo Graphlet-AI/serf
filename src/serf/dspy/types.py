@@ -70,6 +70,78 @@ class Entity(BaseModel):
         return " ".join(parts)
 
 
+class Publication(Entity):
+    """Publication entity for bibliographic record resolution.
+
+    Parameters
+    ----------
+    title : str
+        Publication title (maps to Entity.name)
+    authors : str
+        Author names
+    venue : str
+        Publication venue (journal, conference, etc.)
+    year : int | None
+        Publication year
+    """
+
+    entity_type: str = "publication"
+    authors: str = ""
+    venue: str = ""
+    year: int | None = None
+
+    def text_for_embedding(self) -> str:
+        """Return text optimized for bibliographic embedding.
+
+        Returns
+        -------
+        str
+            Title + authors + venue for embedding
+        """
+        parts = [self.name]
+        if self.authors:
+            parts.append(self.authors)
+        if self.venue:
+            parts.append(self.venue)
+        return " ".join(parts)
+
+
+class Product(Entity):
+    """Product entity for product matching.
+
+    Parameters
+    ----------
+    manufacturer : str
+        Product manufacturer or brand
+    price : float | None
+        Product price
+    category : str
+        Product category
+    """
+
+    entity_type: str = "product"
+    manufacturer: str = ""
+    price: float | None = None
+    category: str = ""
+
+    def text_for_embedding(self) -> str:
+        """Return text optimized for product embedding.
+
+        Returns
+        -------
+        str
+            Name + manufacturer + category for embedding
+        """
+        parts = [self.name]
+        if self.manufacturer:
+            parts.append(self.manufacturer)
+        if self.description:
+            parts.append(self.description)
+        if self.category:
+            parts.append(self.category)
+        return " ".join(parts)
+
+
 class EntityBlock(BaseModel):
     """A block of entities for matching.
 

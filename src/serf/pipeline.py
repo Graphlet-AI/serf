@@ -59,10 +59,10 @@ class ERConfig:
         text_fields: list[str] | None = None,
         entity_type: str = "entity",
         blocking_method: str = "semantic",
-        target_block_size: int = 50,
-        max_block_size: int = 200,
+        target_block_size: int = 30,
+        max_block_size: int = 100,
         model: str = "gemini/gemini-2.0-flash",
-        max_iterations: int = 3,
+        max_iterations: int = 5,
         convergence_threshold: float = 0.01,
     ) -> None:
         self.name_field = name_field
@@ -100,10 +100,10 @@ class ERConfig:
             text_fields=data.get("text_fields"),
             entity_type=data.get("entity_type", "entity"),
             blocking_method=blocking.get("method", "semantic"),
-            target_block_size=blocking.get("target_block_size", 50),
-            max_block_size=blocking.get("max_block_size", 200),
+            target_block_size=blocking.get("target_block_size", 30),
+            max_block_size=blocking.get("max_block_size", 100),
             model=matching.get("model", "gemini/gemini-2.0-flash"),
-            max_iterations=data.get("max_iterations", 3),
+            max_iterations=data.get("max_iterations", 5),
             convergence_threshold=data.get("convergence_threshold", 0.01),
         )
 
@@ -306,8 +306,12 @@ def run_pipeline(
     embedder = EntityEmbedder()
 
     iteration_metrics: list[IterationMetrics] = []
+    prev_reduction_pct = 100.0  # Track previous round's reduction for auto-convergence
 
-    for iteration in range(1, cfg.max_iterations + 1):
+    # max_iterations=0 means auto-convergence (up to 20 iterations)
+    max_iters = cfg.max_iterations if cfg.max_iterations > 0 else 20
+
+    for iteration in range(1, max_iters + 1):
         iter_start = time.time()
         logger.info(f"\n=== Iteration {iteration} ===")
         logger.info(f"  Entities: {len(entities)}")
@@ -370,12 +374,30 @@ def run_pipeline(
             f"({reduction_pct:.1f}% reduction, {iter_elapsed:.1f}s)"
         )
 
-        # Check convergence
+        # Check convergence: stop when reduction drops below threshold
+        converged = False
         if reduction_pct < cfg.convergence_threshold * 100:
             logger.info(
-                f"  Converged: {reduction_pct:.2f}% < "
-                f"{cfg.convergence_threshold * 100:.2f}% threshold"
+                f"  Converged (below threshold): {reduction_pct:.2f}% < "
+                f"{cfg.convergence_threshold * 100:.2f}%"
             )
+            converged = True
+
+        # Auto-convergence: stop when reduction plateaus (no improvement)
+        is_auto = cfg.max_iterations == 0
+        is_plateau = reduction_pct <= 0 or (
+            prev_reduction_pct > 0 and reduction_pct / prev_reduction_pct < 0.1
+        )
+        if is_auto and iteration > 1 and is_plateau:
+            logger.info(
+                f"  Auto-converged (plateau): reduction dropped from "
+                f"{prev_reduction_pct:.2f}% to {reduction_pct:.2f}%"
+            )
+            converged = True
+
+        prev_reduction_pct = reduction_pct
+
+        if converged:
             entities = resolved
             break
 

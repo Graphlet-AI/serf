@@ -63,7 +63,12 @@ def cli() -> None:
     default="gemini/gemini-2.0-flash",
     help="LLM model for matching",
 )
-@click.option("--max-iterations", type=int, default=3, help="Maximum ER iterations")
+@click.option(
+    "--max-iterations",
+    type=int,
+    default=5,
+    help="Maximum ER iterations (0 for auto-convergence)",
+)
 @click.option(
     "--convergence-threshold",
     type=float,
@@ -73,7 +78,7 @@ def cli() -> None:
 @click.option(
     "--target-block-size",
     type=int,
-    default=50,
+    default=30,
     help="Target entities per FAISS block",
 )
 def run(
@@ -242,8 +247,8 @@ def analyze(input_path: str, output_path: str | None, model: str) -> None:
     default="semantic",
     help="Blocking method to use",
 )
-@click.option("--target-block-size", type=int, default=50, help="Target entities per block")
-@click.option("--max-block-size", type=int, default=200, help="Maximum entities per block")
+@click.option("--target-block-size", type=int, default=30, help="Target entities per block")
+@click.option("--max-block-size", type=int, default=100, help="Maximum entities per block")
 def block(
     input_path: str,
     output_path: str,
@@ -478,7 +483,7 @@ def edges(input_path: str, output_path: str) -> None:
     default="semantic",
     help="Blocking method",
 )
-@click.option("--target-block-size", type=int, default=50, help="Target entities per block")
+@click.option("--target-block-size", type=int, default=30, help="Target entities per block")
 @click.option(
     "--batch-size",
     type=int,
@@ -504,7 +509,7 @@ def resolve(
         iteration=iteration,
         method=method,
         target_block_size=target_block_size,
-        max_block_size=200,
+        max_block_size=100,
     )
     click.echo("\n  Step 2: Matching...")
     ctx.invoke(
@@ -726,7 +731,7 @@ def benchmark_all(
             benchmark,
             dataset=name,
             output_path=output_path,
-            target_block_size=15,
+            target_block_size=30,
             model=model,
             max_right_entities=max_right_entities,
         )
@@ -857,7 +862,7 @@ def _benchmark_llm_matching(
     from serf.match.matcher import EntityMatcher
 
     click.echo("\n  Blocking (embeddings + FAISS)...")
-    pipeline = SemanticBlockingPipeline(target_block_size=target_block_size, max_block_size=200)
+    pipeline = SemanticBlockingPipeline(target_block_size=target_block_size, max_block_size=100)
     blocks, blocking_metrics = pipeline.run(all_entities)
     click.echo(f"    {blocking_metrics.total_blocks} blocks created")
 

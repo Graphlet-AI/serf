@@ -6,8 +6,9 @@ from pathlib import Path
 
 from serf.config import config
 
+
 def setup_logging() -> None:
-    """Configure logging for the application."""
+    """Configure logging for the application. Called from serf.cli.main - use for Kafka, etc."""
     # Get log directory from config
     log_dir = Path(config.get("logs.file.path", "logs"))
 

@@ -10,6 +10,8 @@ ignore =
     W503
     # Line break occurred after a binary operator (W504) - both are required
     W504
+    # Too complex
+    C901
 max-complexity = 10
 # Enforce numpy docstring format
 docstring-convention = numpy

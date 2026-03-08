@@ -12,16 +12,19 @@ Performs comprehensive validation of entity resolution results:
 import json
 from typing import Any
 
+from serf.config import config
 from serf.dspy.types import BlockResolution, Entity
 from serf.eval.metrics import validate_source_uuids
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
 
-# Thresholds for PASS/FAIL assessment
-COVERAGE_THRESHOLD = 99.99  # source_uuid coverage must be >= this %
-ERROR_THRESHOLD = 0.01  # error_recovery fraction must be < this %
-OVERLAP_THRESHOLD = 1.0  # duplicate entity fraction must be < this %
+# Thresholds for PASS/FAIL assessment (all values are percentages: 0–100).
+# Previously ERROR_THRESHOLD used a fraction scale (0–1) with a * 100 multiplier
+# in the comparison. All three are now consistently percentage-based.
+COVERAGE_THRESHOLD: float = config.get("er.eval.coverage_threshold", 99.99)
+ERROR_THRESHOLD: float = config.get("er.eval.error_threshold", 1.0)
+OVERLAP_THRESHOLD: float = config.get("er.eval.overlap_threshold", 1.0)
 
 
 def evaluate_er_results(
@@ -125,8 +128,8 @@ def evaluate_er_results(
         "error_rate": {
             "value": error_rate,
             "threshold": ERROR_THRESHOLD,
-            "passed": error_rate < ERROR_THRESHOLD * 100,
-            "description": f"error_recovery rate < {ERROR_THRESHOLD * 100}%",
+            "passed": error_rate < ERROR_THRESHOLD,
+            "description": f"error_recovery rate < {ERROR_THRESHOLD}%",
         },
         "duplicate_rate": {
             "value": duplicate_rate,

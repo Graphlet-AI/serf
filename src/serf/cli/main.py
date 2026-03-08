@@ -58,16 +58,10 @@ def cli() -> None:
 )
 @click.option("--entity-type", type=str, default="entity", help="Entity type label")
 @click.option(
-    "--mode",
-    type=click.Choice(["embedding", "llm"]),
-    default="embedding",
-    help="Matching mode: embedding similarity or LLM",
-)
-@click.option(
-    "--similarity-threshold",
-    type=float,
-    default=0.85,
-    help="Cosine similarity threshold for embedding mode",
+    "--model",
+    type=str,
+    default="gemini/gemini-2.0-flash",
+    help="LLM model for matching",
 )
 @click.option("--max-iterations", type=int, default=3, help="Maximum ER iterations")
 @click.option(
@@ -89,17 +83,18 @@ def run(
     name_field: str | None,
     text_fields: str | None,
     entity_type: str,
-    mode: str,
-    similarity_threshold: float,
+    model: str,
     max_iterations: int,
     convergence_threshold: float,
     target_block_size: int,
 ) -> None:
     """Run entity resolution on any CSV, Parquet, or Iceberg table.
 
-    Loads the input data, auto-detects field types (or uses a config),
-    then runs iterative blocking → matching → merging until convergence.
+    Uses embeddings for blocking (FAISS clustering) and LLM for matching
+    (DSPy BlockMatch). Runs iterative rounds until convergence.
     Writes resolved entities as Parquet and CSV.
+
+    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
     """
     from serf.pipeline import ERConfig, run_pipeline
 
@@ -112,8 +107,7 @@ def run(
     if text_fields:
         er_config.text_fields = [f.strip() for f in text_fields.split(",")]
     er_config.entity_type = entity_type
-    er_config.matching_mode = mode
-    er_config.similarity_threshold = similarity_threshold
+    er_config.model = model
     er_config.max_iterations = max_iterations
     er_config.convergence_threshold = convergence_threshold
     er_config.target_block_size = target_block_size
@@ -121,7 +115,7 @@ def run(
     click.echo("SERF Entity Resolution")
     click.echo(f"  Input:  {input_path}")
     click.echo(f"  Output: {output_path}")
-    click.echo(f"  Mode:   {mode}")
+    click.echo(f"  Model:  {model}")
     if config_path:
         click.echo(f"  Config: {config_path}")
 
@@ -558,15 +552,10 @@ def download(dataset: str, output_path: str | None) -> None:
     help="Target entities per block",
 )
 @click.option(
-    "--similarity-threshold",
-    type=float,
-    default=0.85,
-    help="Cosine similarity threshold for embedding matching",
-)
-@click.option(
-    "--use-llm/--no-llm",
-    default=False,
-    help="Use LLM matching instead of embedding similarity",
+    "--model",
+    type=str,
+    default="gemini/gemini-2.0-flash",
+    help="LLM model for matching",
 )
 @click.option(
     "--max-right-entities",
@@ -578,11 +567,14 @@ def benchmark(
     dataset: str,
     output_path: str | None,
     target_block_size: int,
-    similarity_threshold: float,
-    use_llm: bool,
+    model: str,
     max_right_entities: int | None,
 ) -> None:
-    """Run ER pipeline against a benchmark dataset and evaluate."""
+    """Run ER pipeline against a benchmark dataset and evaluate.
+
+    Uses embeddings for blocking and LLM for matching.
+    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    """
     from serf.eval.benchmarks import BenchmarkDataset
 
     available = BenchmarkDataset.available_datasets()
@@ -592,8 +584,7 @@ def benchmark(
         return
 
     click.echo(f"Running benchmark: {dataset}")
-    mode = "LLM" if use_llm else "embedding"
-    click.echo(f"  Mode: {mode} matching (threshold={similarity_threshold})")
+    click.echo(f"  Model: {model}")
     start = time.time()
 
     benchmark_data = BenchmarkDataset.download(dataset, output_path)
@@ -618,16 +609,7 @@ def benchmark(
     click.echo(f"  Ground truth pairs: {len(benchmark_data.ground_truth)}")
     click.echo(f"  Total entities: {len(all_entities)}")
 
-    if use_llm:
-        predicted_pairs = _benchmark_llm_matching(all_entities, target_block_size)
-    else:
-        predicted_pairs = _benchmark_embedding_matching(
-            all_entities,
-            left_entities,
-            right_entities,
-            target_block_size,
-            similarity_threshold,
-        )
+    predicted_pairs = _benchmark_llm_matching(all_entities, target_block_size, model)
 
     metrics = benchmark_data.evaluate(predicted_pairs)
     elapsed = time.time() - start
@@ -645,9 +627,8 @@ def benchmark(
             json.dump(
                 {
                     "dataset": dataset,
-                    "mode": mode,
+                    "model": model,
                     "elapsed_seconds": elapsed,
-                    "similarity_threshold": similarity_threshold,
                     "predicted_pairs": len(predicted_pairs),
                     "true_pairs": len(benchmark_data.ground_truth),
                     **metrics,
@@ -673,10 +654,10 @@ def benchmark(
     help="Output directory for results",
 )
 @click.option(
-    "--similarity-threshold",
-    type=float,
-    default=0.85,
-    help="Cosine similarity threshold for embedding matching",
+    "--model",
+    type=str,
+    default="gemini/gemini-2.0-flash",
+    help="LLM model for matching",
 )
 @click.option(
     "--max-right-entities",
@@ -686,15 +667,18 @@ def benchmark(
 )
 def benchmark_all(
     output_path: str,
-    similarity_threshold: float,
+    model: str,
     max_right_entities: int,
 ) -> None:
-    """Run embedding-based benchmarks on all available datasets."""
+    """Run LLM-based benchmarks on all available datasets.
+
+    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    """
     from serf.eval.benchmarks import BenchmarkDataset
 
     datasets = BenchmarkDataset.available_datasets()
     click.echo(f"Running benchmarks on {len(datasets)} datasets...")
-    click.echo(f"  Threshold: {similarity_threshold}")
+    click.echo(f"  Model: {model}")
     click.echo(f"  Max right entities: {max_right_entities}")
 
     results: dict[str, dict[str, float]] = {}
@@ -706,8 +690,7 @@ def benchmark_all(
             dataset=name,
             output_path=output_path,
             target_block_size=15,
-            similarity_threshold=similarity_threshold,
-            use_llm=False,
+            model=model,
             max_right_entities=max_right_entities,
         )
 
@@ -808,88 +791,23 @@ def _dataframe_to_entities(df: Any) -> list[Any]:
     return entities
 
 
-def _benchmark_embedding_matching(
-    all_entities: list[Any],
-    left_entities: list[Any],
-    right_entities: list[Any],
-    target_block_size: int,
-    similarity_threshold: float,
-) -> set[tuple[int, int]]:
-    """Run embedding-based matching for benchmarks.
-
-    Parameters
-    ----------
-    all_entities : list[Entity]
-        All entities (left + right)
-    left_entities : list[Entity]
-        Left table entities
-    right_entities : list[Entity]
-        Right table entities
-    target_block_size : int
-        Target block size for FAISS
-    similarity_threshold : float
-        Cosine similarity threshold
-
-    Returns
-    -------
-    set[tuple[int, int]]
-        Predicted match pairs
-    """
-    import numpy as np
-
-    from serf.block.embeddings import EntityEmbedder
-    from serf.block.faiss_blocker import FAISSBlocker
-
-    click.echo("\n  Embedding entities...")
-    embedder = EntityEmbedder()
-    texts = [e.text_for_embedding() for e in all_entities]
-    embeddings = embedder.embed(texts)
-
-    click.echo("  Blocking with FAISS...")
-    ids = [str(e.id) for e in all_entities]
-    blocker = FAISSBlocker(target_block_size=target_block_size)
-    block_assignments = blocker.block(embeddings, ids)
-    click.echo(f"    {len(block_assignments)} blocks created")
-
-    emb_map = {str(e.id): embeddings[i] for i, e in enumerate(all_entities)}
-    left_ids = {str(e.id) for e in left_entities}
-    right_ids = {str(e.id) for e in right_entities}
-
-    click.echo("  Matching within blocks...")
-    predicted_pairs: set[tuple[int, int]] = set()
-    for _block_key, block_entity_ids in block_assignments.items():
-        block_left = [eid for eid in block_entity_ids if eid in left_ids]
-        block_right = [eid for eid in block_entity_ids if eid in right_ids]
-        if not block_left or not block_right:
-            continue
-
-        left_embs = np.array([emb_map[eid] for eid in block_left])
-        right_embs = np.array([emb_map[eid] for eid in block_right])
-        sim_matrix = np.dot(left_embs, right_embs.T)
-
-        for i, lid in enumerate(block_left):
-            for j, rid in enumerate(block_right):
-                if sim_matrix[i, j] >= similarity_threshold:
-                    l_int = int(lid)
-                    r_int = int(rid)
-                    predicted_pairs.add((min(l_int, r_int), max(l_int, r_int)))
-
-    click.echo(f"    Predicted {len(predicted_pairs)} match pairs")
-    return predicted_pairs
-
-
 def _benchmark_llm_matching(
     all_entities: list[Any],
     target_block_size: int,
+    model: str = "gemini/gemini-2.0-flash",
 ) -> set[tuple[int, int]]:
     """Run LLM-based matching for benchmarks.
+
+    Embeddings are used for blocking only. Matching is done by LLM.
 
     Parameters
     ----------
     all_entities : list[Entity]
         All entities to match
     target_block_size : int
-        Target block size
+        Target block size for FAISS blocking
+    model : str
+        LLM model name
 
     Returns
     -------
@@ -901,13 +819,13 @@ def _benchmark_llm_matching(
     from serf.block.pipeline import SemanticBlockingPipeline
     from serf.match.matcher import EntityMatcher
 
-    click.echo("\n  Blocking...")
+    click.echo("\n  Blocking (embeddings + FAISS)...")
     pipeline = SemanticBlockingPipeline(target_block_size=target_block_size, max_block_size=200)
     blocks, blocking_metrics = pipeline.run(all_entities)
     click.echo(f"    {blocking_metrics.total_blocks} blocks created")
 
-    click.echo("  Matching with LLM...")
-    matcher = EntityMatcher()
+    click.echo(f"  Matching with LLM ({model})...")
+    matcher = EntityMatcher(model=model)
     resolutions = asyncio.run(matcher.resolve_blocks(blocks))
 
     predicted_pairs: set[tuple[int, int]] = set()

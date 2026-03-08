@@ -1,16 +1,19 @@
 """End-to-end entity resolution pipeline.
 
 Takes any tabular data (CSV, Parquet, or Iceberg) and runs the full
-blocking → matching → merging pipeline with iterative convergence.
+blocking → LLM matching → merging pipeline with iterative convergence.
+
+Embeddings are used ONLY for blocking (FAISS clustering).
+All matching is done by LLM via DSPy BlockMatch signatures.
 """
 
+import asyncio
 import json
 import os
 import time
 from pathlib import Path
 from typing import Any
 
-import numpy as np
 import pandas as pd
 import yaml
 
@@ -18,7 +21,6 @@ from serf.block.embeddings import EntityEmbedder
 from serf.block.faiss_blocker import FAISSBlocker
 from serf.dspy.types import Entity, EntityBlock, IterationMetrics
 from serf.logs import get_logger
-from serf.merge.merger import EntityMerger
 
 logger = get_logger(__name__)
 
@@ -43,12 +45,8 @@ class ERConfig:
         Target entities per FAISS block.
     max_block_size : int
         Max entities per block before splitting.
-    matching_mode : str
-        "embedding" for cosine similarity, "llm" for LLM-based matching.
-    similarity_threshold : float
-        Cosine similarity threshold for embedding mode.
     model : str
-        LLM model name for llm mode.
+        LLM model name for matching.
     max_iterations : int
         Maximum ER iterations.
     convergence_threshold : float
@@ -63,8 +61,6 @@ class ERConfig:
         blocking_method: str = "semantic",
         target_block_size: int = 50,
         max_block_size: int = 200,
-        matching_mode: str = "embedding",
-        similarity_threshold: float = 0.85,
         model: str = "gemini/gemini-2.0-flash",
         max_iterations: int = 3,
         convergence_threshold: float = 0.01,
@@ -75,8 +71,6 @@ class ERConfig:
         self.blocking_method = blocking_method
         self.target_block_size = target_block_size
         self.max_block_size = max_block_size
-        self.matching_mode = matching_mode
-        self.similarity_threshold = similarity_threshold
         self.model = model
         self.max_iterations = max_iterations
         self.convergence_threshold = convergence_threshold
@@ -108,8 +102,6 @@ class ERConfig:
             blocking_method=blocking.get("method", "semantic"),
             target_block_size=blocking.get("target_block_size", 50),
             max_block_size=blocking.get("max_block_size", 200),
-            matching_mode=matching.get("mode", "embedding"),
-            similarity_threshold=matching.get("similarity_threshold", 0.85),
             model=matching.get("model", "gemini/gemini-2.0-flash"),
             max_iterations=data.get("max_iterations", 3),
             convergence_threshold=data.get("convergence_threshold", 0.01),
@@ -186,7 +178,10 @@ def _detect_name_field(df: pd.DataFrame) -> str:
                 return str(col)
     # Fall back to first non-id string column
     for col in df.columns:
-        if str(col).lower() != "id" and df[col].dtype in ("object", "str", "string"):
+        dtype_str = str(df[col].dtype)
+        if str(col).lower() != "id" and (
+            dtype_str in ("object", "str", "string") or dtype_str.startswith("str")
+        ):
             return str(col)
     return str(df.columns[0])
 
@@ -249,7 +244,6 @@ def dataframe_to_entities(
         desc_parts = [str(row_dict[col]) for col in text_fields if col in row_dict]
         description = " ".join(desc_parts)
 
-        # Convert all values to strings for attributes
         attrs: dict[str, Any] = {}
         for k, v in row_dict.items():
             attrs[k] = str(v) if not isinstance(v, int | float | bool) else v
@@ -266,113 +260,15 @@ def dataframe_to_entities(
     return entities
 
 
-def _embedding_match_within_blocks(
-    blocks: list[EntityBlock],
-    embeddings: np.ndarray,
-    entity_id_to_idx: dict[int, int],
-    similarity_threshold: float,
-) -> list[tuple[int, int]]:
-    """Match entities within blocks using embedding cosine similarity.
-
-    Parameters
-    ----------
-    blocks : list[EntityBlock]
-        Blocks to match within
-    embeddings : np.ndarray
-        All entity embeddings
-    entity_id_to_idx : dict[int, int]
-        Map from entity ID to embedding index
-    similarity_threshold : float
-        Minimum cosine similarity to consider a match
-
-    Returns
-    -------
-    list[tuple[int, int]]
-        List of (entity_a_id, entity_b_id) match pairs
-    """
-    match_pairs: list[tuple[int, int]] = []
-    for blk in blocks:
-        if blk.block_size < 2:
-            continue
-        ents = blk.entities
-        idxs = [entity_id_to_idx[e.id] for e in ents]
-        block_embs = embeddings[idxs]
-        sim = np.dot(block_embs, block_embs.T)
-        for i in range(len(ents)):
-            for j in range(i + 1, len(ents)):
-                if sim[i, j] >= similarity_threshold:
-                    match_pairs.append((ents[i].id, ents[j].id))
-    return match_pairs
-
-
-def _merge_matched_entities(
-    entities: list[Entity],
-    match_pairs: list[tuple[int, int]],
-) -> list[Entity]:
-    """Merge matched entities using union-find for transitive closure.
-
-    Parameters
-    ----------
-    entities : list[Entity]
-        All entities
-    match_pairs : list[tuple[int, int]]
-        Pairs of matching entity IDs
-
-    Returns
-    -------
-    list[Entity]
-        Merged entities
-    """
-    if not match_pairs:
-        return list(entities)
-
-    # Union-find for transitive closure
-    parent: dict[int, int] = {e.id: e.id for e in entities}
-
-    def find(x: int) -> int:
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
-    def union(a: int, b: int) -> None:
-        ra, rb = find(a), find(b)
-        if ra != rb:
-            if ra < rb:
-                parent[rb] = ra
-            else:
-                parent[ra] = rb
-
-    for a, b in match_pairs:
-        union(a, b)
-
-    # Group entities by their root
-    groups: dict[int, list[Entity]] = {}
-    for e in entities:
-        root = find(e.id)
-        if root not in groups:
-            groups[root] = []
-        groups[root].append(e)
-
-    # Merge each group
-    merger = EntityMerger()
-    resolved: list[Entity] = []
-    for group_entities in groups.values():
-        if len(group_entities) == 1:
-            resolved.append(group_entities[0])
-        else:
-            merged = merger.merge_entities(group_entities)
-            resolved.append(merged)
-
-    return resolved
-
-
 def run_pipeline(
     input_path: str,
     output_path: str,
     er_config: ERConfig | None = None,
 ) -> dict[str, Any]:
     """Run the full entity resolution pipeline.
+
+    Uses embeddings for blocking (FAISS clustering) and LLM for matching
+    (DSPy BlockMatch). Runs multiple iterations until convergence.
 
     Parameters
     ----------
@@ -406,7 +302,7 @@ def run_pipeline(
     original_count = len(entities)
     logger.info(f"Created {original_count} entities")
 
-    # Initialize embedder (shared across iterations)
+    # Initialize embedder for blocking (shared across iterations)
     embedder = EntityEmbedder()
 
     iteration_metrics: list[IterationMetrics] = []
@@ -416,20 +312,19 @@ def run_pipeline(
         logger.info(f"\n=== Iteration {iteration} ===")
         logger.info(f"  Entities: {len(entities)}")
 
-        # Embed
-        logger.info("  Embedding...")
+        # Phase 1: Embed for blocking
+        logger.info("  Embedding for blocking...")
         texts = [e.text_for_embedding() for e in entities]
         embeddings = embedder.embed(texts)
-        entity_id_to_idx = {e.id: i for i, e in enumerate(entities)}
 
-        # Block
-        logger.info("  Blocking...")
+        # Phase 2: Block with FAISS
+        logger.info("  Blocking with FAISS...")
         ids = [str(e.id) for e in entities]
         effective_target = max(10, cfg.target_block_size // iteration)
         blocker = FAISSBlocker(
             target_block_size=effective_target,
             iteration=iteration,
-            auto_scale=False,  # We handle scaling above
+            auto_scale=False,
         )
         block_assignments = blocker.block(embeddings, ids)
 
@@ -449,15 +344,8 @@ def run_pipeline(
 
         logger.info(f"  Created {len(blocks)} blocks")
 
-        # Match
-        if cfg.matching_mode == "llm":
-            resolved = _llm_match_and_merge(blocks, cfg)
-        else:
-            match_pairs = _embedding_match_within_blocks(
-                blocks, embeddings, entity_id_to_idx, cfg.similarity_threshold
-            )
-            logger.info(f"  Found {len(match_pairs)} match pairs")
-            resolved = _merge_matched_entities(entities, match_pairs)
+        # Phase 3: Match with LLM
+        resolved = _llm_match_and_merge(blocks, cfg)
 
         # Compute iteration metrics
         reduction = len(entities) - len(resolved)
@@ -514,7 +402,6 @@ def run_pipeline(
         "iteration_metrics": [m.model_dump() for m in iteration_metrics],
     }
 
-    # Save summary
     summary_path = os.path.join(output_path, "summary.json")
     with open(summary_path, "w") as f:
         json.dump(summary, f, indent=2)
@@ -528,7 +415,7 @@ def run_pipeline(
 
 
 def _llm_match_and_merge(blocks: list[EntityBlock], cfg: ERConfig) -> list[Entity]:
-    """Run LLM-based matching and return resolved entities.
+    """Run LLM-based matching on blocks and return resolved entities.
 
     Parameters
     ----------
@@ -540,10 +427,8 @@ def _llm_match_and_merge(blocks: list[EntityBlock], cfg: ERConfig) -> list[Entit
     Returns
     -------
     list[Entity]
-        Resolved entities after LLM matching
+        Resolved entities after LLM matching and merging
     """
-    import asyncio
-
     from serf.match.matcher import EntityMatcher
 
     logger.info("  Matching with LLM...")
@@ -574,7 +459,6 @@ def _write_output(entities: list[Entity], output_path: str) -> None:
             "description": e.description,
             "entity_type": e.entity_type,
         }
-        # Flatten attributes into columns
         for k, v in e.attributes.items():
             row[k] = v
         if e.source_ids:

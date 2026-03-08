@@ -73,8 +73,7 @@ def test_benchmark_help() -> None:
     result = runner.invoke(cli, ["benchmark", "--help"])
     assert result.exit_code == 0
     assert "--dataset" in result.output
-    assert "--similarity-threshold" in result.output
-    assert "--use-llm" in result.output
+    assert "--model" in result.output
     assert "--max-right-entities" in result.output
 
 
@@ -83,7 +82,7 @@ def test_benchmark_all_help() -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark-all", "--help"])
     assert result.exit_code == 0
-    assert "--similarity-threshold" in result.output
+    assert "--model" in result.output
     assert "--max-right-entities" in result.output
 
 
@@ -130,8 +129,7 @@ def test_run_help() -> None:
     assert "--config" in result.output
     assert "--name-field" in result.output
     assert "--text-fields" in result.output
-    assert "--mode" in result.output
-    assert "--similarity-threshold" in result.output
+    assert "--model" in result.output
     assert "--max-iterations" in result.output
     assert "--convergence-threshold" in result.output
     assert "--target-block-size" in result.output

@@ -200,7 +200,7 @@ class BAMLAdapter(JSONAdapter):
 
         # Add input structure section
         if signature.input_fields:
-            for name in signature.input_fields.keys():
+            for name in signature.input_fields:
                 sections.append(f"[[ ## {name} ## ]]")
                 sections.append(f"{{{name}}}")
                 sections.append("")  # Empty line after each input

@@ -133,6 +133,10 @@ def run(
     er_config.max_concurrent = concurrency
     er_config.limit = limit
 
+    # Auto-scale block size for limited test runs
+    if limit and limit <= 20 and er_config.target_block_size >= 20:
+        er_config.target_block_size = 5
+
     click.echo("SERF Entity Resolution")
     click.echo(f"  Input:  {input_path}")
     click.echo(f"  Output: {output_path}")
@@ -681,8 +685,14 @@ def benchmark(
     click.echo(f"  Ground truth pairs: {len(benchmark_data.ground_truth)}")
     click.echo(f"  Total entities: {len(all_entities)}")
 
+    # Auto-scale block size for limited test runs
+    effective_block_size = target_block_size
+    if limit and limit <= 20 and target_block_size >= 20:
+        effective_block_size = 5
+        click.echo(f"  Auto-scaled target_block_size to {effective_block_size} for --limit={limit}")
+
     predicted_pairs = _benchmark_llm_matching(
-        all_entities, target_block_size, model, limit, concurrency
+        all_entities, effective_block_size, model, limit, concurrency
     )
 
     metrics = benchmark_data.evaluate(predicted_pairs)
@@ -900,8 +910,11 @@ def _benchmark_llm_matching(
     from serf.block.pipeline import SemanticBlockingPipeline
     from serf.match.matcher import EntityMatcher
 
-    click.echo("\n  Blocking (embeddings + FAISS)...")
-    pipeline = SemanticBlockingPipeline(target_block_size=target_block_size, max_block_size=100)
+    max_block = min(100, target_block_size * 3)
+    click.echo(f"\n  Blocking (target={target_block_size}, max={max_block})...")
+    pipeline = SemanticBlockingPipeline(
+        target_block_size=target_block_size, max_block_size=max_block
+    )
     blocks, blocking_metrics = pipeline.run(all_entities)
     click.echo(f"    {blocking_metrics.total_blocks} blocks created")
 

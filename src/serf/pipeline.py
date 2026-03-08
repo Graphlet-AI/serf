@@ -13,6 +13,7 @@ import os
 import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 import yaml
@@ -260,6 +261,7 @@ def dataframe_to_entities(
         entities.append(
             Entity(
                 id=i,
+                uuid=str(uuid4()),
                 name=name,
                 description=description,
                 entity_type=entity_type,
@@ -313,6 +315,8 @@ def run_pipeline(
 
     # Initialize embedder for blocking (shared across iterations)
     embedder = EntityEmbedder()
+
+    all_historical_uuids: set[str] = {e.uuid for e in entities if e.uuid}
 
     iteration_metrics: list[IterationMetrics] = []
     prev_reduction_pct = 100.0  # Track previous round's reduction for auto-convergence
@@ -405,6 +409,12 @@ def run_pipeline(
             converged = True
 
         prev_reduction_pct = reduction_pct
+
+        for e in resolved:
+            if e.uuid:
+                all_historical_uuids.add(e.uuid)
+            for su in e.source_uuids or []:
+                all_historical_uuids.add(su)
 
         if converged:
             entities = resolved

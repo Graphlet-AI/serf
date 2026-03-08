@@ -78,13 +78,15 @@ class EntityMatcher:
             self._predictor = dspy.Predict(BlockMatch)
         return self._predictor
 
-    def resolve_block(self, block: EntityBlock) -> BlockResolution:
+    def resolve_block(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:
         """Process a single block through the LLM.
 
         Parameters
         ----------
         block : EntityBlock
             Block of entities to resolve
+        iteration : int
+            Current pipeline iteration number
 
         Returns
         -------
@@ -111,20 +113,25 @@ class EntityMatcher:
             resolution = result.resolution
         except Exception as e:
             logger.error(f"LLM failure for block {block.block_key}: {e}")
-            resolution = self._error_recovery_resolution(block)
+            resolution = self._error_recovery_resolution(block, iteration)
             return self._assign_uuids(resolution)
 
         resolution = mapper.unmap_block(resolution, block)
+        for e in resolution.resolved_entities:
+            if e.match_skip_reason == "missing_in_match_output":
+                e.match_skip_history = list(e.match_skip_history or []) + [iteration]
         resolution = self._assign_uuids(resolution)
         return resolution
 
-    def _error_recovery_resolution(self, block: EntityBlock) -> BlockResolution:
+    def _error_recovery_resolution(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:
         """Build resolution with all entities marked error_recovery.
 
         Parameters
         ----------
         block : EntityBlock
             Original block
+        iteration : int
+            Current pipeline iteration number
 
         Returns
         -------
@@ -133,11 +140,13 @@ class EntityMatcher:
         """
         entities = []
         for e in block.entities:
+            skip_history = list(e.match_skip_history or []) + [iteration]
             entities.append(
                 e.model_copy(
                     update={
                         "match_skip": True,
                         "match_skip_reason": "error_recovery",
+                        "match_skip_history": skip_history,
                     }
                 )
             )
@@ -172,6 +181,7 @@ class EntityMatcher:
         self,
         blocks: list[EntityBlock],
         limit: int | None = None,
+        iteration: int = 1,
     ) -> list[BlockResolution]:
         """Process blocks with async concurrency and rate limiting.
 
@@ -184,6 +194,8 @@ class EntityMatcher:
             Blocks to resolve
         limit : int | None
             Max number of blocks to process (for testing). None = all.
+        iteration : int
+            Current pipeline iteration number
 
         Returns
         -------
@@ -203,7 +215,7 @@ class EntityMatcher:
 
         async def process_one(block: EntityBlock) -> BlockResolution:
             async with semaphore:
-                result = await asyncio.to_thread(self.resolve_block, block)
+                result = await asyncio.to_thread(self.resolve_block, block, iteration)
                 progress.update(1)
                 return result
 

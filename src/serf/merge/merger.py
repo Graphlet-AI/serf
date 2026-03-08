@@ -110,15 +110,18 @@ class EntityMerger:
         else:
             master, other = b, a
 
-        master_source_ids = list(master.source_ids or [])
-        master_source_uuids = list(master.source_uuids or [])
+        merged_source_ids: list[int] = list(master.source_ids or [])
+        merged_source_ids.append(other.id)
+        merged_source_ids.extend(other.source_ids or [])
+        merged_source_ids = list(dict.fromkeys(merged_source_ids))
+        merged_source_ids = [s for s in merged_source_ids if s != master.id]
 
-        master_source_ids.append(other.id)
-        master_source_ids.extend(other.source_ids or [])
-
+        merged_source_uuids: list[str] = list(master.source_uuids or [])
         if other.uuid:
-            master_source_uuids.append(other.uuid)
-        master_source_uuids.extend(other.source_uuids or [])
+            merged_source_uuids.append(other.uuid)
+        merged_source_uuids.extend(other.source_uuids or [])
+        merged_source_uuids = list(dict.fromkeys(merged_source_uuids))
+        merged_source_uuids = [s for s in merged_source_uuids if s != master.uuid]
 
         name = _pick_best_value(master.name, other.name)
         description = _pick_best_value(master.description, other.description)
@@ -132,8 +135,8 @@ class EntityMerger:
             description=description,
             entity_type=entity_type,
             attributes=attributes,
-            source_ids=master_source_ids or None,
-            source_uuids=master_source_uuids or None,
+            source_ids=merged_source_ids or None,
+            source_uuids=merged_source_uuids or None,
             match_skip=master.match_skip,
             match_skip_reason=master.match_skip_reason,
             match_skip_history=master.match_skip_history,

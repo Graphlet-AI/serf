@@ -1,5 +1,8 @@
 """Evaluation metrics for entity resolution."""
 
+from typing import Any
+
+from serf.dspy.types import Entity
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
@@ -186,4 +189,50 @@ def evaluate_resolution(
         "precision": precision(predicted_pairs, true_pairs),
         "recall": recall(predicted_pairs, true_pairs),
         "f1_score": f1_score(predicted_pairs, true_pairs),
+    }
+
+
+def validate_source_uuids(
+    entities: list[Entity],
+    historical_uuids: set[str],
+) -> dict[str, Any]:
+    """Validate that all source_uuids reference known historical UUIDs.
+
+    Parameters
+    ----------
+    entities : list[Entity]
+        Resolved entities to validate.
+    historical_uuids : set[str]
+        Set of all UUIDs ever generated during the pipeline run.
+
+    Returns
+    -------
+    dict[str, Any]
+        Validation results with keys: total_entities, total_source_uuids,
+        valid_source_uuids, invalid_source_uuids, coverage_pct,
+        missing_uuids (first 10), passed (coverage >= 99.99%).
+    """
+    total_source_uuids = 0
+    valid_count = 0
+    missing: list[str] = []
+
+    for entity in entities:
+        for su in entity.source_uuids or []:
+            total_source_uuids += 1
+            if su in historical_uuids:
+                valid_count += 1
+            elif len(missing) < 10:
+                missing.append(su)
+
+    invalid_count = total_source_uuids - valid_count
+    coverage = valid_count / total_source_uuids * 100.0 if total_source_uuids > 0 else 100.0
+
+    return {
+        "total_entities": len(entities),
+        "total_source_uuids": total_source_uuids,
+        "valid_source_uuids": valid_count,
+        "invalid_source_uuids": invalid_count,
+        "coverage_pct": coverage,
+        "missing_uuids": missing,
+        "passed": coverage >= 99.99,
     }

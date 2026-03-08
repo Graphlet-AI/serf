@@ -2,6 +2,7 @@
 
 import pytest
 
+from serf.dspy.types import Entity
 from serf.eval.metrics import (
     cluster_f1,
     evaluate_resolution,
@@ -10,6 +11,7 @@ from serf.eval.metrics import (
     precision,
     recall,
     reduction_ratio,
+    validate_source_uuids,
 )
 
 
@@ -196,3 +198,47 @@ def test_normalize_pairs_handles_ordering() -> None:
     true = {(1, 2), (3, 4)}
     assert precision(pred, true) == 1.0
     assert recall(pred, true) == 1.0
+
+
+def test_validate_source_uuids_all_valid() -> None:
+    """validate_source_uuids passes when all source_uuids are known."""
+    entities = [
+        Entity(id=0, name="A", source_uuids=["uuid-1", "uuid-2"]),
+        Entity(id=1, name="B", source_uuids=["uuid-3"]),
+    ]
+    historical = {"uuid-1", "uuid-2", "uuid-3", "uuid-4"}
+    result = validate_source_uuids(entities, historical)
+    assert result["total_entities"] == 2
+    assert result["total_source_uuids"] == 3
+    assert result["valid_source_uuids"] == 3
+    assert result["invalid_source_uuids"] == 0
+    assert result["coverage_pct"] == 100.0
+    assert result["passed"] is True
+    assert result["missing_uuids"] == []
+
+
+def test_validate_source_uuids_with_invalid() -> None:
+    """validate_source_uuids detects invalid source_uuids."""
+    entities = [
+        Entity(id=0, name="A", source_uuids=["uuid-1", "uuid-bad"]),
+        Entity(id=1, name="B", source_uuids=["uuid-2"]),
+    ]
+    historical = {"uuid-1", "uuid-2"}
+    result = validate_source_uuids(entities, historical)
+    assert result["total_source_uuids"] == 3
+    assert result["valid_source_uuids"] == 2
+    assert result["invalid_source_uuids"] == 1
+    assert result["passed"] is False
+    assert "uuid-bad" in result["missing_uuids"]
+
+
+def test_validate_source_uuids_empty_entities() -> None:
+    """validate_source_uuids handles entities with no source_uuids."""
+    entities = [
+        Entity(id=0, name="A"),
+        Entity(id=1, name="B"),
+    ]
+    result = validate_source_uuids(entities, set())
+    assert result["total_source_uuids"] == 0
+    assert result["coverage_pct"] == 100.0
+    assert result["passed"] is True

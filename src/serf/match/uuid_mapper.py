@@ -124,22 +124,27 @@ class UUIDMapper:
                 restored.append(entity)
                 continue
 
-            # Restore master id and source_ids to original space
             new_id = orig_id["id"]
             new_source_ids: list[int] = []
             new_source_uuids: list[str] = []
 
             for sid in entity.source_ids or []:
                 if sid in self._int_to_original:
-                    new_source_ids.append(self._int_to_original[sid]["id"])
-                    new_source_uuids.extend(self._int_to_original[sid]["source_uuids"])
-                    orig_uuid = self._int_to_original[sid]["uuid"]
-                    if orig_uuid:
-                        new_source_uuids.append(orig_uuid)
+                    src = self._int_to_original[sid]
+                    new_source_ids.append(src["id"])
+                    new_source_ids.extend(src["source_ids"])
+                    if src["uuid"]:
+                        new_source_uuids.append(src["uuid"])
+                    new_source_uuids.extend(src["source_uuids"])
 
-            # Add master's own source_uuids from cache
-            new_source_uuids.extend(orig_id["source_uuids"])
             new_source_ids.extend(orig_id["source_ids"])
+            new_source_uuids.extend(orig_id["source_uuids"])
+
+            new_source_ids = list(dict.fromkeys(new_source_ids))
+            new_source_uuids = list(dict.fromkeys(new_source_uuids))
+
+            new_source_ids = [s for s in new_source_ids if s != new_id]
+            new_source_uuids = [s for s in new_source_uuids if s != orig_id["uuid"]]
 
             restored_entity = entity.model_copy(
                 update={

@@ -73,3 +73,37 @@ def test_merge_entities_empty_raises() -> None:
     merger = EntityMerger()
     with pytest.raises(ValueError, match="empty"):
         merger.merge_entities([])
+
+
+def test_merge_pair_deduplicates_source_ids() -> None:
+    """merge_pair deduplicates source_ids."""
+    a = Entity(id=1, name="A", source_ids=[3, 5])
+    b = Entity(id=2, name="B", source_ids=[3, 7])
+    merger = EntityMerger()
+    result = merger.merge_pair(a, b)
+    assert result.source_ids is not None
+    assert len(result.source_ids) == len(set(result.source_ids))
+    assert set(result.source_ids) == {2, 3, 5, 7}
+
+
+def test_merge_pair_excludes_master_id_from_source_ids() -> None:
+    """Master id is excluded from source_ids."""
+    a = Entity(id=1, name="A")
+    b = Entity(id=2, name="B", source_ids=[1])
+    merger = EntityMerger()
+    result = merger.merge_pair(a, b)
+    assert result.id == 1
+    assert 1 not in (result.source_ids or [])
+
+
+def test_merge_pair_deduplicates_source_uuids() -> None:
+    """merge_pair deduplicates source_uuids."""
+    a = Entity(id=1, name="A", uuid="uuid-a", source_uuids=["uuid-x"])
+    b = Entity(id=2, name="B", uuid="uuid-b", source_uuids=["uuid-x"])
+    merger = EntityMerger()
+    result = merger.merge_pair(a, b)
+    assert result.source_uuids is not None
+    assert len(result.source_uuids) == len(set(result.source_uuids))
+    assert "uuid-x" in result.source_uuids
+    assert "uuid-b" in result.source_uuids
+    assert "uuid-a" not in result.source_uuids

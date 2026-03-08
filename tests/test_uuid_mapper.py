@@ -96,3 +96,89 @@ def test_unmap_block_recovers_missing_entities_as_singletons() -> None:
     assert len(recovered) == 1
     assert recovered[0].id == 300
     assert recovered[0].match_skip_reason == "missing_in_match_output"
+
+
+def test_unmap_block_deduplicates_source_ids() -> None:
+    """source_ids are deduplicated after unmap."""
+    block = EntityBlock(
+        block_key="b1",
+        block_size=3,
+        entities=[
+            Entity(id=100, name="A", uuid="uuid-100", source_ids=[50]),
+            Entity(id=200, name="B", uuid="uuid-200", source_ids=[50]),
+            Entity(id=300, name="C", uuid="uuid-300"),
+        ],
+    )
+    mapper = UUIDMapper()
+    mapper.map_block(block)
+    resolution = BlockResolution(
+        block_key="b1",
+        resolved_entities=[
+            Entity(id=0, name="A merged", source_ids=[1, 2]),
+        ],
+        original_count=3,
+        resolved_count=1,
+    )
+    restored = mapper.unmap_block(resolution, block)
+    merged = restored.resolved_entities[0]
+    assert merged.source_ids is not None
+    assert len(merged.source_ids) == len(set(merged.source_ids))
+
+
+def test_unmap_block_excludes_master_id_from_source_ids() -> None:
+    """Master's own ID is excluded from source_ids."""
+    block = EntityBlock(
+        block_key="b1",
+        block_size=2,
+        entities=[
+            Entity(id=100, name="A", uuid="uuid-100"),
+            Entity(id=200, name="B", uuid="uuid-200"),
+        ],
+    )
+    mapper = UUIDMapper()
+    mapper.map_block(block)
+    resolution = BlockResolution(
+        block_key="b1",
+        resolved_entities=[
+            Entity(id=0, name="A merged", source_ids=[1]),
+        ],
+        original_count=2,
+        resolved_count=1,
+    )
+    restored = mapper.unmap_block(resolution, block)
+    merged = restored.resolved_entities[0]
+    assert merged.id == 100
+    assert 100 not in (merged.source_ids or [])
+
+
+def test_unmap_block_accumulates_source_uuids_transitively() -> None:
+    """source_uuids are accumulated transitively from source entities."""
+    block = EntityBlock(
+        block_key="b1",
+        block_size=2,
+        entities=[
+            Entity(id=100, name="A", uuid="uuid-100"),
+            Entity(
+                id=200,
+                name="B",
+                uuid="uuid-200",
+                source_uuids=["uuid-old-1", "uuid-old-2"],
+            ),
+        ],
+    )
+    mapper = UUIDMapper()
+    mapper.map_block(block)
+    resolution = BlockResolution(
+        block_key="b1",
+        resolved_entities=[
+            Entity(id=0, name="A merged", source_ids=[1]),
+        ],
+        original_count=2,
+        resolved_count=1,
+    )
+    restored = mapper.unmap_block(resolution, block)
+    merged = restored.resolved_entities[0]
+    assert "uuid-200" in (merged.source_uuids or [])
+    assert "uuid-old-1" in (merged.source_uuids or [])
+    assert "uuid-old-2" in (merged.source_uuids or [])
+    assert "uuid-100" not in (merged.source_uuids or [])

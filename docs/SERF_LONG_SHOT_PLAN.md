@@ -23,6 +23,20 @@ This document is a comprehensive implementation plan for building **SERF** (Sema
 
 ---
 
+## 0. Research Phase Decisions (2026-03-08)
+
+This plan is aligned to the current implementation directives:
+
+1. Migrate from Poetry to `uv` first, before complete system implementation.
+2. Exclude BAML runtime integration and `BAMLAdapter` for now.
+3. Enforce a hard Gemini spend cap of `$100` for the build.
+4. Use Gemini 2.0 Flash for ER pipeline operations; allow limited Gemini 2.5 Pro for validation data and GEPA/reflection workflows.
+5. Complete research and document updates first, then pause for instruction before full implementation.
+6. Start with entities represented by all three key benchmark tracks: DBLP-ACM, Walmart-Amazon, DBLP-Scholar.
+7. Pin PySpark to `4.1+`.
+8. Prioritize benchmark validation order: DBLP-ACM, then Walmart-Amazon, then DBLP-Scholar.
+9. Reference Abzu prompt semantics and semantic blocking code directly; defer name-based blocking.
+
 ## 1. Introduction and Motivation
 
 Entity resolution (ER) -- the process of determining when two or more records refer to the same real-world entity -- is among the oldest and most important problems in data management. The Fellegi-Sunter model (1969) formalized probabilistic record linkage, and decades of research have produced systems based on string similarity metrics (Jaccard, Jaro-Winkler, Levenshtein), rule-based blocking, and supervised classifiers. These traditional systems, exemplified by production platforms like Senzing and Informatica MDM, are fast and auditable but fundamentally brittle: they require hand-crafted rules per domain, break on schema variations, and cannot capture the deep semantic understanding needed when data sources use different terminology for the same concepts.
@@ -45,7 +59,7 @@ Senzing's Jeff Jonas has argued that LLMs are [too slow, too expensive, and too 
 | ----------------- | ----------------------------------------------------------------------------------------------- |
 | Too slow          | Semantic blocking reduces LLM calls to O(blocks); PySpark parallelizes across clusters          |
 | Too expensive     | Gemini 2.0 Flash at $0.10/1M tokens; block-level matching reduces calls 50x or more vs pairwise |
-| Hallucinations    | BAML structured outputs + DSPy optimization + multi-round convergence                           |
+| Hallucinations    | DSPy structured outputs + Pydantic typing + multi-round convergence                             |
 | Not deterministic | Temperature=0, multiple convergence rounds, confidence scoring                                  |
 | Not explainable   | Chain-of-thought reasoning, match rationale in structured output fields                         |
 | Not scalable      | PySpark for ETL, embedding models for blocking, LLMs only for semantic decisions                |
@@ -72,7 +86,7 @@ The concept of **Knowledge Graph Factories** ([blog post](https://blog.graphlet.
 | --------- | ------------------------- | --------------------------------- | ---------------------------------- | --------------------------- |
 | 2019-2022 | Deep Discovery / Graphlet | Sentence-transformers             | Embedding similarity + classifiers | Rule-based field resolution |
 | 2023-2025 | Abzu                      | FAISS IVF + sentence-transformers | Gemini via BAML (block-level)      | LLM-guided via BAML         |
-| 2026+     | **SERF**                  | FAISS IVF + Qwen3 embeddings      | DSPy agents + Gemini/Claude        | DSPy-optimized LLM merging  |
+| 2026+     | **SERF**                  | FAISS IVF + Qwen3 embeddings      | DSPy agents + Gemini models        | DSPy-optimized LLM merging  |
 
 ---
 
@@ -80,23 +94,21 @@ The concept of **Knowledge Graph Factories** ([blog post](https://blog.graphlet.
 
 Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patterns that SERF should adopt and generalize. The agent building SERF should study these files carefully:
 
-### 3.1 BAML Templates (LLM Prompt Engineering)
+### 3.1 Abzu Prompt and Client References (Port Semantics Only)
 
-- **`baml_src/multi_er.baml`** -- The core multi-entity resolution prompt. Defines `MultiEntityResolution` and `FewShotMultiEntityResolution` functions using `Gemini20Flash`. Key types: `CompanyList` (block_key, block_key_type, block_size, companies), `MergeCompany` (id, source_ids only -- no name field). The LLM receives an entire block of companies and returns merged results with comprehensive ID tracking (lowest input ID becomes master, ALL OTHER IDs go to `source_ids`). Company class includes `match_skip_history` field for tracking which iterations skipped each company. Test cases cover two-company merges, UUID tracking, and multiple source UUID accumulation. **This pattern must be preserved in SERF using DSPy signatures instead of BAML.**
+- **`baml_src/multi_er.baml`** -- Primary prompt semantics to port into DSPy signatures. Preserve ID-tracking behavior exactly: lowest input ID becomes master, all others go into `source_ids`, and merged records preserve full source lineage. SERF should reuse this logic in DSPy signatures and Python code, but should not include BAML runtime dependencies.
 
 - **`baml_src/article.baml`** -- Base schema definitions. `Company` class with fields: id, uuid, name, cik, ticker, description, website_url, headquarters_location, jurisdiction, revenue_usd, employees, founded_year, ceo, linkedin_url, source_ids, source_uuids, match_skip, match_skip_reason, match_skip_history. Also defines `Ticker` (id, uuid, symbol, exchange), `Exchange` enum (50+ Bloomberg codes), and `Relationship` types.
 
-- **`baml_src/edge_er.baml`** -- Edge resolution prompt. Defines comprehensive types: `EdgeRelationshipInput` (type, description, amount, currency, date, percentage, quarter, url), `EdgeBlock` (src_name, dst_name, relationships, block_size), `MergedEdgeRelationship`, and `EdgeResolutionResult` (merged_relationships, was_resolved, original_count, resolved_count). The `ResolveEdgeBlock` function uses `Gemini20Flash` with rules for merging same-deal relationships across different types (e.g., "Supplier" + "SupplyAgreement"). Test cases cover duplicate investments and distinct relationships.
+- **`baml_src/edge_er.baml`** -- Reference edge-merge semantics for `serf.edge.resolver` prompt behavior. Port intent and output constraints into DSPy signatures and typed Python models.
 
-- **`baml_src/clients.baml`** -- LLM client configurations. Active clients: `Gemini20Flash` (60s/120s timeouts), `Gemini20FlashLong` (180s/180s timeouts, same model), `Gemini25FlashLite` (60s/120s timeouts). All use `temperature 0.0` and exponential retry policy (3 retries, 300ms base delay, 1.5x multiplier, 10s max). Commented out: O3Mini, GPT4o, Gemini25Flash, Gemini25Pro, fallback strategies.
+- **`baml_src/clients.baml`** -- Reference timeout/retry policy values to carry over into DSPy LM configuration (`temperature=0`, exponential retries, and bounded request timeouts).
 
-- **`baml_src/company_er.baml`** -- Pairwise company matching for cases where blocking isn't sufficient.
-
-- **`baml_src/final_er.baml`** -- Final deduplication for companies sharing the same UUID across different blocking iterations.
+- **`baml_src/company_er.baml`**, **`baml_src/final_er.baml`** -- Secondary references for fallback and final-dedupe semantics; optional for first complete implementation.
 
 ### 3.2 Python ER Modules
 
-- **`abzu/er/uuid.py`** (574 lines) -- **Critical pattern.** `UUIDMapper` maps UUIDs to consecutive integers for LLM processing (LLMs work better with small integers than UUIDs). `process_block_with_uuid_mapping()` is the core async function: (1) maps UUIDs to ints, (2) strips source_uuids before sending to LLM (avoids context bloat), (3) calls BAML, (4) restores source_uuids from cached data, (5) recovers missing companies via two-phase recovery (Step 1: add back missing UUIDs to existing output companies; Step 2: recover entire missing companies with `match_skip_reason = "missing_in_match_output"`). Ticker normalization handles str, list, Row, dict formats with Exchange enum validation. **This UUID-to-integer mapping pattern is essential for SERF.**
+- **`abzu/er/uuid.py`** (574 lines) -- **Critical pattern.** `UUIDMapper` maps UUIDs to consecutive integers for LLM processing (LLMs work better with small integers than UUIDs). `process_block_with_uuid_mapping()` is the core async function: (1) maps UUIDs to ints, (2) strips source_uuids before sending to LLM (avoids context bloat), (3) calls LLM match/merge logic, (4) restores source_uuids from cached data, (5) recovers missing companies via two-phase recovery (Step 1: add back missing UUIDs to existing output companies; Step 2: recover entire missing companies with `match_skip_reason = "missing_in_match_output"`). Ticker normalization handles str, list, Row, dict formats with Exchange enum validation. **This UUID-to-integer mapping pattern is essential for SERF.**
 
 - **`abzu/er/match.py`** (537 lines) -- Main matching orchestration. `match_entities()` loads blocks from Parquet (Arrow optimization disabled to preserve Python lists), validates block schema via `validate_block_schema()`, separates singleton/multi-company blocks, processes multi-company blocks via `process_blocks_async()` with semaphore-based rate limiting. Includes `backup_file()` for file/directory backup before overwriting (keeps only most recent backup). Comprehensive error recovery: marks error-recovered companies with `match_skip_reason = "error_recovery"`, updates `match_skip_history` with current iteration number, and logs detailed recovery statistics. Always generates new UUIDs for resolved companies.
 
@@ -104,13 +116,13 @@ Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patter
 
 - **`abzu/er/faiss.py`** (142 lines) -- `FAISSBlocker` class using `IndexIVFFlat` with inner product metric. Calculates `nlist` from `target_block_size`, caps at `sqrt(n)`. Optional `max_distance` filtering. Returns `{block_key: [uuid1, uuid2, ...]}`.
 
-- **`abzu/er/edge_match.py`** (176 lines) -- Async edge resolution: `process_edge_block()`, `resolve_edge_blocks()`, `run_edge_resolution()`. Uses `EdgeBlock`, `EdgeRelationshipInput` BAML types with semaphore rate limiting. Error recovery returns original relationships unchanged.
+- **`abzu/er/edge_match.py`** (176 lines) -- Async edge resolution: `process_edge_block()`, `resolve_edge_blocks()`, `run_edge_resolution()`. Uses typed edge blocks with semaphore rate limiting. Error recovery returns original relationships unchanged.
 
 - **`abzu/er/few_shot.py`** (80 lines) -- Few-shot example generation for merge prompts. `company_dicts_to_baml()` converts dicts to `MergeCompanyExampleSet`. Hardcoded `company_id_tracking_dicts` example demonstrating merge of companies with ids 1 (source_ids [3,7]) and 22 (source_ids [2,4]) into master id=1, source_ids=[22,3,7,2,4].
 
 - **`abzu/er/metrics.py`** (161 lines) -- `BlockInfo`, `BlockingMetrics`, `IterationMetrics` TypedDicts. `IterationMetrics` includes `overall_reduction_pct` for cumulative tracking from original baseline. `get_all_iteration_metrics()` computes both per-round and overall reduction by tracking original company count from iteration 1. Also provides `get_blocking_metrics()`, `get_matching_metrics()`, and `get_evaluation_metrics()`.
 
-- **`abzu/er/acronyms.py`** (88 lines) -- **Company name normalization.** `get_basename()` uses `cleanco` library for corporate suffix removal (Inc., LLC, etc.). `get_corporate_ending()` extracts the corporate ending. `get_acronyms()` generates acronyms from cleaned company names, filtering multilingual stop words via `get_multilingual_stop_words()`. Used by name-based blocking for key generation.
+- **`abzu/er/acronyms.py`** (88 lines) -- Name normalization utilities. Keep this as optional preprocessing support, but do not prioritize Abzu's name-based blocking path in the first complete SERF implementation.
 
 ### 3.3 PySpark ER Modules
 
@@ -118,7 +130,7 @@ Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patter
 
 - **`abzu/spark/er_eval.py`** (601 lines) -- Post-match evaluation with iteration-aware validation. `evaluate_er_matches()` explodes resolved companies, deduplicates exact copies, splits into BAML-processed vs skipped companies. Validates source_uuids against ORIGINAL raw companies data (always iteration 0). For iteration 2+, loads previous iteration output for comparison and validates against ALL historical UUIDs from all previous iterations. Comprehensive metrics: `iteration_input_companies`, `total_original_companies`, `companies_that_went_into_matching`, `skipped_records`, `unique_baml_processed`, `reduction_from_matching`, `ids_dropped_by_baml`. Match skip reason analysis: `singleton_block_count`, `error_recovery_count`, `missing_uuid_recovery_count`, `missing_primary_uuid_count`, `missing_source_uuid_count`. Overall status assessment with PASS/FAIL checks (coverage >= 99.99%, error < 0.01%, overlap < 1.0%). Saves `er_evaluation_metrics.parquet` with all metrics.
 
-- **`abzu/spark/er_block.py`** (848 lines) -- Name-based (heuristic) blocking. Three strategies combined via union: first-word extraction (`get_first_word()`), acronym extraction (`get_acronym()` via `abzu.er.acronyms`), and domain suffix removal (`remove_domain_suffix()` with 50+ TLD suffixes). `build_blocks()` is the main entry point. Uses `normalize_company_dataframe()` for consistent schema and `create_split_large_blocks_udtf()` for oversized block splitting.
+- **`abzu/spark/er_block.py`** (848 lines) -- Name-based (heuristic) blocking. Reference only. Do not implement this path in the first full SERF build; prioritize semantic blocking from `er_block_semantic.py`.
 
 - **`abzu/spark/refine_kg.py`** -- Maps relationships to resolved company nodes, optional edge ER.
 
@@ -163,13 +175,23 @@ Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patter
 ### 3.6 Patterns to Evolve in SERF
 
 1. **BAML types -> fresh DSPy Pydantic types** -- Do NOT reuse Abzu's BAML-generated types (`abzu.baml_client.types`). Those types were auto-generated by BAML for a company-specific domain. SERF needs fresh, domain-agnostic Pydantic classes designed for DSPy signatures. Study Abzu's types for field patterns and ER metadata (source_ids, source_uuids, match_skip, match_skip_history), but build new classes from scratch.
-2. **BAML templates -> DSPy signatures** -- Replace BAML templates with DSPy `Signature` classes + `BAMLAdapter` for output formatting. The signatures should use the new Pydantic types as input/output fields.
+2. **Abzu prompt semantics -> DSPy signatures** -- Port merge/match prompt behavior into DSPy `Signature` classes and typed Python orchestration. Do not use BAML runtime or `BAMLAdapter` in the first full implementation.
 3. **Auto-generate entity types from DataFrames** -- When a user provides a PySpark DataFrame (or Parquet/CSV file), SERF should automatically infer Pydantic entity types from the DataFrame schema. This means inspecting `df.schema` (StructType), mapping Spark types to Python types, and generating a Pydantic class with the appropriate fields. The profiler (Section 5.3) identifies which fields are names, identifiers, dates, etc. -- this metadata enriches the generated type with DSPy field descriptions. Use this approach when it simplifies the user experience (e.g., `serf resolve --input data.parquet` should work without the user defining any types). For advanced use cases, users can define their own Pydantic entity types.
-4. **Poetry -> uv** -- Replace Poetry with the faster, standards-compliant uv package manager
-5. **PySpark 3.5 -> 4.1** -- Leverage VARIANT type, Spark Connect, Python Data Source API
+4. **Poetry -> uv (first task)** -- Replace Poetry with the faster, standards-compliant uv package manager before any major feature work.
+5. **PySpark 3.5 -> 4.1+** -- Pin to PySpark 4.1+ and leverage VARIANT type, Spark Connect, and Python Data Source API.
 6. **Parquet -> Iceberg** -- Add ACID transactions, time travel, schema evolution for iterative ER
 7. **Company-only -> domain-agnostic** -- Generalize entity types beyond companies
 8. **Manual orchestration -> agentic** -- DSPy ReAcT agents control the pipeline dynamically
+9. **Name-based blocking deferred** -- Ignore Abzu name-based blocking for the first complete build; focus on semantic blocking quality and scale.
+
+### 3.7 Required Abzu Reference Workflow During Implementation
+
+During implementation, fetch and reference the Abzu repository directly and map behavior before coding:
+
+1. Pull Abzu and inspect prompt semantics in `baml_src/multi_er.baml` (match + merge rules and ID/source lineage behavior).
+2. Port semantic blocking patterns from `abzu/spark/er_block_semantic.py` first.
+3. Ignore `abzu/spark/er_block.py` (name-based blocking) for the first full SERF build.
+4. Preserve operational parity for UUID mapping, missing-record recovery, and iterative evaluation metrics.
 
 ---
 
@@ -177,19 +199,19 @@ Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patter
 
 ### 4.1 Core Technologies
 
-| Component              | Technology                                                                                              | Rationale                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **Package Manager**    | **uv** (replacing Poetry)                                                                               | 10-100x faster, PEP 621 compliant, built-in Python version management   |
-| **Data Processing**    | **PySpark 4.1**                                                                                         | Python-first, Spark Connect, VARIANT type, Arrow UDFs                   |
-| **Table Format**       | **Apache Iceberg**                                                                                      | ACID transactions, time travel for iteration tracking, schema evolution |
-| **LLM Framework**      | **DSPy 3.x** with `BAMLAdapter`                                                                         | Programming-not-prompting, automatic optimization, Pydantic integration |
-| **Embeddings**         | **Qwen3-Embedding** via sentence-transformers                                                           | Top MTEB leaderboard, multilingual support                              |
-| **Vector Search**      | **FAISS IndexIVFFlat**                                                                                  | Fast approximate nearest neighbor for semantic blocking                 |
-| **Graph Processing**   | **GraphFrames**                                                                                         | Connected components for transitive closure of match decisions          |
-| **LLM Models**         | **Gemini 2.0 Flash** (production), **Gemini 2.5 Flash Lite** (lightweight), **Claude Opus 4** (quality) | Flash for cost efficiency at temp=0; Opus for difficult cases           |
-| **CLI**                | **Click**                                                                                               | Existing SERF pattern, `show_default=True`                              |
-| **Type Checking**      | **zuban** (mypy-compatible)                                                                             | Existing SERF pattern                                                   |
-| **Linting/Formatting** | **Ruff** (replacing black/isort/flake8)                                                                 | Single tool, 10-100x faster                                             |
+| Component              | Technology                                                                                      | Rationale                                                               |
+| ---------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| **Package Manager**    | **uv** (replacing Poetry)                                                                       | 10-100x faster, PEP 621 compliant, built-in Python version management   |
+| **Data Processing**    | **PySpark 4.1+**                                                                                | Python-first, Spark Connect, VARIANT type, Arrow UDFs                   |
+| **Table Format**       | **Apache Iceberg**                                                                              | ACID transactions, time travel for iteration tracking, schema evolution |
+| **LLM Framework**      | **DSPy 3.x** with native structured outputs                                                     | Programming-not-prompting, automatic optimization, Pydantic integration |
+| **Embeddings**         | **Qwen3-Embedding** via sentence-transformers                                                   | Top MTEB leaderboard, multilingual support                              |
+| **Vector Search**      | **FAISS IndexIVFFlat**                                                                          | Fast approximate nearest neighbor for semantic blocking                 |
+| **Graph Processing**   | **GraphFrames**                                                                                 | Connected components for transitive closure of match decisions          |
+| **LLM Models**         | **Gemini 2.0 Flash** (all ER pipeline), **Gemini 2.5 Pro** (limited validation/GEPA reflection) | Flash for cost efficiency; Pro only for constrained quality workflows   |
+| **CLI**                | **Click**                                                                                       | Existing SERF pattern, `show_default=True`                              |
+| **Type Checking**      | **zuban** (mypy-compatible)                                                                     | Existing SERF pattern                                                   |
+| **Linting/Formatting** | **Ruff** (replacing black/isort/flake8)                                                         | Single tool, 10-100x faster                                             |
 
 ### 4.2 Migration from Poetry to uv
 
@@ -208,7 +230,7 @@ dependencies = [
     "dspy-ai>=3.0.3",
     "click>=8.1",
     "pyyaml>=6.0",
-    "pyspark>=4.0,<5.0",
+    "pyspark>=4.1,<5.0",
     "sentence-transformers>=5.1",
     "faiss-cpu>=1.9",
     "graphframes>=0.8",
@@ -229,6 +251,7 @@ dev-dependencies = [
 ```
 
 Replace `poetry install` with `uv sync`, `poetry run` with `uv run`, `poetry add` with `uv add`.
+This migration is mandatory as Step 1 and must complete before full pipeline implementation.
 
 ### 4.3 PySpark 4.1 Features to Leverage
 
@@ -272,9 +295,9 @@ serf/
         __init__.py
         types.py                   # Fresh Pydantic entity types for DSPy (exists, rewrite)
         type_generator.py          # Auto-generate entity types from DataFrame schemas (NEW)
-        baml_adapter.py            # BAMLAdapter for DSPy (exists)
         signatures.py              # DSPy signatures for ER (NEW)
         agents.py                  # DSPy ReAcT agents (NEW)
+        budget.py                  # Gemini token/cost budget guard (NEW)
       block/
         __init__.py
         embeddings.py              # Sentence-transformer embedder (NEW)
@@ -310,7 +333,6 @@ serf/
     test_config.py
     test_types.py
     test_type_generator.py
-    test_baml_adapter.py
     test_embeddings.py
     test_faiss_blocker.py
     test_uuid_mapper.py
@@ -574,11 +596,10 @@ For ML engineers building custom ER pipelines with DSPy optimization:
 import dspy
 from serf.dspy.signatures import BlockMatch, EntityMerge
 from serf.dspy.agents import ERAgent
-from dspy.adapters.baml_adapter import BAMLAdapter
 
 # Configure DSPy
 lm = dspy.LM("gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
-dspy.configure(lm=lm, adapter=BAMLAdapter())
+dspy.configure(lm=lm)
 
 # Use individual signatures
 matcher = dspy.ChainOfThought(BlockMatch)
@@ -632,7 +653,7 @@ class ERAgent(dspy.Module):
 The agent has access to tools for each pipeline phase:
 
 - `profile_dataset(path)` -- Run dataset profiling
-- `create_blocks(path, method, params)` -- Run semantic or name-based blocking
+- `create_blocks(path, method, params)` -- Run semantic blocking
 - `match_blocks(blocks_path, iteration)` -- Run LLM matching on blocks
 - `evaluate_matches(matches_path, raw_path)` -- Compute quality metrics
 - `check_convergence(metrics)` -- Decide if another round is needed
@@ -789,6 +810,22 @@ class BenchmarkDataset:
         ...
 ```
 
+### 8.5 Initial Entity Schemas to Support First
+
+The first complete implementation should support entities from all three primary benchmark tracks at the type-system and profiling layers from day one:
+
+1. **DBLP-ACM (bibliographic)**:
+   - `title`, `authors`, `venue`, `year`
+   - Entity focus: publication/citation records
+2. **Walmart-Amazon (product)**:
+   - `title`, `category`, `brand`, `modelno`, `price`
+   - Entity focus: product catalog records across heterogeneous schemas
+3. **DBLP-Scholar (bibliographic at scale)**:
+   - Same core bibliographic fields as DBLP-ACM with larger candidate space
+   - Entity focus: publication records with significant scale asymmetry
+
+The profiler and auto type-generation path should identify these fields reliably and generate matching-ready Pydantic entity types without manual schema coding for common benchmark runs.
+
 ---
 
 ## 9. Scaling Analysis
@@ -818,17 +855,19 @@ Blocking is essential. Without it, LLM-based ER is economically impossible beyon
 | Claude Opus 4    | $15.00/1M  | $75.00/1M   | **~$56.25**         |
 | GPT-4o           | $2.50/1M   | $10.00/1M   | **~$8.13**          |
 
+The non-Gemini rows are comparative market context only; this build should use Gemini models exclusively per Section 9.6.
+
 **Key insight**: Block-level matching reduces costs by 20-40x compared to pairwise LLM matching. At $0.63 per 10K records with Gemini Flash, SERF can process 1M records for ~$63.
 
 ### 9.3 Recommended Cascade Architecture
 
-For production at scale, implement a cost-optimization cascade:
+For production at scale, implement a Gemini-only cost-optimization cascade:
 
 1. **Embedding similarity filter** (free): Skip blocks where all pairwise embedding similarities < threshold
-2. **Gemini Flash** ($0.10/1M tokens): Process medium-difficulty blocks
-3. **Gemini Pro / Claude Sonnet** ($3-10/1M tokens): Process the hardest blocks where Flash confidence is low
+2. **Gemini 2.0 Flash** ($0.10/$0.40 per 1M input/output tokens): Process all ER pipeline blocks
+3. **Gemini 2.5 Pro** ($1.25/$10.00 per 1M input/output tokens): Reserved for limited validation-data generation and GEPA reflection workflows
 
-This cascade can reduce costs by 80%+ while maintaining F1 within 1-2% of full expensive-model coverage.
+This policy keeps operational ER on Flash and reserves Pro for bounded quality loops while staying under budget.
 
 ### 9.4 Latency and Parallelism
 
@@ -859,6 +898,8 @@ A `GEMINI_API_KEY` environment variable will be provided. The agent must stay wi
 
 4. **Track token usage** by logging input/output token counts from API responses. If cumulative spend approaches $80, stop making Gemini 2.5 Pro calls and finish remaining work with Flash only.
 
+5. **Hard stop at $100**: Before every Gemini API call, estimate worst-case incremental cost from token limits and reject the call if it would push cumulative spend above $100. Persist cumulative usage to a local budget ledger so restarts cannot bypass limits.
+
 | Use Case                       | Model            | Max Calls                 | Est. Cost  |
 | ------------------------------ | ---------------- | ------------------------- | ---------- |
 | ER pipeline (match/merge/edge) | Gemini 2.0 Flash | Unlimited (within budget) | ~$10-30    |
@@ -873,11 +914,17 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 
 ### Step 1: Project Infrastructure (30 min)
 
-1. Convert `pyproject.toml` from Poetry to uv (PEP 621 format)
+1. Convert `pyproject.toml` from Poetry to uv (PEP 621 format). This must be completed before any major feature build work.
 2. Update `.pre-commit-config.yaml` to use Ruff instead of black/isort/flake8
 3. Update `config.yml` with ER pipeline paths, iteration templates, model configs, benchmark dataset URLs
 4. Create all module directories with `__init__.py` files
 5. Update `CLAUDE.md` to reflect new tooling (uv, Ruff)
+
+### Step 1.5: Research Deliverable and Design Freeze (45 min)
+
+1. Update this plan with implementation constraints and benchmark-first priorities.
+2. Confirm architecture choices (no BAMLAdapter runtime, PySpark 4.1+, Gemini budget guard).
+3. Pause for user instruction before beginning complete implementation.
 
 ### Step 2: Core Type System (1.5 hr)
 
@@ -886,17 +933,18 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 3. Add `FieldProfile`, `DatasetProfile` types for dataset analysis
 4. Add `IterationMetrics`, `BlockingMetrics` TypedDicts
 5. Create `src/serf/dspy/type_generator.py` -- `entity_type_from_spark_schema()` that auto-generates a Pydantic Entity subclass from a Spark StructType + DatasetProfile. Maps Spark types to Python types, adds ER metadata fields automatically, generates DSPy field descriptions from profiling results
-6. Write exhaustive unit tests: `tests/test_types.py`, `tests/test_type_generator.py`
+6. Add benchmark-ready schema mappings for DBLP-ACM, Walmart-Amazon, and DBLP-Scholar entity fields.
+7. Write exhaustive unit tests: `tests/test_types.py`, `tests/test_type_generator.py`
 
-### Step 3: DSPy Signatures and Adapter (1 hr)
+### Step 3: DSPy Signatures and LM Configuration (1 hr)
 
 1. Create `src/serf/dspy/signatures.py` with DSPy signatures:
    - `BlockMatch` -- match entire blocks
    - `EntityMerge` -- merge matched entities
    - `EdgeResolve` -- merge duplicate edges
    - `AnalyzeDataset` -- profile and recommend ER strategy
-2. Verify `BAMLAdapter` works with new Pydantic types
-3. Write unit tests: `tests/test_signatures.py`, `tests/test_baml_adapter.py`
+2. Configure DSPy with Gemini model routing and typed output validation (no `BAMLAdapter`).
+3. Write unit tests: `tests/test_signatures.py`
 
 ### Step 4: Embeddings and Blocking (1.5 hr)
 
@@ -962,10 +1010,10 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 1. Create `tests/test_pipeline_integration.py` -- End-to-end pipeline test with small synthetic dataset
 2. Test iterative convergence (3 rounds)
 3. Test Iceberg time travel between iterations
-4. Test benchmark evaluation on three datasets covering easy, medium, and hard difficulties:
+4. Test benchmark evaluation on three datasets, in this order:
    - **DBLP-ACM** (easy, bibliographic) -- Baseline sanity check, expect ~99% F1
-   - **DBLP-Scholar** (medium, bibliographic) -- Tests scale (64K right-side records) and fuzzy matching
-   - **Walmart-Amazon** (hard, products) -- Tests cross-schema matching with very different field formats and 22K right-side records
+   - **Walmart-Amazon** (hard, products) -- Cross-schema product matching and robustness check
+   - **DBLP-Scholar** (medium, bibliographic) -- Scale asymmetry (2.6K vs 64K) and fuzzy matching
 
 ### Step 13: Documentation and Cleanup (30 min)
 
@@ -996,10 +1044,10 @@ Every module gets exhaustive unit tests. Tests should:
 ### 11.2 Integration Tests
 
 - **Pipeline test**: Synthetic dataset through block -> match -> eval -> iterate
-- **Benchmark tests**: Run against all three benchmark datasets from the start:
+- **Benchmark tests**: Run against all three benchmark datasets from the start, in this order:
   - **DBLP-ACM** (easy) -- Verify basic pipeline correctness and metrics computation
-  - **DBLP-Scholar** (medium) -- Verify handling of scale asymmetry (2.6K vs 64K records)
   - **Walmart-Amazon** (hard) -- Verify cross-schema matching with heterogeneous product data
+  - **DBLP-Scholar** (medium) -- Verify handling of scale asymmetry (2.6K vs 64K records)
 - **Iceberg test**: Write/read/time-travel with local Iceberg catalog
 - **GraphFrames test**: Connected components on known graph structure
 

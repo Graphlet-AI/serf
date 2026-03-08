@@ -47,14 +47,23 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 ### Installation
 
 ```bash
-# From PyPI (when published)
-pip install serf
-
-# From source
+# From source with uv (recommended)
 git clone https://github.com/Graphlet-AI/serf.git
 cd serf
-uv sync
+uv sync --extra dev
+
+# From source with pip
+git clone https://github.com/Graphlet-AI/serf.git
+cd serf
+pip install -e ".[dev]"
+
+# From source with conda + pip
+conda create -n serf python=3.12
+conda activate serf
+pip install -e ".[dev]"
 ```
+
+> **Note:** The `faiss-cpu` package (required for semantic blocking) installs as `import faiss`. If you get `ModuleNotFoundError: No module named 'faiss'`, run `pip install faiss-cpu`.
 
 ### System Requirements
 

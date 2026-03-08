@@ -4,6 +4,8 @@ This document is a comprehensive implementation plan for building **SERF** (Sema
 
 **Repository:** [github.com/Graphlet-AI/serf](https://github.com/Graphlet-AI/serf)
 
+> **Key Rule:** Embeddings are for BLOCKING only (FAISS clustering). ALL matching is done by LLM via DSPy signatures. Never use embedding cosine similarity for match decisions.
+
 ---
 
 ## Table of Contents

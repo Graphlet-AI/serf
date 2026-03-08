@@ -118,6 +118,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - I repeat, NEVER TALK ABOUT YOURSELF IN COMMIT MESSAGES. Do not put "Generated with [Claude Code](https://claude.ai/code)" or anything else relating to Claude or Anthropic in commit messages. Commit messages should only describe the code changes made, not the tool used to make them.
 - Ask questions before mitigating a simple problem with a complex fix.
 
+## Critical Rules
+
+### Embeddings Are For Blocking ONLY
+
+**NEVER use embedding cosine similarity for entity matching.** Embeddings are used ONLY for semantic blocking (FAISS clustering to group similar entities into blocks). ALL matching decisions MUST go through an LLM via DSPy BlockMatch signatures. Do not write embedding-based matching code, do not write cosine similarity thresholding for match decisions, do not create an "embedding mode" for matching. The only matching mode is LLM matching.
+
 ## Important Notes
 
 ### Configuration Management

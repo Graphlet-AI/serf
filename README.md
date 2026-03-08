@@ -1,8 +1,8 @@
-# Semantic Entity Resolution Framework (Serf)
+# Agentic Semantic Entity Resolution Framework (Serf)
 
-Note: this project is new and still in a setup phase.
+Note: this project is new and still in an early phase.
 
-Serf aims to provide a comprehensive framework for semantic entity resolution, enabling the identification and disambiguation of entities in the same dataaset or across different datasets. It is based on the blog post [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a) which was featured on [Towards Data Science](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/).
+Serf aims to provide a comprehensive framework for agentic semantic entity resolution, enabling the identification and disambiguation of entities in the same dataset or across different datasets. It is based on the blog post [The Rise of Semantic Entity Resolution](https://blog.graphlet.ai/the-rise-of-semantic-entity-resolution-45c48d5eb00a) which was featured on [Towards Data Science](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/).
 
 <div align="center">
     <img src="assets/entity_resolution.png" alt="Stages of entity resolution: blocking, matching, merging" width="600px" />
@@ -12,6 +12,10 @@ Serf aims to provide a comprehensive framework for semantic entity resolution, e
 ## Features
 
 Serf runs multiple rounds of entity resolution until the dataset converges to a stable state.
+
+Phase 0 - Agentic ER
+
+DSPy agents control all phases dynamically.
 
 Phase 1 - Semantic Blocking
 
@@ -25,6 +29,10 @@ Phase 2 - Schema Alignment, Matching and Merging with Large Language Models
 - **Match Evaluation** - Evaluate the quality of matches using rigorous metrics
 
 All three operations occur in a single prompt guided by metadata from [DSPy](http://dspy.ai/) signatures, in [BAML](https://github.com/BoundaryML/baml) format with [Google Gemini models](https://ai.google.dev/gemini-api/docs/models).
+
+## Knowledge Graph Specifics
+
+For knowledge graphs there is a Phase 3, deduplicating the edges that result from merging nodes
 
 Phase 3 - Edge Resolution - Deduplicate edge duplicates produced by merging nodes.
 

@@ -36,7 +36,7 @@ By contrast, `F.col('colA')` will always reference a column designated `colA` in
 
 In some contexts there may be access to columns from more than one dataframe, and there may be an overlap in names. A common example is in matching expressions like `df.join(df2, on=(df.key == df2.key), how='left')`. In such cases it is fine to reference columns by their dataframe directly. You can also disambiguate joins using dataframe aliases (see more in the **Joins** section in this guide).
 
-# Use struct.* whenever possible. Avoid long lists of columns
+# Use struct.\* whenever possible. Avoid long lists of columns
 
 Long lists of columns for `pyspark.sql.DataFrame.select()` calls quickly become outdated and introduce bugs.
 
@@ -68,7 +68,7 @@ df2 = df.withColumn("list_length", F.length("struct_col.list"))
 
 # Refactor complex logical operations
 
-Logical operations, which often reside inside `.filter()` or `F.when()`, need to be readable. We apply the same rule as with chaining functions, keeping logic expressions inside the same code block to *three (3) expressions at most*. If they grow longer, it is often a sign that the code can be simplified or extracted out. Extracting out complex logical operations into variables makes the code easier to read and reason about, which also reduces bugs.
+Logical operations, which often reside inside `.filter()` or `F.when()`, need to be readable. We apply the same rule as with chaining functions, keeping logic expressions inside the same code block to _three (3) expressions at most_. If they grow longer, it is often a sign that the code can be simplified or extracted out. Extracting out complex logical operations into variables makes the code easier to read and reason about, which also reduces bugs.
 
 ```python
 # bad
@@ -108,7 +108,7 @@ There is still some duplication of code in the final example: how to remove that
 
 Doing a select at the beginning of a PySpark transform, or before returning, is considered good practice. This `select` statement specifies the contract with both the reader and the code about the expected dataframe schema for inputs and outputs. Any select should be seen as a cleaning operation that is preparing the dataframe for consumption by the next step in the transform.
 
-Keep select statements as simple as possible. Due to common SQL idioms, allow only *one* function from `spark.sql.function` to be used per selected column, plus an optional `.alias()` to give it a meaningful name. Keep in mind that this should be used sparingly. If there are more than *three* such uses in the same select, refactor it into a separate function like `clean_<dataframe name>()` to encapsulate the operation.
+Keep select statements as simple as possible. Due to common SQL idioms, allow only _one_ function from `spark.sql.function` to be used per selected column, plus an optional `.alias()` to give it a meaningful name. Keep in mind that this should be used sparingly. If there are more than _three_ such uses in the same select, refactor it into a separate function like `clean_<dataframe name>()` to encapsulate the operation.
 
 Expressions involving more than one dataframe, or conditional operations like `.when()` are discouraged to be used in a select, unless required for performance reasons.
 
@@ -228,7 +228,7 @@ for c in cols:
     df = df.withColumn(c, F.from_unixtime(F.col(c) / 1000).cast(TimestampType()))
 ```
 
-Instead of leaving comments that only describe the logic you wrote, aim to leave comments that give context, that explain the "*why*" of decisions you made when writing the code. This is particularly important for PySpark, since the reader can understand your code, but often doesn't have context on the data that feeds into your PySpark transform. Small pieces of logic might have involved hours of digging through data to understand the correct behavior, in which case comments explaining the rationale are especially valuable.
+Instead of leaving comments that only describe the logic you wrote, aim to leave comments that give context, that explain the "_why_" of decisions you made when writing the code. This is particularly important for PySpark, since the reader can understand your code, but often doesn't have context on the data that feeds into your PySpark transform. Small pieces of logic might have involved hours of digging through data to understand the correct behavior, in which case comments explaining the rationale are especially valuable.
 
 ```python
 # good
@@ -305,11 +305,11 @@ flights = flights.select(
 
 In such cases, keep in mind:
 
-1. It's probably best to drop overlapping columns *prior* to joining if you don't need both;
+1. It's probably best to drop overlapping columns _prior_ to joining if you don't need both;
 2. In case you do need both, it might be best to rename one of them prior to joining;
 3. You should always resolve ambiguous columns before outputting a dataset. After the transform is finished running you can no longer distinguish them.
 
-As a last word about joins, don't use `.dropDuplicates()` or `.distinct()` as a crutch.  If unexpected duplicate rows are observed, there's almost always an underlying reason for why those duplicate rows appear. Adding `.dropDuplicates()` only masks this problem and adds overhead to the runtime.
+As a last word about joins, don't use `.dropDuplicates()` or `.distinct()` as a crutch. If unexpected duplicate rows are observed, there's almost always an underlying reason for why those duplicate rows appear. Adding `.dropDuplicates()` only masks this problem and adds overhead to the runtime.
 
 # Window Functions
 
@@ -322,7 +322,7 @@ df = spark.createDataFrame([('a', 1), ('a', 2), ('a', 3), ('a', 4)], ['key', 'nu
 # bad
 w1 = W.partitionBy('key')
 w2 = W.partitionBy('key').orderBy('num')
- 
+
 df.select('key', F.sum('num').over(w1).alias('sum')).collect()
 # => [Row(key='a', sum=10), Row(key='a', sum=10), Row(key='a', sum=10), Row(key='a', sum=10)]
 
@@ -342,7 +342,7 @@ It is much safer to always specify an explicit frame:
 # good
 w3 = W.partitionBy('key').orderBy('num').rowsBetween(W.unboundedPreceding, 0)
 w4 = W.partitionBy('key').orderBy('num').rowsBetween(W.unboundedPreceding, W.unboundedFollowing)
- 
+
 df.select('key', F.sum('num').over(w3).alias('sum')).collect()
 # => [Row(key='a', sum=1), Row(key='a', sum=3), Row(key='a', sum=6), Row(key='a', sum=10)]
 
@@ -555,25 +555,25 @@ df = (
 
 0. Do not split a single file's dataflow into multiple functions. Just implement a linear dataflow. If you have to repeat the same code of more than three lines more than two times, implement a function for that logic.
 1. Be wary of functions that grow too large. As a general rule, a file
-    should not be over 250 lines, and a function should not be over 70 lines.
+   should not be over 250 lines, and a function should not be over 70 lines.
 2. Try to keep your code in logical blocks. For example, if you have
-    multiple lines referencing the same things, try to keep them
-    together. Separating them reduces context and readability.
-4. Avoid `.otherwise(value)` as a general fallback. If you are mapping
-    a list of keys to a list of values and a number of unknown keys appear,
-    using `otherwise` will mask all of these into one value.
-5. Do not keep commented out code checked in the repository. This applies
-    to single line of codes, functions, classes or modules. Rely on git
-    and its capabilities of branching or looking at history instead.
-7. Try to be as explicit and descriptive as possible when naming functions
-    or variables. Strive to capture what the function is actually doing
-    as opposed to naming it based the objects used inside of it.
-8. Think twice about introducing new import aliases, unless there is a good
-    reason to do so. Some of the established ones are `types` and `functions` from PySpark `from pyspark.sql import types as T, functions as F`.
-9. Avoid using literal strings or integers in filtering conditions, new
-    values of columns etc. Instead, to capture their meaning, extract them into variables, constants,
-    dicts or classes as suitable. This makes the
-    code more readable and enforces consistency across the repository.
+   multiple lines referencing the same things, try to keep them
+   together. Separating them reduces context and readability.
+3. Avoid `.otherwise(value)` as a general fallback. If you are mapping
+   a list of keys to a list of values and a number of unknown keys appear,
+   using `otherwise` will mask all of these into one value.
+4. Do not keep commented out code checked in the repository. This applies
+   to single line of codes, functions, classes or modules. Rely on git
+   and its capabilities of branching or looking at history instead.
+5. Try to be as explicit and descriptive as possible when naming functions
+   or variables. Strive to capture what the function is actually doing
+   as opposed to naming it based the objects used inside of it.
+6. Think twice about introducing new import aliases, unless there is a good
+   reason to do so. Some of the established ones are `types` and `functions` from PySpark `from pyspark.sql import types as T, functions as F`.
+7. Avoid using literal strings or integers in filtering conditions, new
+   values of columns etc. Instead, to capture their meaning, extract them into variables, constants,
+   dicts or classes as suitable. This makes the
+   code more readable and enforces consistency across the repository.
 
 WIP - To enforce consistent code style, each main repository should have [Pylint](https://www.pylint.org/) enabled, with the same configuration. We provide some PySpark specific checkers you can include in your Pylint to match the rules listed in this document. These checkers for Pylint still need some more energy put into them, but feel free to contribute and improve them.
 

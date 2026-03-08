@@ -18,6 +18,7 @@ def test_cli_help() -> None:
     assert "edges" in result.output
     assert "resolve" in result.output
     assert "benchmark" in result.output
+    assert "benchmark-all" in result.output
     assert "download" in result.output
 
 
@@ -71,6 +72,18 @@ def test_benchmark_help() -> None:
     result = runner.invoke(cli, ["benchmark", "--help"])
     assert result.exit_code == 0
     assert "--dataset" in result.output
+    assert "--similarity-threshold" in result.output
+    assert "--use-llm" in result.output
+    assert "--max-right-entities" in result.output
+
+
+def test_benchmark_all_help() -> None:
+    """Test benchmark-all command help."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["benchmark-all", "--help"])
+    assert result.exit_code == 0
+    assert "--similarity-threshold" in result.output
+    assert "--max-right-entities" in result.output
 
 
 def test_download_help() -> None:

@@ -20,6 +20,124 @@ def cli() -> None:
 
 
 # ---------------------------------------------------------------------------
+# run  (main entry point for end-to-end ER on any data)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--input",
+    "-i",
+    "input_path",
+    type=click.Path(exists=True),
+    required=True,
+    help="Input data file (CSV, Parquet) or Iceberg URI",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=True,
+    help="Output directory for resolved entities",
+)
+@click.option(
+    "--config",
+    "-c",
+    "config_path",
+    type=click.Path(exists=True),
+    required=False,
+    help="ER config YAML file with field mappings and parameters",
+)
+@click.option("--name-field", type=str, required=False, help="Column to use as entity name")
+@click.option(
+    "--text-fields",
+    type=str,
+    required=False,
+    help="Comma-separated columns for embedding text",
+)
+@click.option("--entity-type", type=str, default="entity", help="Entity type label")
+@click.option(
+    "--mode",
+    type=click.Choice(["embedding", "llm"]),
+    default="embedding",
+    help="Matching mode: embedding similarity or LLM",
+)
+@click.option(
+    "--similarity-threshold",
+    type=float,
+    default=0.85,
+    help="Cosine similarity threshold for embedding mode",
+)
+@click.option("--max-iterations", type=int, default=3, help="Maximum ER iterations")
+@click.option(
+    "--convergence-threshold",
+    type=float,
+    default=0.01,
+    help="Stop when per-round reduction fraction is below this",
+)
+@click.option(
+    "--target-block-size",
+    type=int,
+    default=50,
+    help="Target entities per FAISS block",
+)
+def run(
+    input_path: str,
+    output_path: str,
+    config_path: str | None,
+    name_field: str | None,
+    text_fields: str | None,
+    entity_type: str,
+    mode: str,
+    similarity_threshold: float,
+    max_iterations: int,
+    convergence_threshold: float,
+    target_block_size: int,
+) -> None:
+    """Run entity resolution on any CSV, Parquet, or Iceberg table.
+
+    Loads the input data, auto-detects field types (or uses a config),
+    then runs iterative blocking → matching → merging until convergence.
+    Writes resolved entities as Parquet and CSV.
+    """
+    from serf.pipeline import ERConfig, run_pipeline
+
+    # Build config: YAML file first, then CLI overrides
+    er_config = ERConfig.from_yaml(config_path) if config_path else ERConfig()
+
+    # CLI flags override config file values
+    if name_field:
+        er_config.name_field = name_field
+    if text_fields:
+        er_config.text_fields = [f.strip() for f in text_fields.split(",")]
+    er_config.entity_type = entity_type
+    er_config.matching_mode = mode
+    er_config.similarity_threshold = similarity_threshold
+    er_config.max_iterations = max_iterations
+    er_config.convergence_threshold = convergence_threshold
+    er_config.target_block_size = target_block_size
+
+    click.echo("SERF Entity Resolution")
+    click.echo(f"  Input:  {input_path}")
+    click.echo(f"  Output: {output_path}")
+    click.echo(f"  Mode:   {mode}")
+    if config_path:
+        click.echo(f"  Config: {config_path}")
+
+    summary = run_pipeline(input_path, output_path, er_config)
+
+    click.echo(f"\n{'=' * 50}")
+    click.echo(f"  Original entities:  {summary['original_count']}")
+    click.echo(f"  Resolved entities:  {summary['final_count']}")
+    click.echo(f"  Overall reduction:  {summary['overall_reduction_pct']:.1f}%")
+    click.echo(f"  Iterations:         {summary['iterations']}")
+    click.echo(f"  Elapsed:            {summary['elapsed_seconds']:.1f}s")
+    click.echo(f"{'=' * 50}")
+    click.echo(f"\nResults written to {output_path}/")
+
+
+# ---------------------------------------------------------------------------
 # analyze
 # ---------------------------------------------------------------------------
 

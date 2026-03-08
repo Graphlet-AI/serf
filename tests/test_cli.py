@@ -11,6 +11,7 @@ def test_cli_help() -> None:
     result = runner.invoke(cli, ["--help"])
     assert result.exit_code == 0
     assert "SERF" in result.output
+    assert "run" in result.output
     assert "analyze" in result.output
     assert "block" in result.output
     assert "match" in result.output
@@ -117,3 +118,20 @@ def test_benchmark_unknown_dataset() -> None:
     result = runner.invoke(cli, ["benchmark", "--dataset", "nonexistent"])
     assert result.exit_code == 0
     assert "Unknown dataset" in result.output
+
+
+def test_run_help() -> None:
+    """Test run command help shows all options."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "--input" in result.output
+    assert "--output" in result.output
+    assert "--config" in result.output
+    assert "--name-field" in result.output
+    assert "--text-fields" in result.output
+    assert "--mode" in result.output
+    assert "--similarity-threshold" in result.output
+    assert "--max-iterations" in result.output
+    assert "--convergence-threshold" in result.output
+    assert "--target-block-size" in result.output

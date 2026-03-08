@@ -45,7 +45,7 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/serf"]
 
-[dependency-groups]
+[project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=1.0",

@@ -848,15 +848,15 @@ def _dataframe_to_entities(df: Any) -> list[Any]:
 
     entities = []
     name_col = _detect_name_column(df.columns.tolist())
-    for idx, row in df.iterrows():
+    for i, (_idx, row) in enumerate(df.iterrows()):
         row_dict = row.to_dict()
-        name = str(row_dict.get(name_col, f"entity_{idx}"))
+        name = str(row_dict.get(name_col, f"entity_{i}"))
         desc_parts = [
             str(v) for k, v in row_dict.items() if k != name_col and isinstance(v, str) and v
         ]
         entities.append(
             Entity(
-                id=int(row_dict.get("id", idx)),  # type: ignore[arg-type]
+                id=i,  # Use sequential index — original IDs may be strings
                 name=name,
                 description=" ".join(desc_parts),
                 attributes=row_dict,

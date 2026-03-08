@@ -358,7 +358,7 @@ def run_pipeline(
         logger.info(f"  Created {len(blocks)} blocks")
 
         # Phase 3: Match with LLM
-        resolved = _llm_match_and_merge(blocks, cfg)
+        resolved = _resolve_blocks_with_llm(blocks, cfg)
 
         # Compute iteration metrics
         reduction = len(entities) - len(resolved)
@@ -445,8 +445,8 @@ def run_pipeline(
     return summary
 
 
-def _llm_match_and_merge(blocks: list[EntityBlock], cfg: ERConfig) -> list[Entity]:
-    """Run LLM-based matching on blocks and return resolved entities.
+def _resolve_blocks_with_llm(blocks: list[EntityBlock], cfg: ERConfig) -> list[Entity]:
+    """Resolve entity blocks via LLM and return resolved entities.
 
     Fires up to cfg.max_concurrent LLM calls simultaneously.
 

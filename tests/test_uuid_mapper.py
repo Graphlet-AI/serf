@@ -62,8 +62,8 @@ def test_unmap_block_restores_ids_and_source_uuids() -> None:
     assert restored.resolved_entities[0].source_uuids == ["uuid-200"]
 
 
-def test_unmap_block_phase2_recovers_missing_entities() -> None:
-    """unmap_block Phase 2 recovers missing entities with match_skip_reason."""
+def test_unmap_block_recovers_missing_entities_as_singletons() -> None:
+    """Missing entities are recovered as un-merged singletons, not merged into first entity."""
     block = EntityBlock(
         block_key="b1",
         block_size=3,
@@ -75,6 +75,7 @@ def test_unmap_block_phase2_recovers_missing_entities() -> None:
     )
     mapper = UUIDMapper()
     mapper.map_block(block)
+    # LLM only returned entity 0 (A merged with B), entity 2 (C) is missing
     resolution = BlockResolution(
         block_key="b1",
         resolved_entities=[
@@ -84,37 +85,14 @@ def test_unmap_block_phase2_recovers_missing_entities() -> None:
         resolved_count=1,
     )
     restored = mapper.unmap_block(resolution, block)
-    assert len(restored.resolved_entities) == 3
+    # Should have 2 entities: A (merged with B) + C (recovered singleton)
+    assert len(restored.resolved_entities) == 2
+    # The merged entity keeps its source_ids
+    merged = restored.resolved_entities[0]
+    assert merged.id == 100
+    assert 200 in (merged.source_ids or [])
+    # The recovered entity is a singleton with match_skip
     recovered = [e for e in restored.resolved_entities if e.match_skip_reason]
-    assert len(recovered) == 2
-    recovered_ids = {e.id for e in recovered}
-    assert recovered_ids == {200, 300}
-    assert all(e.match_skip_reason == "missing_in_match_output" for e in recovered)
-
-
-def test_unmap_block_phase1_adds_missing_ids_to_source_ids() -> None:
-    """unmap_block Phase 1 adds missing IDs to first entity's source_ids."""
-    block = EntityBlock(
-        block_key="b1",
-        block_size=3,
-        entities=[
-            Entity(id=100, name="A"),
-            Entity(id=200, name="B"),
-            Entity(id=300, name="C"),
-        ],
-    )
-    mapper = UUIDMapper()
-    mapper.map_block(block)
-    resolution = BlockResolution(
-        block_key="b1",
-        resolved_entities=[
-            Entity(id=0, name="A", source_ids=[1]),
-        ],
-        original_count=3,
-        resolved_count=1,
-    )
-    restored = mapper.unmap_block(resolution, block)
-    first = restored.resolved_entities[0]
-    assert first.source_ids is not None
-    assert 200 in first.source_ids
-    assert 300 in first.source_ids
+    assert len(recovered) == 1
+    assert recovered[0].id == 300
+    assert recovered[0].match_skip_reason == "missing_in_match_output"

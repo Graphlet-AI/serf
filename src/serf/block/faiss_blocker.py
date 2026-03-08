@@ -97,6 +97,7 @@ class FAISSBlocker:
         index = faiss.IndexIVFFlat(quantizer, dim, nlist, faiss.METRIC_INNER_PRODUCT)
 
         # Train and add vectors
+        # FAISS SWIG bindings lack proper type stubs — ignores are necessary
         index.train(embeddings)  # type: ignore[call-arg]
         index.add(embeddings)  # type: ignore[call-arg]
 

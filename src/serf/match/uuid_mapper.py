@@ -72,9 +72,10 @@ class UUIDMapper:
     ) -> BlockResolution:
         """Restore original UUIDs and IDs in the resolution.
 
-        Performs two-phase missing entity recovery:
-        - Phase 1: Add missing entity IDs to existing resolved entities' source_ids
-        - Phase 2: Recover entire missing entities with match_skip_reason
+        Recovers missing entities: any entity not returned by the LLM is
+        treated as an un-merged singleton with match_skip_reason set.
+        This preserves data lineage integrity — we never assume the LLM
+        merged entities it didn't explicitly return.
 
         Parameters
         ----------
@@ -89,17 +90,21 @@ class UUIDMapper:
             Resolution with restored IDs and source_uuids
         """
         resolved_ids = {e.id for e in resolution.resolved_entities}
+        # IDs that appear in source_ids were explicitly merged — not missing
+        merged_ids: set[int] = set()
+        for e in resolution.resolved_entities:
+            for sid in e.source_ids or []:
+                merged_ids.add(sid)
         all_mapped_ids = set(self._int_to_original.keys())
-        missing_ids = all_mapped_ids - resolved_ids
+        missing_ids = all_mapped_ids - resolved_ids - merged_ids
 
-        # Phase 1: Add missing IDs to first resolved entity's source_ids
-        if missing_ids and resolution.resolved_entities:
-            first = resolution.resolved_entities[0]
-            existing_sources = set(first.source_ids or [])
-            first_sources = list(existing_sources | missing_ids)
-            resolution.resolved_entities[0] = first.model_copy(update={"source_ids": first_sources})
+        if missing_ids:
+            logger.warning(
+                f"Block {original_block.block_key}: {len(missing_ids)} entities "
+                f"missing from LLM output, recovering as singletons"
+            )
 
-        # Phase 2: Recover entire missing entities
+        # Recover missing entities as un-merged singletons
         for mapped_id in sorted(missing_ids):
             orig = self._int_to_original[mapped_id]
             entity = orig["entity"].model_copy(deep=True)

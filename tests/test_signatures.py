@@ -2,7 +2,13 @@
 
 import dspy
 
-from serf.dspy.signatures import AnalyzeDataset, BlockMatch, EdgeResolve, EntityMerge
+from serf.dspy.signatures import (
+    AnalyzeDataset,
+    BlockMatch,
+    EdgeResolve,
+    EntityMerge,
+    GenerateERConfig,
+)
 
 
 def test_block_match_signature_fields() -> None:
@@ -53,4 +59,17 @@ def test_edge_resolve_can_create_predict() -> None:
 def test_analyze_dataset_can_create_predict() -> None:
     """Test that AnalyzeDataset can be used with dspy.Predict."""
     predictor = dspy.Predict(AnalyzeDataset)
+    assert predictor is not None
+
+
+def test_generate_er_config_signature_fields() -> None:
+    """Test GenerateERConfig has the expected input/output fields."""
+    assert "dataset_profile" in GenerateERConfig.input_fields
+    assert "sample_records" in GenerateERConfig.input_fields
+    assert "er_config_yaml" in GenerateERConfig.output_fields
+
+
+def test_generate_er_config_can_create_predict() -> None:
+    """Test that GenerateERConfig can be used with dspy.Predict."""
+    predictor = dspy.Predict(GenerateERConfig)
     assert predictor is not None

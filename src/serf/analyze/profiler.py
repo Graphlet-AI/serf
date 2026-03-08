@@ -1,8 +1,14 @@
 """Dataset profiling for entity resolution."""
 
+import json
+import os
 from typing import Any
 
+import dspy
+
 from serf.analyze.field_detection import detect_field_type
+from serf.dspy.baml_adapter import BAMLAdapter
+from serf.dspy.signatures import GenerateERConfig
 from serf.dspy.types import DatasetProfile, FieldProfile
 from serf.logs import get_logger
 
@@ -102,3 +108,49 @@ class DatasetProfiler:
             recommended_matching_fields=recommended_matching,
             estimated_duplicate_rate=estimated_duplicate_rate,
         )
+
+
+def generate_er_config(
+    profile: DatasetProfile,
+    sample_records: list[dict[str, Any]],
+    model: str = "gemini/gemini-2.0-flash",
+) -> str:
+    """Use an LLM to generate an ER config YAML from a dataset profile.
+
+    Parameters
+    ----------
+    profile : DatasetProfile
+        Statistical profile of the dataset
+    sample_records : list[dict[str, Any]]
+        Sample records from the dataset (5-10 records)
+    model : str
+        LLM model to use for config generation
+
+    Returns
+    -------
+    str
+        YAML string with the recommended ER configuration
+    """
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    lm = dspy.LM(model, api_key=api_key)
+    dspy.configure(lm=lm, adapter=BAMLAdapter())
+
+    predictor = dspy.ChainOfThought(GenerateERConfig)
+
+    profile_json = profile.model_dump_json(indent=2)
+    samples_json = json.dumps(sample_records[:10], indent=2, default=str)
+
+    logger.info("Generating ER config with LLM...")
+    result = predictor(
+        dataset_profile=profile_json,
+        sample_records=samples_json,
+    )
+
+    config_yaml: str = result.er_config_yaml
+    # Strip markdown code fences if the LLM wrapped it
+    if config_yaml.startswith("```"):
+        lines = config_yaml.split("\n")
+        lines = [line for line in lines if not line.strip().startswith("```")]
+        config_yaml = "\n".join(lines)
+
+    return config_yaml.strip()

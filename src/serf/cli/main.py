@@ -143,20 +143,41 @@ def run(
     "input_path",
     type=click.Path(exists=True),
     required=True,
-    help="Input data file (CSV or Parquet)",
+    help="Input data file (CSV, Parquet, or Iceberg URI)",
 )
-def analyze(input_path: str) -> None:
-    """Profile a dataset and recommend ER strategy."""
-    import pandas as pd
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Write LLM-generated ER config YAML to this path",
+)
+@click.option(
+    "--model",
+    type=str,
+    default="gemini/gemini-2.0-flash",
+    help="LLM model for config generation",
+)
+def analyze(input_path: str, output_path: str | None, model: str) -> None:
+    """Profile a dataset and generate an ER configuration.
 
-    from serf.analyze.profiler import DatasetProfiler
+    Runs statistical profiling on the input data, then optionally uses an LLM
+    to generate a ready-to-use ER config YAML. The generated config can be
+    passed directly to `serf run --config`.
+
+    Without --output, prints the statistical profile only.
+    With --output, also calls the LLM to generate an ER config YAML file.
+    """
+    from serf.analyze.profiler import DatasetProfiler, generate_er_config
+    from serf.pipeline import load_data
 
     logger.info(f"Analyzing dataset: {input_path}")
     start = time.time()
 
-    df = pd.read_parquet(input_path) if input_path.endswith(".parquet") else pd.read_csv(input_path)
-
+    df = load_data(input_path)
     records = df.to_dict("records")
+
     profiler = DatasetProfiler()
     profile = profiler.profile(records)
 
@@ -174,6 +195,22 @@ def analyze(input_path: str) -> None:
             f"completeness={fp.completeness:.1%}, "
             f"uniqueness={fp.uniqueness:.1%}"
         )
+
+    if output_path:
+        click.echo(f"\n  Generating ER config with LLM ({model})...")
+        sample_records = records[:10]
+        config_yaml = generate_er_config(profile, sample_records, model=model)
+
+        with open(output_path, "w") as f:
+            f.write(config_yaml + "\n")
+
+        click.echo(f"\n  ER config written to {output_path}")
+        click.echo(
+            f"  Run: serf run --input {input_path} --output data/resolved/ --config {output_path}"
+        )
+        click.echo("\n  Generated config:\n")
+        for line in config_yaml.split("\n"):
+            click.echo(f"    {line}")
 
 
 # ---------------------------------------------------------------------------

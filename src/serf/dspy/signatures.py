@@ -66,3 +66,34 @@ class AnalyzeDataset(dspy.Signature):
         desc="Summary statistics and sample values from the dataset"
     )
     profile: DatasetProfile = dspy.OutputField()
+
+
+class GenerateERConfig(dspy.Signature):
+    """Generate an entity resolution configuration for a dataset.
+
+    Given a statistical profile of the dataset including field types,
+    completeness, uniqueness, sample values, and record count, produce
+    a YAML configuration that specifies:
+    - name_field: which column contains the entity name/title
+    - text_fields: which columns should be used for embedding text
+    - entity_type: what kind of entities these are
+    - blocking parameters (target_block_size, max_block_size)
+    - matching model recommendation
+    - max_iterations and convergence_threshold
+
+    Choose the name_field as the column most likely to be a name or title.
+    Choose text_fields as columns useful for distinguishing entities.
+    Set target_block_size based on dataset size (smaller for small datasets).
+    """
+
+    dataset_profile: str = dspy.InputField(
+        desc="JSON statistical profile of the dataset including field types, "
+        "completeness, uniqueness, sample values, and record count"
+    )
+    sample_records: str = dspy.InputField(desc="JSON array of 5-10 sample records from the dataset")
+    er_config_yaml: str = dspy.OutputField(
+        desc="YAML configuration for entity resolution with keys: "
+        "name_field, text_fields, entity_type, blocking (method, "
+        "target_block_size, max_block_size), matching (model), "
+        "max_iterations, convergence_threshold"
+    )

@@ -37,6 +37,8 @@ def test_analyze_help() -> None:
     result = runner.invoke(cli, ["analyze", "--help"])
     assert result.exit_code == 0
     assert "--input" in result.output
+    assert "--output" in result.output
+    assert "--model" in result.output
 
 
 def test_block_help() -> None:

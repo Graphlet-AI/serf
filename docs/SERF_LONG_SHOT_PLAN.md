@@ -790,6 +790,26 @@ After 3 rounds with merge factor 0.8 per round:
 - Comparison pairs shrink to 0.8^6 = 26.2% of original
 - Each round is cheaper than the last due to smaller dataset
 
+### 9.6 Overnight Build Budget Constraint
+
+**Hard budget: $100 total Gemini API spend for the overnight build.**
+
+A `GEMINI_API_KEY` environment variable will be provided. The agent must stay within budget by following these rules:
+
+1. **Use Gemini 2.0 Flash exclusively** for all ER pipeline operations (blocking analysis, matching, merging, edge resolution). At $0.10/$0.40 per 1M input/output tokens, this allows ~160M+ input tokens -- more than enough for iterative ER across all three benchmark datasets.
+
+2. **Gemini 2.5 Pro is allowed ONLY for generating validation data** -- high-quality labeled match/non-match pairs and few-shot examples that will be used to evaluate and optimize the pipeline. Limit Gemini 2.5 Pro to **fewer than 2,000 API calls** total. At ~2,500 tokens per call with $1.25/$10.00 per 1M input/output tokens, 2K calls costs roughly $50 -- leaving ample headroom for Flash usage.
+
+3. **Never use Claude, GPT-4o, or any non-Gemini model** for pipeline operations during the build. The DSPy signatures and pipeline code should be model-agnostic, but all actual LLM calls during this build session must go through Gemini.
+
+4. **Track token usage** by logging input/output token counts from API responses. If cumulative spend approaches $80, stop making Gemini 2.5 Pro calls and finish remaining work with Flash only.
+
+| Use Case                       | Model            | Max Calls                 | Est. Cost  |
+| ------------------------------ | ---------------- | ------------------------- | ---------- |
+| ER pipeline (match/merge/edge) | Gemini 2.0 Flash | Unlimited (within budget) | ~$10-30    |
+| Validation data generation     | Gemini 2.5 Pro   | < 2,000                   | ~$50       |
+| **Total**                      |                  |                           | **< $100** |
+
 ---
 
 ## 10. Implementation Plan

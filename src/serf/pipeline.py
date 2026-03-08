@@ -65,6 +65,8 @@ class ERConfig:
         model: str = "gemini/gemini-2.0-flash",
         max_iterations: int = 5,
         convergence_threshold: float = 0.01,
+        max_concurrent: int = 20,
+        limit: int | None = None,
     ) -> None:
         self.name_field = name_field
         self.text_fields = text_fields
@@ -76,6 +78,8 @@ class ERConfig:
         self.model = model
         self.max_iterations = max_iterations
         self.convergence_threshold = convergence_threshold
+        self.max_concurrent = max_concurrent
+        self.limit = limit
 
     @classmethod
     def from_yaml(cls, path: str) -> "ERConfig":
@@ -108,6 +112,8 @@ class ERConfig:
             model=matching.get("model", "gemini/gemini-2.0-flash"),
             max_iterations=data.get("max_iterations", 5),
             convergence_threshold=data.get("convergence_threshold", 0.01),
+            max_concurrent=matching.get("max_concurrent", 20),
+            limit=data.get("limit"),
         )
 
 
@@ -442,6 +448,8 @@ def run_pipeline(
 def _llm_match_and_merge(blocks: list[EntityBlock], cfg: ERConfig) -> list[Entity]:
     """Run LLM-based matching on blocks and return resolved entities.
 
+    Fires up to cfg.max_concurrent LLM calls simultaneously.
+
     Parameters
     ----------
     blocks : list[EntityBlock]
@@ -456,9 +464,15 @@ def _llm_match_and_merge(blocks: list[EntityBlock], cfg: ERConfig) -> list[Entit
     """
     from serf.match.matcher import EntityMatcher
 
-    logger.info("  Matching with LLM...")
-    matcher = EntityMatcher(model=cfg.model)
-    resolutions = asyncio.run(matcher.resolve_blocks(blocks))
+    logger.info(
+        f"  Matching {len(blocks)} blocks with LLM "
+        f"({cfg.max_concurrent} concurrent, limit={cfg.limit})..."
+    )
+    matcher = EntityMatcher(
+        model=cfg.model,
+        max_concurrent=cfg.max_concurrent,
+    )
+    resolutions = asyncio.run(matcher.resolve_blocks(blocks, limit=cfg.limit))
 
     resolved: list[Entity] = []
     for r in resolutions:

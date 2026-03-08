@@ -81,6 +81,18 @@ def cli() -> None:
     default=30,
     help="Target entities per FAISS block",
 )
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Max blocks to send through LLM matching (for testing)",
+)
+@click.option(
+    "--concurrency",
+    type=int,
+    default=20,
+    help="Number of concurrent LLM requests",
+)
 def run(
     input_path: str,
     output_path: str,
@@ -92,6 +104,8 @@ def run(
     max_iterations: int,
     convergence_threshold: float,
     target_block_size: int,
+    limit: int | None,
+    concurrency: int,
 ) -> None:
     """Run entity resolution on any CSV, Parquet, or Iceberg table.
 
@@ -116,6 +130,8 @@ def run(
     er_config.max_iterations = max_iterations
     er_config.convergence_threshold = convergence_threshold
     er_config.target_block_size = target_block_size
+    er_config.max_concurrent = concurrency
+    er_config.limit = limit
 
     click.echo("SERF Entity Resolution")
     click.echo(f"  Input:  {input_path}")
@@ -590,7 +606,7 @@ def download(dataset: str, output_path: str | None) -> None:
 @click.option(
     "--target-block-size",
     type=int,
-    default=50,
+    default=30,
     help="Target entities per block",
 )
 @click.option(
@@ -605,12 +621,26 @@ def download(dataset: str, output_path: str | None) -> None:
     default=None,
     help="Limit right table size for large datasets",
 )
+@click.option(
+    "--limit",
+    type=int,
+    default=None,
+    help="Max blocks to send through LLM matching (for testing)",
+)
+@click.option(
+    "--concurrency",
+    type=int,
+    default=20,
+    help="Number of concurrent LLM requests",
+)
 def benchmark(
     dataset: str,
     output_path: str | None,
     target_block_size: int,
     model: str,
     max_right_entities: int | None,
+    limit: int | None,
+    concurrency: int,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
 
@@ -651,7 +681,9 @@ def benchmark(
     click.echo(f"  Ground truth pairs: {len(benchmark_data.ground_truth)}")
     click.echo(f"  Total entities: {len(all_entities)}")
 
-    predicted_pairs = _benchmark_llm_matching(all_entities, target_block_size, model)
+    predicted_pairs = _benchmark_llm_matching(
+        all_entities, target_block_size, model, limit, concurrency
+    )
 
     metrics = benchmark_data.evaluate(predicted_pairs)
     elapsed = time.time() - start
@@ -837,10 +869,13 @@ def _benchmark_llm_matching(
     all_entities: list[Any],
     target_block_size: int,
     model: str = "gemini/gemini-2.0-flash",
+    limit: int | None = None,
+    concurrency: int = 20,
 ) -> set[tuple[int, int]]:
     """Run LLM-based matching for benchmarks.
 
-    Embeddings are used for blocking only. Matching is done by LLM.
+    Embeddings are used for blocking only. Matching is done by LLM
+    with concurrent async requests.
 
     Parameters
     ----------
@@ -850,6 +885,10 @@ def _benchmark_llm_matching(
         Target block size for FAISS blocking
     model : str
         LLM model name
+    limit : int | None
+        Max blocks to process (for testing)
+    concurrency : int
+        Number of concurrent LLM requests
 
     Returns
     -------
@@ -866,9 +905,9 @@ def _benchmark_llm_matching(
     blocks, blocking_metrics = pipeline.run(all_entities)
     click.echo(f"    {blocking_metrics.total_blocks} blocks created")
 
-    click.echo(f"  Matching with LLM ({model})...")
-    matcher = EntityMatcher(model=model)
-    resolutions = asyncio.run(matcher.resolve_blocks(blocks))
+    click.echo(f"  Matching with LLM ({model}, concurrency={concurrency}, limit={limit})...")
+    matcher = EntityMatcher(model=model, max_concurrent=concurrency)
+    resolutions = asyncio.run(matcher.resolve_blocks(blocks, limit=limit))
 
     predicted_pairs: set[tuple[int, int]] = set()
     for r in resolutions:

@@ -168,24 +168,46 @@ class EntityMatcher:
             entities.append(e.model_copy(update={"uuid": str(uuid4())}))
         return resolution.model_copy(update={"resolved_entities": entities})
 
-    async def resolve_blocks(self, blocks: list[EntityBlock]) -> list[BlockResolution]:
-        """Process all blocks with async concurrency and rate limiting.
+    async def resolve_blocks(
+        self,
+        blocks: list[EntityBlock],
+        limit: int | None = None,
+    ) -> list[BlockResolution]:
+        """Process blocks with async concurrency and rate limiting.
+
+        Fires up to max_concurrent LLM calls simultaneously using
+        asyncio.Semaphore for rate limiting and tqdm for progress.
 
         Parameters
         ----------
         blocks : list[EntityBlock]
             Blocks to resolve
+        limit : int | None
+            Max number of blocks to process (for testing). None = all.
 
         Returns
         -------
         list[BlockResolution]
             Resolutions for each block
         """
+        from tqdm import tqdm
+
+        if limit is not None:
+            blocks = blocks[:limit]
+
+        total = len(blocks)
+        logger.info(f"Processing {total} blocks with {self.max_concurrent} concurrent LLM calls")
+
         semaphore = asyncio.Semaphore(self.max_concurrent)
+        progress = tqdm(total=total, desc="Matching blocks", unit="block")
 
         async def process_one(block: EntityBlock) -> BlockResolution:
             async with semaphore:
-                return await asyncio.to_thread(self.resolve_block, block)
+                result = await asyncio.to_thread(self.resolve_block, block)
+                progress.update(1)
+                return result
 
         tasks = [process_one(b) for b in blocks]
-        return list(await asyncio.gather(*tasks))
+        results = list(await asyncio.gather(*tasks))
+        progress.close()
+        return results

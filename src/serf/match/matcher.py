@@ -53,25 +53,23 @@ class EntityMatcher:
         self.batch_size = batch_size or config.get("er.matching.batch_size", 10)
         self.max_concurrent = max_concurrent or config.get("er.matching.max_concurrent", 20)
         self._predictor: dspy.Predict | None = None
-        self._configured = False
+        self._lm: dspy.LM | None = None
+        self._adapter = BAMLAdapter()
 
-    def _ensure_configured(self) -> None:
-        """Configure DSPy with LM and adapter if not already done."""
-        if self._configured:
-            return
-        api_key = os.environ.get("GEMINI_API_KEY")
-        if not api_key:
-            raise ValueError("GEMINI_API_KEY environment variable required")
-        temperature = config.get("er.matching.temperature", 0.0)
-        lm = dspy.LM(self.model, api_key=api_key, temperature=temperature)
-        dspy.configure(lm=lm, adapter=BAMLAdapter())
-        self._configured = True
+    def _ensure_lm(self) -> dspy.LM:
+        """Get or create the LM instance."""
+        if self._lm is None:
+            api_key = os.environ.get("GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError("GEMINI_API_KEY environment variable required")
+            temperature = config.get("er.matching.temperature", 0.0)
+            self._lm = dspy.LM(self.model, api_key=api_key, temperature=temperature)
+        return self._lm
 
     @property
     def predictor(self) -> dspy.Predict:
         """Lazy-load the BlockMatch predictor."""
         if self._predictor is None:
-            self._ensure_configured()
             self._predictor = dspy.Predict(BlockMatch)
         return self._predictor
 
@@ -98,11 +96,13 @@ class EntityMatcher:
         few_shot = get_default_few_shot_examples()
 
         try:
-            result = self.predictor(
-                block_records=block_records,
-                schema_info=SCHEMA_INFO,
-                few_shot_examples=few_shot,
-            )
+            lm = self._ensure_lm()
+            with dspy.context(lm=lm, adapter=self._adapter):
+                result = self.predictor(
+                    block_records=block_records,
+                    schema_info=SCHEMA_INFO,
+                    few_shot_examples=few_shot,
+                )
             resolution = result.resolution
         except Exception as e:
             logger.error(f"LLM failure for block {block.block_key}: {e}")

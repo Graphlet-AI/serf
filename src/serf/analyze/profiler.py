@@ -133,7 +133,6 @@ def generate_er_config(
     """
     api_key = os.environ.get("GEMINI_API_KEY", "")
     lm = dspy.LM(model, api_key=api_key)
-    dspy.configure(lm=lm, adapter=BAMLAdapter())
 
     predictor = dspy.ChainOfThought(GenerateERConfig)
 
@@ -141,10 +140,11 @@ def generate_er_config(
     samples_json = json.dumps(sample_records[:10], indent=2, default=str)
 
     logger.info("Generating ER config with LLM...")
-    result = predictor(
-        dataset_profile=profile_json,
-        sample_records=samples_json,
-    )
+    with dspy.context(lm=lm, adapter=BAMLAdapter()):
+        result = predictor(
+            dataset_profile=profile_json,
+            sample_records=samples_json,
+        )
 
     config_yaml: str = result.er_config_yaml
     # Strip markdown code fences if the LLM wrapped it

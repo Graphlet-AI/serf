@@ -63,7 +63,12 @@ class EntityMatcher:
             if not api_key:
                 raise ValueError("GEMINI_API_KEY environment variable required")
             temperature = config.get("er.matching.temperature", 0.0)
-            self._lm = dspy.LM(self.model, api_key=api_key, temperature=temperature)
+            self._lm = dspy.LM(
+                self.model,
+                api_key=api_key,
+                temperature=temperature,
+                max_tokens=8192,
+            )
         return self._lm
 
     @property

@@ -74,9 +74,15 @@ class GenerateERConfig(dspy.Signature):
     Given a statistical profile of the dataset including field types,
     completeness, uniqueness, sample values, and record count, produce
     a YAML configuration that specifies:
-    - name_field: which column contains the entity name/title
-    - text_fields: which text columns should be used for embedding (exclude
-      numeric fields like year, IDs, and non-semantic fields)
+    - name_field: which column contains the entity name/title (this is the
+      PRIMARY field used for embedding-based blocking)
+    - text_fields: which text columns are useful for matching (the LLM sees
+      these during matching, but blocking uses ONLY name_field by default)
+    - blocking_fields: optional list of additional fields to embed for blocking
+      beyond name_field. Usually empty — name-only blocking gives the tightest
+      clusters. Only add fields that directly help distinguish entity identity
+      (e.g. manufacturer for products). Do NOT include year, ID, venue, or
+      non-semantic fields.
     - entity_type: what kind of entities these are (e.g. "Publication",
       "Product", "Company", "Person")
     - blocking parameters:
@@ -97,7 +103,8 @@ class GenerateERConfig(dspy.Signature):
     sample_records: str = dspy.InputField(desc="JSON array of 5-10 sample records from the dataset")
     er_config_yaml: str = dspy.OutputField(
         desc="YAML configuration for entity resolution. Required keys: "
-        "name_field (str), text_fields (list of str), entity_type (str), "
+        "name_field (str), text_fields (list of str), "
+        "blocking_fields (list of str, usually empty), entity_type (str), "
         "blocking: {method: semantic, target_block_size: 30, max_block_size: 100}, "
         "matching: {model: gemini/gemini-2.0-flash}, "
         "max_iterations (int, at most 5), "

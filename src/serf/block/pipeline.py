@@ -65,16 +65,18 @@ class SemanticBlockingPipeline:
     def __init__(
         self,
         model_name: str | None = None,
-        target_block_size: int = 50,
-        max_block_size: int = 200,
+        target_block_size: int = 30,
+        max_block_size: int = 100,
         iteration: int = 1,
         auto_scale: bool = True,
+        blocking_fields: list[str] | None = None,
     ) -> None:
         self.model_name = model_name
         self.target_block_size = target_block_size
         self.max_block_size = max_block_size
         self.iteration = iteration
         self.auto_scale = auto_scale
+        self.blocking_fields = blocking_fields
         self._embedder: EntityEmbedder | None = None
         self._blocker: FAISSBlocker | None = None
 
@@ -118,8 +120,8 @@ class SemanticBlockingPipeline:
         entity_map = {str(e.id): e for e in entities}
         ids = [str(e.id) for e in entities]
 
-        # Embed
-        texts = [e.text_for_embedding() for e in entities]
+        # Embed (name-only by default, configurable via blocking_fields)
+        texts = [e.text_for_embedding(self.blocking_fields) for e in entities]
         logger.info("Computing embeddings...")
         embeddings = self.embedder.embed(texts)
 

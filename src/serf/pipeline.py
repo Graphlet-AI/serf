@@ -57,6 +57,7 @@ class ERConfig:
         self,
         name_field: str | None = None,
         text_fields: list[str] | None = None,
+        blocking_fields: list[str] | None = None,
         entity_type: str = "entity",
         blocking_method: str = "semantic",
         target_block_size: int = 30,
@@ -67,6 +68,7 @@ class ERConfig:
     ) -> None:
         self.name_field = name_field
         self.text_fields = text_fields
+        self.blocking_fields = blocking_fields
         self.entity_type = entity_type
         self.blocking_method = blocking_method
         self.target_block_size = target_block_size
@@ -98,6 +100,7 @@ class ERConfig:
         return cls(
             name_field=data.get("name_field"),
             text_fields=data.get("text_fields"),
+            blocking_fields=data.get("blocking_fields"),
             entity_type=data.get("entity_type", "entity"),
             blocking_method=blocking.get("method", "semantic"),
             target_block_size=blocking.get("target_block_size", 30),
@@ -316,9 +319,9 @@ def run_pipeline(
         logger.info(f"\n=== Iteration {iteration} ===")
         logger.info(f"  Entities: {len(entities)}")
 
-        # Phase 1: Embed for blocking
+        # Phase 1: Embed for blocking (name-only by default, configurable)
         logger.info("  Embedding for blocking...")
-        texts = [e.text_for_embedding() for e in entities]
+        texts = [e.text_for_embedding(cfg.blocking_fields) for e in entities]
         embeddings = embedder.embed(texts)
 
         # Phase 2: Block with FAISS

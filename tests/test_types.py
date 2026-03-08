@@ -47,8 +47,8 @@ def test_entity_with_all_fields() -> None:
     assert entity.match_skip_history == [1]
 
 
-def test_entity_text_for_embedding() -> None:
-    """Test text generation for embedding."""
+def test_entity_text_for_embedding_name_only() -> None:
+    """Test that default embedding uses only the name."""
     entity = Entity(
         id=1,
         name="Apple Inc.",
@@ -56,9 +56,21 @@ def test_entity_text_for_embedding() -> None:
         attributes={"location": "Cupertino, CA"},
     )
     text = entity.text_for_embedding()
+    assert text == "Apple Inc."
+
+
+def test_entity_text_for_embedding_with_blocking_fields() -> None:
+    """Test embedding with additional blocking fields from attributes."""
+    entity = Entity(
+        id=1,
+        name="Apple Inc.",
+        description="Technology company",
+        attributes={"location": "Cupertino, CA", "industry": "Technology"},
+    )
+    text = entity.text_for_embedding(blocking_fields=["location", "industry"])
     assert "Apple Inc." in text
-    assert "Technology company" in text
     assert "Cupertino, CA" in text
+    assert "Technology" in text
 
 
 def test_entity_text_for_embedding_no_description() -> None:

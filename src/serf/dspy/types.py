@@ -53,19 +53,37 @@ class Entity(BaseModel):
     match_skip_reason: str | None = None
     match_skip_history: list[int] | None = None
 
-    def text_for_embedding(self) -> str:
-        """Return text representation for embedding.
+    def text_for_embedding(self, blocking_fields: list[str] | None = None) -> str:
+        """Return text for embedding-based blocking.
+
+        By default returns ONLY the entity name. This produces tighter
+        semantic clusters because name/title fields have the highest
+        discriminative power for grouping similar entities. Including
+        other fields (year, ID, etc.) adds noise to the embedding.
+
+        When blocking_fields are specified (by agentic config), those
+        additional attribute values are appended to the name.
+
+        The LLM matcher sees ALL fields during matching — blocking
+        only needs to group potentially similar entities together.
+
+        Parameters
+        ----------
+        blocking_fields : list[str] | None
+            Additional attribute fields to include in embedding text.
+            If None, only the name is used.
 
         Returns
         -------
         str
-            Concatenation of name and description for embedding
+            Text for embedding
         """
+        if not blocking_fields:
+            return self.name
         parts = [self.name]
-        if self.description:
-            parts.append(self.description)
-        for _key, val in self.attributes.items():
-            if isinstance(val, str) and val:
+        for field in blocking_fields:
+            val = self.attributes.get(field)
+            if val and isinstance(val, str):
                 parts.append(val)
         return " ".join(parts)
 
@@ -90,21 +108,6 @@ class Publication(Entity):
     venue: str = ""
     year: int | None = None
 
-    def text_for_embedding(self) -> str:
-        """Return text optimized for bibliographic embedding.
-
-        Returns
-        -------
-        str
-            Title + authors + venue for embedding
-        """
-        parts = [self.name]
-        if self.authors:
-            parts.append(self.authors)
-        if self.venue:
-            parts.append(self.venue)
-        return " ".join(parts)
-
 
 class Product(Entity):
     """Product entity for product matching.
@@ -123,23 +126,6 @@ class Product(Entity):
     manufacturer: str = ""
     price: float | None = None
     category: str = ""
-
-    def text_for_embedding(self) -> str:
-        """Return text optimized for product embedding.
-
-        Returns
-        -------
-        str
-            Name + manufacturer + category for embedding
-        """
-        parts = [self.name]
-        if self.manufacturer:
-            parts.append(self.manufacturer)
-        if self.description:
-            parts.append(self.description)
-        if self.category:
-            parts.append(self.category)
-        return " ".join(parts)
 
 
 class EntityBlock(BaseModel):

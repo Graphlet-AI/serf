@@ -6,15 +6,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ### Development
 
-- Install Dependencies: `poetry install`
-- Run CLI: `poetry run serf`
-- Build/Generate serf/baml_client code: `baml-cli generate`
-- Test baml_src code: `baml-cli test`
-- Test all: `poetry run pytest tests/`
-- Test single: `poetry run pytest tests/path_to_test.py::test_name`
-- Lint: `pre-commit run --all-files`, `poetry run flake8 src tests`
-- Format: `poetry run black src tests`, `poetry run isort src tests`
-- Type check: `poetry run zuban check src tests`
+- Install Dependencies: `uv sync`
+- Run CLI: `uv run serf`
+- Test all: `uv run pytest tests/`
+- Test single: `uv run pytest tests/path_to_test.py::test_name`
+- Lint: `uv run ruff check src tests`
+- Format: `uv run ruff format src tests`
+- Lint + Fix: `uv run ruff check --fix src tests`
+- Type check: `uv run zuban check src tests`
+- Pre-commit: `pre-commit run --all-files`
 
 ### Docker Development (via Taskfile)
 
@@ -62,12 +62,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - KISS: KEEP IT SIMPLE STUPID. Do not over-engineer solutions. ESPECIALLY for Spark / PySpark.
 - Line length: 100 characters
 - Python version: 3.12
-- Formatter: black with isort (profile=black)
+- Formatter: Ruff (replaces black + isort + flake8)
 - Types: Always use type annotations, warn on any return
-- Imports: Use absolute imports, organize imports to be PEP compliant with isort (profile=black)
+- Imports: Use absolute imports, organize imports with Ruff isort
 - Error handling: Use specific exception types with logging
 - Naming: snake_case for variables / functions, CamelCase for classes
-- BAML: Use for LLM-related code, regenerate client with `baml-cli generate`
+- DSPy: Use DSPy signatures for all LLM-related code
 - Whitespaces: leave no trailing whitespaces, use 4 spaces for indentation, leave no whitespace on blank lines
 - Blank lines: Do not indent any blank lines in Python files. Indent should be 0 for these lines. Indent to 0 spaces when replacing a line with a blank line.
 - Strings: Use double quotes for strings, use f-strings for string interpolation
@@ -79,11 +79,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Type checking: Use zuban for type checking, run zuban before committing code. It is mypy compatible.
 - Logging: Use logging for error handling, avoid print statements. Always use `from serf.logs import get_logger` and `logger = get_logger(__name__)`
 - Documentation: Use Sphinx for documentation, include docstrings in all public functions/classes
-- Code style: Follow PEP 8 for Python code style, use flake8 for linting
+- Code style: Follow PEP 8 for Python code style, use Ruff for linting and formatting
 - Zuban: Use zuban for type checking, run zuban before committing code. Configure it in `pyproject.toml`.
 - Pre-commit: Use pre-commit for linting and formatting, configure it in `.pre-commit-config.yaml`
 - Git: Use git for version control, commit often with clear messages, use branches for new features/bug fixes. Always test new features in the CLI before you commit them.
-- Poetry: Use poetry for dependency management and packaging, configure it in `pyproject.toml`
+- uv: Use uv for dependency management and packaging, configure it in `pyproject.toml`
 - discord.py package - always use selective imports for `discord` - YES `from discord import x` - NO `import discord`
 - Use `serf.config.Config` - use the `Config` class from `serf.config` which has an instance serf.config.config to access configuration values. Do not hardcode configuration values in the codebase. If you need to add a new configuration value, add it to the `config.yml` file and access it through the `Config` class's instance via `from serf.config import config` and `config.get(key)`.
 - External strings - we store all strings in `config.yml` and use the serf.config.config instance to access them. Do not hardcode strings in the codebase. If you need to add a new string, add it to the config.yml file and access it through the Config class's instance via `from serf.config import config` and `config.get(key)`.
@@ -99,17 +99,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Help strings - never put the default option values in the help strings. The help strings should only describe what the option does, not what the default value is. The default values are already documented in the @config.yml file and will be printed via the `@click.command(context_settings={"show_default": True})` decorator of each Click command.
 - Read the README - consult the README before taking action. The README contains information about the project and how to use it. If you need to add a new command or change an existing one, consult the README first.
 - Update the README - if appropriate, update the README with any new commands or changes to existing commands. The README should always reflect the current state of the project.
-- Use Poetry - use poetry for dependency management and packaging. Do not use pip or conda.
-- Use BAML - use BAML for LLM-related code. Do not use any other libraries or frameworks for LLM-related code. BAML is an extension of Jinja2 and is used for templating LLM information extraction in this project. Use BAML to generate code for the BAML client and to process data.
-- DO NOT WRITE TO the `serf.baml_client` module / @src/serf/baml_client directory. This directory is generated by the `baml-cli generate` command and should not be modified directly. Instead, use the `baml-cli generate` command to regenerate the client when needed.
+- Use uv - use uv for dependency management and packaging. Do not use pip, conda, or poetry.
+- Use DSPy - use DSPy signatures and modules for all LLM-related code. Use the BAMLAdapter for structured output formatting.
 - Use PySpark for ETL - use PySpark for ETL and batch data processing to build our knowledge graph. Do not use any other libraries or frameworks for data processing. Use PySpark to take the output of our BAML client and transform it into a knowledge graph.
 - PySpark - Do not break up dataflow into functions for loading, computing this, computing that, etc. Create a single function that performs the entire dataflow at hand. Do not check if columns exist, assume they do. Do not check if paths exist, assume they do. We prefer a more linear flow for Spark scripts and simple code over complexity. This only applies to Spark code.
 - PySpark - assume the fields are present, don't handle missing fields unless I ask you to.
 - PySpark - don't handle obscure edge cases, just implement the logic that I ask DIRECTLY.
 - PySpark - SparkSessions should be created BELOW any imports. Do not create SparkSessions at the top of the file.
-- Flake8 - fix flake8 errors without being asked and without my verification.
-- Black - fix black errors without being asked and without my verification.
-- Isort - fix isort errors without being asked and without my verification.
+- Ruff - fix ruff lint and format errors without being asked and without my verification.
 - Zuban - fix mypy errors without being asked and without my verification.
 - Pre-commit - fix pre-commit errors without being asked and without my verification.
 - New Modules - create a folder for a new module without being asked and without my verification.
@@ -122,14 +119,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Ask questions before mitigating a simple problem with a complex fix.
 
 ## Important Notes
-
-### BAML Client Generation
-
-The @src/serf/baml_client/ directory is auto-generated. Never edit files in this directory directly. To make changes:
-
-1. Edit the BAML source files in @src/baml_src/
-2. Run `baml-cli generate` to regenerate the client
-3. Test with `baml-cli test`
 
 ### Configuration Management
 
@@ -157,7 +146,7 @@ logger.error(f"Failed to process: {error}")
 - Unit tests: Test individual functions/classes in isolation
 - Integration tests: Test with real services (Redis, S3, etc.)
 - Cache mode tests: Test different caching strategies
-- BAML tests: Use `baml-cli test` for LLM extraction testing
+- DSPy tests: Test DSPy signatures with mock LM calls
 
 ### Spark Development
 
@@ -181,8 +170,8 @@ In addition, when writing PySpark code:
 ### Python Dependencies
 
 - Python 3.12 required
-- Core packages: baml-py, dspy-ai, pyspark, sentence-transformers, transformers, pytorch
-- Development tools: poetry, black, isort, flake8, zuban, pytest
+- Core packages: dspy-ai, pyspark, sentence-transformers, faiss-cpu, click, pyyaml
+- Development tools: uv, ruff, zuban, pytest
 - See pyproject.toml for complete dependency list
 
 ### Environment Variables

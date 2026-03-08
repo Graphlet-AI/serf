@@ -1,13 +1,25 @@
 """Main CLI entry point for SERF."""
 
+import asyncio
 import json
 import os
+import random
 import time
 from typing import Any
 
 import click
+import pandas as pd
 
+from serf.analyze.profiler import DatasetProfiler, generate_er_config
+from serf.block.pipeline import SemanticBlockingPipeline
+from serf.config import config
+from serf.dspy.types import BlockResolution, Entity, EntityBlock
+from serf.eval.benchmarks import BenchmarkDataset
+from serf.eval.evaluator import evaluate_er_results, format_evaluation_report, save_evaluation
+from serf.eval.metrics import evaluate_resolution
 from serf.logs import get_logger, setup_logging
+from serf.match.matcher import EntityMatcher
+from serf.pipeline import ERConfig, load_data, run_pipeline
 
 logger = get_logger(__name__)
 
@@ -60,25 +72,25 @@ def cli() -> None:
 @click.option(
     "--model",
     type=str,
-    default="gemini/gemini-2.0-flash",
+    default=config.get("models.llm", "gemini/gemini-2.0-flash"),
     help="LLM model for matching",
 )
 @click.option(
     "--max-iterations",
     type=int,
-    default=5,
+    default=config.get("er.convergence.max_iterations", 5),
     help="Maximum ER iterations (0 for auto-convergence)",
 )
 @click.option(
     "--convergence-threshold",
     type=float,
-    default=0.01,
+    default=config.get("er.convergence.threshold", 0.01),
     help="Stop when per-round reduction fraction is below this",
 )
 @click.option(
     "--target-block-size",
     type=int,
-    default=30,
+    default=config.get("er.blocking.target_block_size", 30),
     help="Target entities per FAISS block",
 )
 @click.option(
@@ -90,7 +102,7 @@ def cli() -> None:
 @click.option(
     "--concurrency",
     type=int,
-    default=20,
+    default=config.get("er.matching.max_concurrent", 20),
     help="Number of concurrent LLM requests",
 )
 def run(
@@ -115,8 +127,6 @@ def run(
 
     Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
     """
-    from serf.pipeline import ERConfig, run_pipeline
-
     # Build config: YAML file first, then CLI overrides
     er_config = ERConfig.from_yaml(config_path) if config_path else ERConfig()
 
@@ -181,7 +191,7 @@ def run(
 @click.option(
     "--model",
     type=str,
-    default="gemini/gemini-2.0-flash",
+    default=config.get("models.llm", "gemini/gemini-2.0-flash"),
     help="LLM model for config generation",
 )
 def analyze(input_path: str, output_path: str | None, model: str) -> None:
@@ -194,9 +204,6 @@ def analyze(input_path: str, output_path: str | None, model: str) -> None:
     Without --output, prints the statistical profile only.
     With --output, also calls the LLM to generate an ER config YAML file.
     """
-    from serf.analyze.profiler import DatasetProfiler, generate_er_config
-    from serf.pipeline import load_data
-
     logger.info(f"Analyzing dataset: {input_path}")
     start = time.time()
 
@@ -267,8 +274,18 @@ def analyze(input_path: str, output_path: str | None, model: str) -> None:
     default="semantic",
     help="Blocking method to use",
 )
-@click.option("--target-block-size", type=int, default=30, help="Target entities per block")
-@click.option("--max-block-size", type=int, default=100, help="Maximum entities per block")
+@click.option(
+    "--target-block-size",
+    type=int,
+    default=config.get("er.blocking.target_block_size", 30),
+    help="Target entities per block",
+)
+@click.option(
+    "--max-block-size",
+    type=int,
+    default=config.get("er.blocking.max_block_size", 100),
+    help="Maximum entities per block",
+)
 def block(
     input_path: str,
     output_path: str,
@@ -278,10 +295,6 @@ def block(
     max_block_size: int,
 ) -> None:
     """Perform semantic blocking on input data."""
-    import pandas as pd
-
-    from serf.block.pipeline import SemanticBlockingPipeline
-
     logger.info(f"Starting blocking: input={input_path}, method={method}")
     start = time.time()
 
@@ -337,16 +350,11 @@ def block(
 @click.option(
     "--batch-size",
     type=int,
-    default=10,
+    default=config.get("er.matching.batch_size", 10),
     help="Number of blocks to process concurrently",
 )
 def match(input_path: str, output_path: str, iteration: int, batch_size: int) -> None:
     """Match entities within blocks using LLM."""
-    import asyncio
-
-    from serf.dspy.types import EntityBlock
-    from serf.match.matcher import EntityMatcher
-
     logger.info(f"Starting matching: input={input_path}, iteration={iteration}")
     start = time.time()
 
@@ -403,14 +411,6 @@ def evaluate(input_path: str, ground_truth: str | None) -> None:
     Performs comprehensive validation: entity deduplication, source_uuid
     validation, match_skip analysis, and PASS/FAIL checks.
     """
-    from serf.dspy.types import BlockResolution
-    from serf.eval.evaluator import (
-        evaluate_er_results,
-        format_evaluation_report,
-        save_evaluation,
-    )
-    from serf.eval.metrics import evaluate_resolution
-
     logger.info(f"Evaluating: input={input_path}")
 
     matches_file = os.path.join(input_path, "matches.jsonl")
@@ -449,8 +449,6 @@ def evaluate(input_path: str, ground_truth: str | None) -> None:
 
     # Optional ground truth comparison
     if ground_truth:
-        import pandas as pd
-
         gt_df = pd.read_csv(ground_truth)
         true_pairs: set[tuple[int, int]] = set()
         for _, row in gt_df.iterrows():
@@ -534,11 +532,16 @@ def edges(input_path: str, output_path: str) -> None:
     default="semantic",
     help="Blocking method",
 )
-@click.option("--target-block-size", type=int, default=30, help="Target entities per block")
+@click.option(
+    "--target-block-size",
+    type=int,
+    default=config.get("er.blocking.target_block_size", 30),
+    help="Target entities per block",
+)
 @click.option(
     "--batch-size",
     type=int,
-    default=10,
+    default=config.get("er.matching.batch_size", 10),
     help="Concurrent block processing batch size",
 )
 def resolve(
@@ -560,7 +563,7 @@ def resolve(
         iteration=iteration,
         method=method,
         target_block_size=target_block_size,
-        max_block_size=100,
+        max_block_size=config.get("er.blocking.max_block_size", 100),
     )
     click.echo("\n  Step 2: Matching...")
     ctx.invoke(
@@ -601,8 +604,6 @@ def resolve(
 )
 def download(dataset: str, output_path: str | None) -> None:
     """Download a benchmark dataset."""
-    from serf.eval.benchmarks import BenchmarkDataset
-
     available = BenchmarkDataset.available_datasets()
     if dataset not in available:
         click.echo(f"Unknown dataset: {dataset}")
@@ -641,13 +642,13 @@ def download(dataset: str, output_path: str | None) -> None:
 @click.option(
     "--target-block-size",
     type=int,
-    default=30,
+    default=config.get("er.blocking.target_block_size", 30),
     help="Target entities per block",
 )
 @click.option(
     "--model",
     type=str,
-    default="gemini/gemini-2.0-flash",
+    default=config.get("models.llm", "gemini/gemini-2.0-flash"),
     help="LLM model for matching",
 )
 @click.option(
@@ -665,7 +666,7 @@ def download(dataset: str, output_path: str | None) -> None:
 @click.option(
     "--concurrency",
     type=int,
-    default=20,
+    default=config.get("er.matching.max_concurrent", 20),
     help="Number of concurrent LLM requests",
 )
 def benchmark(
@@ -682,8 +683,6 @@ def benchmark(
     Uses embeddings for blocking and LLM for matching.
     Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
     """
-    from serf.eval.benchmarks import BenchmarkDataset
-
     available = BenchmarkDataset.available_datasets()
     if dataset not in available:
         click.echo(f"Unknown dataset: {dataset}")
@@ -699,8 +698,6 @@ def benchmark(
 
     # Optionally limit right table size
     if max_right_entities and len(right_entities) > max_right_entities:
-        import random
-
         gt_right_ids = {b for _, b in benchmark_data.ground_truth}
         matched = [e for e in right_entities if e.id in gt_right_ids]
         unmatched = [e for e in right_entities if e.id not in gt_right_ids]
@@ -771,7 +768,7 @@ def benchmark(
 @click.option(
     "--model",
     type=str,
-    default="gemini/gemini-2.0-flash",
+    default=config.get("models.llm", "gemini/gemini-2.0-flash"),
     help="LLM model for matching",
 )
 @click.option(
@@ -789,8 +786,6 @@ def benchmark_all(
 
     Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
     """
-    from serf.eval.benchmarks import BenchmarkDataset
-
     datasets = BenchmarkDataset.available_datasets()
     click.echo(f"Running benchmarks on {len(datasets)} datasets...")
     click.echo(f"  Model: {model}")
@@ -804,7 +799,7 @@ def benchmark_all(
             benchmark,
             dataset=name,
             output_path=output_path,
-            target_block_size=30,
+            target_block_size=config.get("er.blocking.target_block_size", 30),
             model=model,
             max_right_entities=max_right_entities,
         )
@@ -884,9 +879,6 @@ def _dataframe_to_entities(df: Any) -> list[Any]:
     list[Entity]
         List of Entity objects
     """
-
-    from serf.dspy.types import Entity
-
     entities = []
     name_col = _detect_name_column(df.columns.tolist())
     for i, (_idx, row) in enumerate(df.iterrows()):
@@ -909,9 +901,9 @@ def _dataframe_to_entities(df: Any) -> list[Any]:
 def _benchmark_llm_matching(
     all_entities: list[Any],
     target_block_size: int,
-    model: str = "gemini/gemini-2.0-flash",
+    model: str = config.get("models.llm", "gemini/gemini-2.0-flash"),
     limit: int | None = None,
-    concurrency: int = 20,
+    concurrency: int = config.get("er.matching.max_concurrent", 20),
 ) -> set[tuple[int, int]]:
     """Run LLM-based matching for benchmarks.
 
@@ -936,11 +928,6 @@ def _benchmark_llm_matching(
     set[tuple[int, int]]
         Predicted match pairs
     """
-    import asyncio
-
-    from serf.block.pipeline import SemanticBlockingPipeline
-    from serf.match.matcher import EntityMatcher
-
     max_block = min(100, target_block_size * 3)
     click.echo(f"\n  Blocking (target={target_block_size}, max={max_block})...")
     pipeline = SemanticBlockingPipeline(

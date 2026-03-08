@@ -20,6 +20,7 @@ import yaml
 
 from serf.block.embeddings import EntityEmbedder
 from serf.block.faiss_blocker import FAISSBlocker
+from serf.config import config
 from serf.dspy.types import Entity, EntityBlock, IterationMetrics
 from serf.logs import get_logger
 
@@ -61,12 +62,12 @@ class ERConfig:
         blocking_fields: list[str] | None = None,
         entity_type: str = "entity",
         blocking_method: str = "semantic",
-        target_block_size: int = 30,
-        max_block_size: int = 100,
-        model: str = "gemini/gemini-2.0-flash",
-        max_iterations: int = 5,
-        convergence_threshold: float = 0.01,
-        max_concurrent: int = 20,
+        target_block_size: int = config.get("er.blocking.target_block_size", 30),
+        max_block_size: int = config.get("er.blocking.max_block_size", 100),
+        model: str = config.get("models.llm", "gemini/gemini-2.0-flash"),
+        max_iterations: int = config.get("er.convergence.max_iterations", 5),
+        convergence_threshold: float = config.get("er.convergence.threshold", 0.01),
+        max_concurrent: int = config.get("er.matching.max_concurrent", 20),
         limit: int | None = None,
     ) -> None:
         self.name_field = name_field
@@ -108,12 +109,22 @@ class ERConfig:
             blocking_fields=data.get("blocking_fields"),
             entity_type=data.get("entity_type", "entity"),
             blocking_method=blocking.get("method", "semantic"),
-            target_block_size=blocking.get("target_block_size", 30),
-            max_block_size=blocking.get("max_block_size", 100),
-            model=matching.get("model", "gemini/gemini-2.0-flash"),
-            max_iterations=data.get("max_iterations", 5),
-            convergence_threshold=data.get("convergence_threshold", 0.01),
-            max_concurrent=matching.get("max_concurrent", 20),
+            target_block_size=blocking.get(
+                "target_block_size", config.get("er.blocking.target_block_size", 30)
+            ),
+            max_block_size=blocking.get(
+                "max_block_size", config.get("er.blocking.max_block_size", 100)
+            ),
+            model=matching.get("model", config.get("models.llm", "gemini/gemini-2.0-flash")),
+            max_iterations=data.get(
+                "max_iterations", config.get("er.convergence.max_iterations", 5)
+            ),
+            convergence_threshold=data.get(
+                "convergence_threshold", config.get("er.convergence.threshold", 0.01)
+            ),
+            max_concurrent=matching.get(
+                "max_concurrent", config.get("er.matching.max_concurrent", 20)
+            ),
             limit=data.get("limit"),
         )
 
@@ -144,7 +155,7 @@ def load_data(input_path: str) -> pd.DataFrame:
                 return df
             except UnicodeDecodeError:
                 continue
-        return pd.read_csv(path, sep=sep, encoding="latin-1")
+        raise ValueError(f"Could not read CSV with UTF-8 or Latin-1 encoding: {path}")
     raise ValueError(f"Unsupported file format: {path.suffix}. Use .csv, .parquet, or iceberg://")
 
 

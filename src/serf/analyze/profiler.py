@@ -7,6 +7,7 @@ from typing import Any
 import dspy
 
 from serf.analyze.field_detection import detect_field_type
+from serf.config import config
 from serf.dspy.baml_adapter import BAMLAdapter
 from serf.dspy.signatures import GenerateERConfig
 from serf.dspy.types import DatasetProfile, FieldProfile
@@ -113,7 +114,7 @@ class DatasetProfiler:
 def generate_er_config(
     profile: DatasetProfile,
     sample_records: list[dict[str, Any]],
-    model: str = "gemini/gemini-2.0-flash",
+    model: str = config.get("models.llm", "gemini/gemini-2.0-flash"),
 ) -> str:
     """Use an LLM to generate an ER config YAML from a dataset profile.
 

@@ -398,30 +398,56 @@ def match(input_path: str, output_path: str, iteration: int, batch_size: int) ->
     help="Ground truth file with labeled pairs (CSV)",
 )
 def evaluate(input_path: str, ground_truth: str | None) -> None:
-    """Evaluate entity resolution results."""
+    """Evaluate entity resolution results with Abzu-level rigor.
+
+    Performs comprehensive validation: entity deduplication, source_uuid
+    validation, match_skip analysis, and PASS/FAIL checks.
+    """
     from serf.dspy.types import BlockResolution
+    from serf.eval.evaluator import (
+        evaluate_er_results,
+        format_evaluation_report,
+        save_evaluation,
+    )
     from serf.eval.metrics import evaluate_resolution
 
     logger.info(f"Evaluating: input={input_path}")
 
     matches_file = os.path.join(input_path, "matches.jsonl")
-    resolutions = []
+    resolutions: list[BlockResolution] = []
     with open(matches_file) as f:
         for line in f:
             resolutions.append(BlockResolution.model_validate_json(line.strip()))
 
+    # Compute original entity count from block resolutions
     total_input = sum(r.original_count for r in resolutions)
-    total_output = sum(r.resolved_count for r in resolutions)
-    resolved_count = sum(1 for r in resolutions if r.was_resolved)
 
-    click.echo("\nEvaluation Summary")
-    click.echo(f"  Total blocks: {len(resolutions)}")
-    click.echo(f"  Blocks with merges: {resolved_count}")
-    click.echo(f"  Entities in: {total_input}")
-    click.echo(f"  Entities out: {total_output}")
-    if total_input > 0:
-        click.echo(f"  Reduction: {(1 - total_output / total_input) * 100:.1f}%")
+    # Collect all UUIDs for validation
+    historical_uuids: set[str] = set()
+    for r in resolutions:
+        for e in r.resolved_entities:
+            if e.uuid:
+                historical_uuids.add(e.uuid)
+            for su in e.source_uuids or []:
+                historical_uuids.add(su)
 
+    # Run comprehensive evaluation
+    metrics = evaluate_er_results(
+        resolutions=resolutions,
+        original_entity_count=total_input,
+        iteration=1,
+        historical_uuids=historical_uuids,
+    )
+
+    # Print formatted report
+    report = format_evaluation_report(metrics)
+    click.echo(report)
+
+    # Save evaluation metrics
+    eval_file = os.path.join(input_path, "evaluation.json")
+    save_evaluation(metrics, eval_file)
+
+    # Optional ground truth comparison
     if ground_truth:
         import pandas as pd
 
@@ -438,11 +464,16 @@ def evaluate(input_path: str, ground_truth: str | None) -> None:
                 if m.is_match:
                     a, b = m.entity_a_id, m.entity_b_id
                     predicted_pairs.add((min(a, b), max(a, b)))
+            for e in r.resolved_entities:
+                if e.source_ids:
+                    for sid in e.source_ids:
+                        predicted_pairs.add((min(e.id, sid), max(e.id, sid)))
 
-        metrics = evaluate_resolution(predicted_pairs, true_pairs)
-        click.echo(f"\n  Precision: {metrics['precision']:.4f}")
-        click.echo(f"  Recall: {metrics['recall']:.4f}")
-        click.echo(f"  F1 Score: {metrics['f1_score']:.4f}")
+        gt_metrics = evaluate_resolution(predicted_pairs, true_pairs)
+        click.echo("\n  Ground Truth Comparison:")
+        click.echo(f"    Precision: {gt_metrics['precision']:.4f}")
+        click.echo(f"    Recall:    {gt_metrics['recall']:.4f}")
+        click.echo(f"    F1 Score:  {gt_metrics['f1_score']:.4f}")
 
 
 # ---------------------------------------------------------------------------

@@ -1,8 +1,9 @@
 """Tests for EdgeResolver."""
 
-import asyncio
 from typing import Any
 from unittest.mock import MagicMock, patch
+
+import pytest
 
 from serf.edge.resolver import EdgeResolver
 
@@ -36,25 +37,23 @@ def test_group_edges_accepts_src_dst_alternatives() -> None:
     assert len(list(groups.values())[0]) == 2
 
 
-def test_singleton_edges_pass_through() -> None:
+@pytest.mark.asyncio
+async def test_singleton_edges_pass_through() -> None:
     """Test singleton edges pass through in resolve_all."""
     edges = [
         {"src_id": 1, "dst_id": 2, "type": "owns"},
     ]
     resolver = EdgeResolver()
-
-    async def run() -> list[dict[str, Any]]:
-        return await resolver.resolve_all(edges)
-
-    result = asyncio.run(run())
+    result = await resolver.resolve_all(edges)
 
     assert len(result) == 1
     assert result[0]["src_id"] == 1
     assert result[0]["dst_id"] == 2
 
 
+@pytest.mark.asyncio
 @patch("serf.edge.resolver.dspy.Predict")
-def test_resolve_edge_block_with_mocked_dspy(mock_predict_cls: MagicMock) -> None:
+async def test_resolve_edge_block_with_mocked_dspy(mock_predict_cls: MagicMock) -> None:
     """Test resolve_edge_block with mocked DSPy."""
     mock_instance = MagicMock()
     mock_instance.return_value = MagicMock(
@@ -62,16 +61,12 @@ def test_resolve_edge_block_with_mocked_dspy(mock_predict_cls: MagicMock) -> Non
     )
     mock_predict_cls.return_value = mock_instance
 
-    edges = [
+    edges: list[dict[str, Any]] = [
         {"src_id": 1, "dst_id": 2, "type": "owns", "weight": 1},
         {"src_id": 1, "dst_id": 2, "type": "owns", "weight": 2},
     ]
     resolver = EdgeResolver()
-
-    async def run() -> list[dict[str, Any]]:
-        return await resolver.resolve_edge_block("test_key", edges)
-
-    result = asyncio.run(run())
+    result = await resolver.resolve_edge_block("test_key", edges)
 
     assert len(result) == 1
     assert result[0]["merged"] is True

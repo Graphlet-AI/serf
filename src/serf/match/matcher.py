@@ -49,7 +49,7 @@ class EntityMatcher:
         max_concurrent : int | None
             Max concurrent LLM calls. Defaults to config er.matching.max_concurrent.
         """
-        self.model = model or config.get("models.llm", "gemini/gemini-2.0-flash")
+        self.model = model or config.get("models.llm")
         self.batch_size = batch_size or config.get("er.matching.batch_size", 10)
         self.max_concurrent = max_concurrent or config.get("er.matching.max_concurrent", 20)
         self._predictor: dspy.Predict | None = None

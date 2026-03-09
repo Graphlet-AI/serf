@@ -37,7 +37,7 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 | Package Manager    | **uv**                                             |
 | Data Processing    | **PySpark 4.x**                                    |
 | LLM Framework      | **DSPy 3.x** with BAMLAdapter                      |
-| Embeddings         | **Qwen3-Embedding-0.6B** via sentence-transformers |
+| Embeddings         | **multilingual-e5-base** via sentence-transformers |
 | Vector Search      | **FAISS IndexIVFFlat**                             |
 | Linting/Formatting | **Ruff**                                           |
 | Type Checking      | **zuban** (mypy-compatible)                        |
@@ -47,13 +47,34 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 ### Installation
 
 ```bash
-# From PyPI (when published)
-pip install serf
-
-# From source
 git clone https://github.com/Graphlet-AI/serf.git
 cd serf
-uv sync
+uv sync --extra dev
+```
+
+### Docker
+
+```bash
+# Build
+docker compose build
+
+# Run any serf command
+docker compose run serf benchmark --dataset dblp-acm
+
+# Run benchmarks
+docker compose --profile benchmark up
+
+# Run tests
+docker compose --profile test up
+
+# Analyze a dataset (put your file in data/)
+docker compose run serf analyze --input data/input.csv --output data/er_config.yml
+```
+
+Set your API key in a `.env` file or export it:
+
+```bash
+echo "GEMINI_API_KEY=your-key" > .env
 ```
 
 ### System Requirements
@@ -116,11 +137,11 @@ result = matcher(block_records=block_json, schema_info=schema, few_shot_examples
 
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses Qwen3-Embedding-0.6B name-only embeddings + FAISS IVF. Matching uses Gemini 2.0 Flash via DSPy BlockMatch.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses Gemini 2.0 Flash via DSPy BlockMatch.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
-| **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8950    | 0.6246 | **0.7357** |
+| **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8849    | 0.5809 | **0.7014** |
 
 Blocking uses name-only embeddings for tighter semantic clusters. All matching decisions are made by the LLM — no embedding similarity thresholds.
 

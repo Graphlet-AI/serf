@@ -114,7 +114,7 @@ class DatasetProfiler:
 def generate_er_config(
     profile: DatasetProfile,
     sample_records: list[dict[str, Any]],
-    model: str = config.get("models.llm", "gemini/gemini-2.0-flash"),
+    model: str | None = None,
 ) -> str:
     """Use an LLM to generate an ER config YAML from a dataset profile.
 
@@ -132,8 +132,10 @@ def generate_er_config(
     str
         YAML string with the recommended ER configuration
     """
+    effective_model = model or config.get("models.analyze_llm")
     api_key = os.environ.get("GEMINI_API_KEY", "")
-    lm = dspy.LM(model, api_key=api_key)
+    lm = dspy.LM(effective_model, api_key=api_key)
+    logger.info(f"Using LLM model: {effective_model}")
 
     predictor = dspy.ChainOfThought(GenerateERConfig)
 

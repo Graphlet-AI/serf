@@ -18,8 +18,7 @@ from uuid import uuid4
 import pandas as pd
 import yaml
 
-from serf.block.embeddings import EntityEmbedder
-from serf.block.faiss_blocker import FAISSBlocker
+from serf.block.subprocess_embed import cluster_in_subprocess, embed_in_subprocess
 from serf.config import config
 from serf.dspy.types import Entity, EntityBlock, IterationMetrics
 from serf.logs import get_logger
@@ -64,7 +63,7 @@ class ERConfig:
         blocking_method: str = "semantic",
         target_block_size: int = config.get("er.blocking.target_block_size", 30),
         max_block_size: int = config.get("er.blocking.max_block_size", 100),
-        model: str = config.get("models.llm", "gemini/gemini-2.0-flash"),
+        model: str | None = None,
         max_iterations: int = config.get("er.convergence.max_iterations", 5),
         convergence_threshold: float = config.get("er.convergence.threshold", 0.01),
         max_concurrent: int = config.get("er.matching.max_concurrent", 20),
@@ -77,7 +76,7 @@ class ERConfig:
         self.blocking_method = blocking_method
         self.target_block_size = target_block_size
         self.max_block_size = max_block_size
-        self.model = model
+        self.model = model or config.get("models.llm")
         self.max_iterations = max_iterations
         self.convergence_threshold = convergence_threshold
         self.max_concurrent = max_concurrent
@@ -115,7 +114,7 @@ class ERConfig:
             max_block_size=blocking.get(
                 "max_block_size", config.get("er.blocking.max_block_size", 100)
             ),
-            model=matching.get("model", config.get("models.llm", "gemini/gemini-2.0-flash")),
+            model=matching.get("model"),
             max_iterations=data.get(
                 "max_iterations", config.get("er.convergence.max_iterations", 5)
             ),
@@ -324,9 +323,7 @@ def run_pipeline(
     original_count = len(entities)
     logger.info(f"Created {original_count} entities")
 
-    # Initialize embedder for blocking (shared across iterations)
-    embedder = EntityEmbedder()
-
+    model_name = config.get("models.embedding")
     all_historical_uuids: set[str] = {e.uuid for e in entities if e.uuid}
 
     iteration_metrics: list[IterationMetrics] = []
@@ -340,21 +337,16 @@ def run_pipeline(
         logger.info(f"\n=== Iteration {iteration} ===")
         logger.info(f"  Entities: {len(entities)}")
 
-        # Phase 1: Embed for blocking (name-only by default, configurable)
-        logger.info("  Embedding for blocking...")
+        # Phase 1: Embed for blocking in subprocess (avoids MPS/FAISS conflicts)
         texts = [e.text_for_embedding(cfg.blocking_fields) for e in entities]
-        embeddings = embedder.embed(texts)
+        embeddings = embed_in_subprocess(texts, model_name=model_name)
 
-        # Phase 2: Block with FAISS
-        logger.info("  Blocking with FAISS...")
+        # Phase 2: Cluster with FAISS in subprocess
         ids = [str(e.id) for e in entities]
         effective_target = max(10, cfg.target_block_size // iteration)
-        blocker = FAISSBlocker(
-            target_block_size=effective_target,
-            iteration=iteration,
-            auto_scale=False,
+        block_assignments = cluster_in_subprocess(
+            embeddings, ids, target_block_size=effective_target
         )
-        block_assignments = blocker.block(embeddings, ids)
 
         # Build EntityBlocks
         entity_map = {e.id: e for e in entities}

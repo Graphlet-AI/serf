@@ -130,7 +130,7 @@ def test_load_from_deepmatcher_format() -> None:
         pd.DataFrame({"ltable_id": [1], "rtable_id": [1], "label": [1]}).to_csv(
             os.path.join(tmpdir, "valid.csv"), index=False
         )
-        pd.DataFrame(columns=["ltable_id", "rtable_id", "label"]).to_csv(
+        pd.DataFrame({"ltable_id": [], "rtable_id": [], "label": []}).to_csv(  # type: ignore[arg-type]
             os.path.join(tmpdir, "test.csv"), index=False
         )
 

@@ -50,7 +50,7 @@ class EntityEmbedder:
         normalize: bool = True,
     ) -> None:
         if model_name is None:
-            model_name = config.get("models.embedding", "Qwen/Qwen3-Embedding-0.6B")
+            model_name = config.get("models.embedding")
         if device is None:
             device = get_torch_device()
 
@@ -84,5 +84,6 @@ class EntityEmbedder:
             show_progress_bar=len(texts) > 100,
             normalize_embeddings=self.normalize,
             convert_to_numpy=True,
+            device="cpu",  # Always encode on CPU — FAISS segfaults with MPS tensors
         )
-        return np.asarray(embeddings, dtype=np.float32)
+        return np.ascontiguousarray(embeddings, dtype=np.float32)

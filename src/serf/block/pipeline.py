@@ -2,10 +2,14 @@
 
 Orchestrates the embed → cluster → split workflow for creating
 entity blocks for matching.
+
+Uses subprocess isolation for PyTorch embedding and FAISS clustering
+to avoid memory conflicts (MPS/FAISS segfault) on macOS. This is
+the pattern proven in the Abzu production system.
 """
 
-from serf.block.embeddings import EntityEmbedder
-from serf.block.faiss_blocker import FAISSBlocker
+from serf.block.subprocess_embed import cluster_in_subprocess, embed_in_subprocess
+from serf.config import config
 from serf.dspy.types import BlockingMetrics, Entity, EntityBlock
 from serf.logs import get_logger
 
@@ -71,35 +75,20 @@ class SemanticBlockingPipeline:
         auto_scale: bool = True,
         blocking_fields: list[str] | None = None,
     ) -> None:
+        if model_name is None:
+            model_name = config.get("models.embedding")
         self.model_name = model_name
         self.target_block_size = target_block_size
         self.max_block_size = max_block_size
         self.iteration = iteration
         self.auto_scale = auto_scale
         self.blocking_fields = blocking_fields
-        self._embedder: EntityEmbedder | None = None
-        self._blocker: FAISSBlocker | None = None
-
-    @property
-    def embedder(self) -> EntityEmbedder:
-        """Lazy-load the embedder."""
-        if self._embedder is None:
-            self._embedder = EntityEmbedder(model_name=self.model_name)
-        return self._embedder
-
-    @property
-    def blocker(self) -> FAISSBlocker:
-        """Lazy-load the blocker."""
-        if self._blocker is None:
-            self._blocker = FAISSBlocker(
-                target_block_size=self.target_block_size,
-                iteration=self.iteration,
-                auto_scale=self.auto_scale,
-            )
-        return self._blocker
 
     def run(self, entities: list[Entity]) -> tuple[list[EntityBlock], BlockingMetrics]:
-        """Run the full blocking pipeline.
+        """Run the full blocking pipeline using subprocess isolation.
+
+        Embedding and FAISS clustering run in separate subprocesses
+        to avoid PyTorch MPS / FAISS memory conflicts on macOS.
 
         Parameters
         ----------
@@ -120,14 +109,17 @@ class SemanticBlockingPipeline:
         entity_map = {str(e.id): e for e in entities}
         ids = [str(e.id) for e in entities]
 
-        # Embed (name-only by default, configurable via blocking_fields)
+        # Embed in subprocess (name-only by default)
         texts = [e.text_for_embedding(self.blocking_fields) for e in entities]
-        logger.info("Computing embeddings...")
-        embeddings = self.embedder.embed(texts)
+        embeddings = embed_in_subprocess(texts, model_name=self.model_name)
 
-        # Cluster
-        logger.info("Clustering with FAISS...")
-        block_assignments = self.blocker.block(embeddings, ids)
+        # Cluster in subprocess
+        effective_target = self.target_block_size
+        if self.auto_scale and self.iteration > 1:
+            effective_target = max(10, self.target_block_size // self.iteration)
+        block_assignments = cluster_in_subprocess(
+            embeddings, ids, target_block_size=effective_target
+        )
 
         # Build EntityBlocks
         blocks: list[EntityBlock] = []

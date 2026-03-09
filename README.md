@@ -116,7 +116,7 @@ Performance on standard ER benchmarks from the [Leipzig Database Group](https://
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
-| **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8950    | 0.6246 | **0.7357** |
+| **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8849    | 0.5809 | **0.7014** |
 
 Blocking uses name-only embeddings for tighter semantic clusters. All matching decisions are made by the LLM — no embedding similarity thresholds.
 

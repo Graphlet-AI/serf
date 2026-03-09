@@ -18,8 +18,8 @@ from uuid import uuid4
 import pandas as pd
 import yaml
 
-from serf.block.embeddings import EntityEmbedder
-from serf.block.faiss_blocker import FAISSBlocker
+from serf.block.subprocess_embed import cluster_in_subprocess, embed_in_subprocess
+from serf.config import config
 from serf.dspy.types import Entity, EntityBlock, IterationMetrics
 from serf.logs import get_logger
 
@@ -313,9 +313,7 @@ def run_pipeline(
     original_count = len(entities)
     logger.info(f"Created {original_count} entities")
 
-    # Initialize embedder for blocking (shared across iterations)
-    embedder = EntityEmbedder()
-
+    model_name = config.get("models.embedding", "Qwen/Qwen3-Embedding-0.6B")
     all_historical_uuids: set[str] = {e.uuid for e in entities if e.uuid}
 
     iteration_metrics: list[IterationMetrics] = []
@@ -329,21 +327,16 @@ def run_pipeline(
         logger.info(f"\n=== Iteration {iteration} ===")
         logger.info(f"  Entities: {len(entities)}")
 
-        # Phase 1: Embed for blocking (name-only by default, configurable)
-        logger.info("  Embedding for blocking...")
+        # Phase 1: Embed for blocking in subprocess (avoids MPS/FAISS conflicts)
         texts = [e.text_for_embedding(cfg.blocking_fields) for e in entities]
-        embeddings = embedder.embed(texts)
+        embeddings = embed_in_subprocess(texts, model_name=model_name)
 
-        # Phase 2: Block with FAISS
-        logger.info("  Blocking with FAISS...")
+        # Phase 2: Cluster with FAISS in subprocess
         ids = [str(e.id) for e in entities]
         effective_target = max(10, cfg.target_block_size // iteration)
-        blocker = FAISSBlocker(
-            target_block_size=effective_target,
-            iteration=iteration,
-            auto_scale=False,
+        block_assignments = cluster_in_subprocess(
+            embeddings, ids, target_block_size=effective_target
         )
-        block_assignments = blocker.block(embeddings, ids)
 
         # Build EntityBlocks
         entity_map = {e.id: e for e in entities}

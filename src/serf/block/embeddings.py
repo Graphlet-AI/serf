@@ -84,5 +84,6 @@ class EntityEmbedder:
             show_progress_bar=len(texts) > 100,
             normalize_embeddings=self.normalize,
             convert_to_numpy=True,
+            device="cpu",  # Always encode on CPU — FAISS segfaults with MPS tensors
         )
-        return np.asarray(embeddings, dtype=np.float32)
+        return np.ascontiguousarray(embeddings, dtype=np.float32)

@@ -52,6 +52,31 @@ cd serf
 uv sync --extra dev
 ```
 
+### Docker
+
+```bash
+# Build
+docker compose build
+
+# Run any serf command
+docker compose run serf benchmark --dataset dblp-acm
+
+# Run benchmarks
+docker compose --profile benchmark up
+
+# Run tests
+docker compose --profile test up
+
+# Analyze a dataset (put your file in data/)
+docker compose run serf analyze --input data/input.csv --output data/er_config.yml
+```
+
+Set your API key in a `.env` file or export it:
+
+```bash
+echo "GEMINI_API_KEY=your-key" > .env
+```
+
 ### System Requirements
 
 - Python 3.12+

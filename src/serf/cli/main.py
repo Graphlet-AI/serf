@@ -60,8 +60,8 @@ def cli() -> None:
 @click.option(
     "--model",
     type=str,
-    default="gemini/gemini-2.0-flash",
-    help="LLM model for matching",
+    default=None,
+    help="LLM model for matching (from config.yml models.llm)",
 )
 @click.option(
     "--max-iterations",
@@ -100,7 +100,7 @@ def run(
     name_field: str | None,
     text_fields: str | None,
     entity_type: str,
-    model: str,
+    model: str | None,
     max_iterations: int,
     convergence_threshold: float,
     target_block_size: int,
@@ -126,7 +126,8 @@ def run(
     if text_fields:
         er_config.text_fields = [f.strip() for f in text_fields.split(",")]
     er_config.entity_type = entity_type
-    er_config.model = model
+    if model:
+        er_config.model = model
     er_config.max_iterations = max_iterations
     er_config.convergence_threshold = convergence_threshold
     er_config.target_block_size = target_block_size
@@ -181,10 +182,10 @@ def run(
 @click.option(
     "--model",
     type=str,
-    default="gemini/gemini-2.0-flash",
-    help="LLM model for config generation",
+    default=None,
+    help="LLM model for config generation (from config.yml models.analyze_llm)",
 )
-def analyze(input_path: str, output_path: str | None, model: str) -> None:
+def analyze(input_path: str, output_path: str | None, model: str | None) -> None:
     """Profile a dataset and generate an ER configuration.
 
     Runs statistical profiling on the input data, then optionally uses an LLM
@@ -647,8 +648,8 @@ def download(dataset: str, output_path: str | None) -> None:
 @click.option(
     "--model",
     type=str,
-    default="gemini/gemini-2.0-flash",
-    help="LLM model for matching",
+    default=None,
+    help="LLM model for matching (from config.yml models.llm)",
 )
 @click.option(
     "--max-right-entities",
@@ -672,7 +673,7 @@ def benchmark(
     dataset: str,
     output_path: str | None,
     target_block_size: int,
-    model: str,
+    model: str | None,
     max_right_entities: int | None,
     limit: int | None,
     concurrency: int,
@@ -690,6 +691,9 @@ def benchmark(
         click.echo(f"Available: {', '.join(available)}")
         return
 
+    from serf.config import config as serf_config
+
+    model = model or serf_config.get("models.llm")
     click.echo(f"Running benchmark: {dataset}")
     click.echo(f"  Model: {model}")
     start = time.time()
@@ -771,8 +775,8 @@ def benchmark(
 @click.option(
     "--model",
     type=str,
-    default="gemini/gemini-2.0-flash",
-    help="LLM model for matching",
+    default=None,
+    help="LLM model for matching (from config.yml models.llm)",
 )
 @click.option(
     "--max-right-entities",
@@ -782,15 +786,17 @@ def benchmark(
 )
 def benchmark_all(
     output_path: str,
-    model: str,
+    model: str | None,
     max_right_entities: int,
 ) -> None:
     """Run LLM-based benchmarks on all available datasets.
 
     Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
     """
+    from serf.config import config as serf_config
     from serf.eval.benchmarks import BenchmarkDataset
 
+    model = model or serf_config.get("models.llm")
     datasets = BenchmarkDataset.available_datasets()
     click.echo(f"Running benchmarks on {len(datasets)} datasets...")
     click.echo(f"  Model: {model}")
@@ -909,7 +915,7 @@ def _dataframe_to_entities(df: Any) -> list[Any]:
 def _benchmark_llm_matching(
     all_entities: list[Any],
     target_block_size: int,
-    model: str = "gemini/gemini-2.0-flash",
+    model: str | None = None,
     limit: int | None = None,
     concurrency: int = 20,
 ) -> set[tuple[int, int]]:

@@ -63,7 +63,7 @@ class ERConfig:
         blocking_method: str = "semantic",
         target_block_size: int = 30,
         max_block_size: int = 100,
-        model: str = "gemini/gemini-2.0-flash",
+        model: str | None = None,
         max_iterations: int = 5,
         convergence_threshold: float = 0.01,
         max_concurrent: int = 20,
@@ -76,7 +76,7 @@ class ERConfig:
         self.blocking_method = blocking_method
         self.target_block_size = target_block_size
         self.max_block_size = max_block_size
-        self.model = model
+        self.model = model or config.get("models.llm")
         self.max_iterations = max_iterations
         self.convergence_threshold = convergence_threshold
         self.max_concurrent = max_concurrent
@@ -110,7 +110,7 @@ class ERConfig:
             blocking_method=blocking.get("method", "semantic"),
             target_block_size=blocking.get("target_block_size", 30),
             max_block_size=blocking.get("max_block_size", 100),
-            model=matching.get("model", "gemini/gemini-2.0-flash"),
+            model=matching.get("model"),
             max_iterations=data.get("max_iterations", 5),
             convergence_threshold=data.get("convergence_threshold", 0.01),
             max_concurrent=matching.get("max_concurrent", 20),
@@ -313,7 +313,7 @@ def run_pipeline(
     original_count = len(entities)
     logger.info(f"Created {original_count} entities")
 
-    model_name = config.get("models.embedding", "intfloat/multilingual-e5-large")
+    model_name = config.get("models.embedding")
     all_historical_uuids: set[str] = {e.uuid for e in entities if e.uuid}
 
     iteration_metrics: list[IterationMetrics] = []

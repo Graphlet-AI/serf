@@ -32,38 +32,25 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 
 ## Architecture
 
-| Component          | Technology                                          |
-| ------------------ | --------------------------------------------------- |
-| Package Manager    | **uv**                                              |
-| Data Processing    | **PySpark 4.x**                                     |
-| LLM Framework      | **DSPy 3.x** with BAMLAdapter                       |
-| Embeddings         | **multilingual-e5-large** via sentence-transformers |
-| Vector Search      | **FAISS IndexIVFFlat**                              |
-| Linting/Formatting | **Ruff**                                            |
-| Type Checking      | **zuban** (mypy-compatible)                         |
+| Component          | Technology                                         |
+| ------------------ | -------------------------------------------------- |
+| Package Manager    | **uv**                                             |
+| Data Processing    | **PySpark 4.x**                                    |
+| LLM Framework      | **DSPy 3.x** with BAMLAdapter                      |
+| Embeddings         | **multilingual-e5-base** via sentence-transformers |
+| Vector Search      | **FAISS IndexIVFFlat**                             |
+| Linting/Formatting | **Ruff**                                           |
+| Type Checking      | **zuban** (mypy-compatible)                        |
 
 ## Quick Start
 
 ### Installation
 
 ```bash
-# From source with uv (recommended)
 git clone https://github.com/Graphlet-AI/serf.git
 cd serf
 uv sync --extra dev
-
-# From source with pip
-git clone https://github.com/Graphlet-AI/serf.git
-cd serf
-pip install -e ".[dev]"
-
-# From source with conda + pip
-conda create -n serf python=3.12
-conda activate serf
-pip install -e ".[dev]"
 ```
-
-> **Note:** The `faiss-cpu` package (required for semantic blocking) installs as `import faiss`. If you get `ModuleNotFoundError: No module named 'faiss'`, run `pip install faiss-cpu`.
 
 ### System Requirements
 
@@ -125,7 +112,7 @@ result = matcher(block_records=block_json, schema_info=schema, few_shot_examples
 
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-large name-only embeddings + FAISS IVF. Matching uses Gemini 2.0 Flash via DSPy BlockMatch.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses Gemini 2.0 Flash via DSPy BlockMatch.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |

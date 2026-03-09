@@ -76,7 +76,7 @@ class SemanticBlockingPipeline:
         blocking_fields: list[str] | None = None,
     ) -> None:
         if model_name is None:
-            model_name = config.get("models.embedding", "intfloat/multilingual-e5-large")
+            model_name = config.get("models.embedding")
         self.model_name = model_name
         self.target_block_size = target_block_size
         self.max_block_size = max_block_size

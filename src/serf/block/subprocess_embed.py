@@ -109,7 +109,7 @@ if __name__ == "__main__":
 
 def embed_in_subprocess(
     texts: list[str],
-    model_name: str = "intfloat/multilingual-e5-large",
+    model_name: str,
 ) -> NDArray[np.float32]:
     """Compute embeddings in an isolated subprocess.
 

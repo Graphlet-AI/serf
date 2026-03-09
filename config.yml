@@ -3,8 +3,9 @@ logs:
     path: logs
 
 models:
-  embedding: "intfloat/multilingual-e5-large"
+  embedding: "intfloat/multilingual-e5-base"
   llm: "gemini/gemini-2.0-flash"
+  analyze_llm: "${models.llm}"
   temperature: 0.0
 
 er:

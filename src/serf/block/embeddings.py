@@ -50,7 +50,7 @@ class EntityEmbedder:
         normalize: bool = True,
     ) -> None:
         if model_name is None:
-            model_name = config.get("models.embedding", "Qwen/Qwen3-Embedding-0.6B")
+            model_name = config.get("models.embedding", "intfloat/multilingual-e5-large")
         if device is None:
             device = get_torch_device()
 

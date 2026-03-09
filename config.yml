@@ -3,7 +3,7 @@ logs:
     path: logs
 
 models:
-  embedding: "Qwen/Qwen3-Embedding-0.6B"
+  embedding: "intfloat/multilingual-e5-large"
   llm: "gemini/gemini-2.0-flash"
   temperature: 0.0
 

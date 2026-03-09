@@ -32,15 +32,15 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 
 ## Architecture
 
-| Component          | Technology                                         |
-| ------------------ | -------------------------------------------------- |
-| Package Manager    | **uv**                                             |
-| Data Processing    | **PySpark 4.x**                                    |
-| LLM Framework      | **DSPy 3.x** with BAMLAdapter                      |
-| Embeddings         | **Qwen3-Embedding-0.6B** via sentence-transformers |
-| Vector Search      | **FAISS IndexIVFFlat**                             |
-| Linting/Formatting | **Ruff**                                           |
-| Type Checking      | **zuban** (mypy-compatible)                        |
+| Component          | Technology                                          |
+| ------------------ | --------------------------------------------------- |
+| Package Manager    | **uv**                                              |
+| Data Processing    | **PySpark 4.x**                                     |
+| LLM Framework      | **DSPy 3.x** with BAMLAdapter                       |
+| Embeddings         | **multilingual-e5-large** via sentence-transformers |
+| Vector Search      | **FAISS IndexIVFFlat**                              |
+| Linting/Formatting | **Ruff**                                            |
+| Type Checking      | **zuban** (mypy-compatible)                         |
 
 ## Quick Start
 
@@ -125,7 +125,7 @@ result = matcher(block_records=block_json, schema_info=schema, few_shot_examples
 
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses Qwen3-Embedding-0.6B name-only embeddings + FAISS IVF. Matching uses Gemini 2.0 Flash via DSPy BlockMatch.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-large name-only embeddings + FAISS IVF. Matching uses Gemini 2.0 Flash via DSPy BlockMatch.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |

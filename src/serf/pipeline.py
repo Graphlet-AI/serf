@@ -313,7 +313,7 @@ def run_pipeline(
     original_count = len(entities)
     logger.info(f"Created {original_count} entities")
 
-    model_name = config.get("models.embedding", "Qwen/Qwen3-Embedding-0.6B")
+    model_name = config.get("models.embedding", "intfloat/multilingual-e5-large")
     all_historical_uuids: set[str] = {e.uuid for e in entities if e.uuid}
 
     iteration_metrics: list[IterationMetrics] = []

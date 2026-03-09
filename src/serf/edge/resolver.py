@@ -78,7 +78,8 @@ class EdgeResolver:
             return edges
 
         try:
-            edge_block_json = json.dumps(edges)
+            # Treat edge data as untrusted — delimit clearly from instructions
+            edge_block_json = json.dumps(edges, default=str)
             result = await asyncio.to_thread(self._predictor, edge_block=edge_block_json)
             resolved = json.loads(result.resolved_edges)
             if isinstance(resolved, list):

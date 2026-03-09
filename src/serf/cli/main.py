@@ -848,68 +848,17 @@ def benchmark_all(
 # ---------------------------------------------------------------------------
 
 
-def _detect_name_column(columns: list[str]) -> str:
-    """Detect the primary name column from a list of column names.
-
-    Parameters
-    ----------
-    columns : list[str]
-        Column names to search
-
-    Returns
-    -------
-    str
-        The detected name column
-    """
-    name_candidates = [
-        "title",
-        "name",
-        "product_name",
-        "company_name",
-        "entity_name",
-    ]
-    for candidate in name_candidates:
-        if candidate in columns:
-            return candidate
-    for col in columns:
-        if col != "id":
-            return col
-    return columns[0]
-
-
 def _dataframe_to_entities(df: Any) -> list[Any]:
-    """Convert a pandas DataFrame to a list of Entity objects.
+    """Convert a pandas DataFrame to Entity objects. Delegates to pipeline module."""
+    from serf.pipeline import (
+        _detect_name_field,
+        _detect_text_fields,
+        dataframe_to_entities,
+    )
 
-    Parameters
-    ----------
-    df : pd.DataFrame
-        Input DataFrame with entity records
-
-    Returns
-    -------
-    list[Entity]
-        List of Entity objects
-    """
-
-    from serf.dspy.types import Entity
-
-    entities = []
-    name_col = _detect_name_column(df.columns.tolist())
-    for i, (_idx, row) in enumerate(df.iterrows()):
-        row_dict = row.to_dict()
-        name = str(row_dict.get(name_col, f"entity_{i}"))
-        desc_parts = [
-            str(v) for k, v in row_dict.items() if k != name_col and isinstance(v, str) and v
-        ]
-        entities.append(
-            Entity(
-                id=i,  # Use sequential index — original IDs may be strings
-                name=name,
-                description=" ".join(desc_parts),
-                attributes=row_dict,
-            )
-        )
-    return entities
+    name_field = _detect_name_field(df)
+    text_fields = _detect_text_fields(df, name_field)
+    return dataframe_to_entities(df, name_field, text_fields)
 
 
 def _benchmark_llm_matching(

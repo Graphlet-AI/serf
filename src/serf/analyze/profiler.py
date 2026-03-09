@@ -5,6 +5,7 @@ import os
 from typing import Any
 
 import dspy
+import yaml
 
 from serf.analyze.field_detection import detect_field_type
 from serf.dspy.baml_adapter import BAMLAdapter
@@ -157,4 +158,57 @@ def generate_er_config(
         lines = [line for line in lines if not line.strip().startswith("```")]
         config_yaml = "\n".join(lines)
 
-    return config_yaml.strip()
+    # Validate and enforce safe bounds on LLM-generated config
+    config_yaml = _sanitize_er_config(config_yaml.strip())
+    return config_yaml
+
+
+# Safe upper bounds for LLM-generated config values
+_MAX_ITERATIONS = 10
+_MAX_BLOCK_SIZE = 500
+_MAX_TARGET_BLOCK_SIZE = 200
+
+
+def _sanitize_er_config(config_yaml: str) -> str:
+    """Validate and enforce safe bounds on LLM-generated ER config.
+
+    Prevents indirect prompt injection from producing dangerous configs
+    (e.g. extremely high iteration counts or block sizes).
+
+    Parameters
+    ----------
+    config_yaml : str
+        Raw YAML config from LLM
+
+    Returns
+    -------
+    str
+        Sanitized YAML config with safe bounds enforced
+    """
+    parsed = yaml.safe_load(config_yaml)
+    if not isinstance(parsed, dict):
+        logger.warning("LLM generated non-dict config, returning empty config")
+        return "name_field: name\ntext_fields: []\nentity_type: entity\n"
+
+    # Enforce safe upper bounds
+    if parsed.get("max_iterations", 0) > _MAX_ITERATIONS:
+        logger.warning(
+            f"Clamping max_iterations from {parsed['max_iterations']} to {_MAX_ITERATIONS}"
+        )
+        parsed["max_iterations"] = _MAX_ITERATIONS
+
+    blocking = parsed.get("blocking", {})
+    if isinstance(blocking, dict):
+        if blocking.get("max_block_size", 0) > _MAX_BLOCK_SIZE:
+            blocking["max_block_size"] = _MAX_BLOCK_SIZE
+        if blocking.get("target_block_size", 0) > _MAX_TARGET_BLOCK_SIZE:
+            blocking["target_block_size"] = _MAX_TARGET_BLOCK_SIZE
+        parsed["blocking"] = blocking
+
+    # Ensure convergence_threshold is reasonable
+    ct = parsed.get("convergence_threshold", 0.01)
+    if not isinstance(ct, (int, float)) or ct > 0.5 or ct < 0.001:
+        parsed["convergence_threshold"] = 0.01
+
+    result: str = yaml.dump(parsed, default_flow_style=False).strip()
+    return result

@@ -1,0 +1,311 @@
+# SERF Quick Start Guide
+
+## What is SERF?
+
+SERF (Semantic Entity Resolution Framework) identifies when two or more records in your data refer to the same real-world entity — and merges them.
+
+Give SERF a CSV, Parquet, or Iceberg table with duplicate or overlapping records, and it will:
+
+1. **Block** — Group similar records together using sentence embeddings (so you don't compare every record to every other record)
+2. **Match** — Send each group to an LLM that decides which records are the same entity
+3. **Merge** — Combine matched records into single canonical entities
+4. **Iterate** — Repeat until no more duplicates are found
+
+The result is a deduplicated dataset with complete merge lineage tracking.
+
+## Installation
+
+```bash
+git clone https://github.com/Graphlet-AI/serf.git
+cd serf
+uv sync --extra dev
+```
+
+You need a Gemini API key for the matching step:
+
+```bash
+export GEMINI_API_KEY="your-key-here"
+```
+
+## The Two-Command Workflow
+
+### Step 1: Analyze your data
+
+```bash
+serf analyze --input data/companies.csv --output er_config.yml
+```
+
+This does two things:
+
+1. **Profiles your data** — detects field types, completeness, uniqueness, and recommends which fields to use for blocking and matching
+2. **Generates an ER config** — calls an LLM to produce a ready-to-use YAML configuration tailored to your data
+
+Example output:
+
+```
+Dataset Profile (0.3s)
+  Records: 4910
+  Fields: 5
+  Estimated duplicate rate: 15.2%
+
+  Recommended blocking fields: ['title']
+  Recommended matching fields: ['title', 'authors', 'venue']
+
+  Generating ER config with LLM...
+
+  Generated config:
+    name_field: title
+    text_fields: [authors, venue]
+    entity_type: Publication
+    blocking:
+      method: semantic
+      target_block_size: 30
+      max_block_size: 100
+    matching:
+      model: gemini/gemini-2.0-flash
+    max_iterations: 5
+    convergence_threshold: 0.01
+```
+
+### Step 2: Run entity resolution
+
+```bash
+serf run --input data/companies.csv --output data/resolved/ --config er_config.yml
+```
+
+SERF will:
+
+- Load your data
+- Embed entity names using `multilingual-e5-base` (runs in a subprocess to avoid memory conflicts)
+- Cluster entities into blocks using FAISS
+- Send each block to Gemini Flash for matching
+- Merge matched entities (lowest ID becomes master, others tracked in `source_ids`)
+- Iterate until convergence
+- Write resolved entities as both `resolved.parquet` and `resolved.csv`
+
+Output:
+
+```
+SERF Entity Resolution
+  Input:  data/companies.csv
+  Output: data/resolved/
+  Model:  gemini/gemini-2.0-flash
+
+  === Iteration 1 ===
+  Entities: 4910
+  Created 88 blocks
+  Matching 88 blocks with 20 concurrent LLM calls
+  Iteration 1: 4910 → 3800 (22.6% reduction)
+
+  === Iteration 2 ===
+  Entities: 3800
+  Iteration 2: 3800 → 3720 (2.1% reduction)
+
+  Converged: 2.10% < 1.00% threshold
+
+==================================================
+  Original entities:  4910
+  Resolved entities:  3720
+  Overall reduction:  24.2%
+  Iterations:         2
+  Elapsed:            312.4s
+==================================================
+```
+
+## Quick Test (No Config Needed)
+
+You can skip the analyze step entirely — SERF auto-detects fields:
+
+```bash
+serf run --input data/companies.csv --output data/resolved/
+```
+
+For a fast test with limited LLM calls:
+
+```bash
+serf run --input data/companies.csv --output data/resolved/ --limit 10
+```
+
+## Benchmarks
+
+Test SERF against standard entity resolution benchmarks:
+
+```bash
+# Download a benchmark dataset
+serf download --dataset dblp-acm
+
+# Run the benchmark (uses LLM matching)
+serf benchmark --dataset dblp-acm --output data/results/
+
+# Quick test with only 10 blocks
+serf benchmark --dataset dblp-acm --limit 10
+
+# Run all benchmarks
+serf benchmark-all
+```
+
+Available datasets:
+
+| Dataset        | Domain        | Difficulty |
+| -------------- | ------------- | ---------- |
+| `dblp-acm`     | Bibliographic | Easy       |
+| `dblp-scholar` | Bibliographic | Medium     |
+| `abt-buy`      | Products      | Hard       |
+
+## Configuration
+
+All settings live in `config.yml`:
+
+```yaml
+models:
+  embedding: "intfloat/multilingual-e5-base" # Embedding model for blocking
+  llm: "gemini/gemini-2.0-flash" # LLM for matching
+  analyze_llm: "${models.llm}" # LLM for analyze (defaults to same)
+  temperature: 0.0
+
+er:
+  blocking:
+    target_block_size: 30 # Target entities per FAISS block
+    max_block_size: 100 # Hard cap before splitting
+  matching:
+    max_concurrent: 20 # Concurrent LLM requests
+    max_retries: 3
+```
+
+Override any setting via CLI flags or an ER config YAML:
+
+```bash
+# Override model
+serf run --input data.csv --output out/ --model gemini/gemini-2.5-flash
+
+# Override block size
+serf run --input data.csv --output out/ --target-block-size 50
+
+# More concurrent requests
+serf run --input data.csv --output out/ --concurrency 50
+```
+
+## ER Config YAML
+
+The config generated by `serf analyze` looks like this:
+
+```yaml
+# Which column is the entity name (used for embedding)
+name_field: title
+
+# Which columns the LLM sees during matching
+text_fields:
+  - authors
+  - venue
+
+# Optional: additional fields to embed beyond name_field
+# (usually empty — name-only blocking is tightest)
+blocking_fields: []
+
+# Entity type label
+entity_type: Publication
+
+# Blocking parameters
+blocking:
+  method: semantic
+  target_block_size: 30
+  max_block_size: 100
+
+# Matching parameters
+matching:
+  model: gemini/gemini-2.0-flash
+
+# Iteration control
+max_iterations: 5
+convergence_threshold: 0.01
+```
+
+## Docker
+
+```bash
+docker compose build
+docker compose run serf run --input data/input.csv --output data/resolved/
+docker compose run serf benchmark --dataset dblp-acm --limit 10
+```
+
+Set your API key in `.env`:
+
+```bash
+echo "GEMINI_API_KEY=your-key" > .env
+```
+
+## Python API
+
+```python
+from serf.pipeline import ERConfig, run_pipeline
+
+# Simplest usage — auto-detects everything
+summary = run_pipeline("data/companies.csv", "data/resolved/")
+
+# With custom config
+config = ERConfig(
+    name_field="company_name",
+    text_fields=["description", "location"],
+    entity_type="Company",
+    target_block_size=30,
+    max_iterations=3,
+)
+summary = run_pipeline("data/companies.csv", "data/resolved/", config)
+
+print(f"Reduced {summary['original_count']} → {summary['final_count']} entities")
+```
+
+## How It Works
+
+```
+Input Data (CSV/Parquet/Iceberg)
+        │
+        ▼
+┌─────────────────┐
+│  Embed Names    │  multilingual-e5-base (subprocess)
+│  (blocking only)│  Only the name/title field is embedded
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  FAISS IVF      │  Cluster into blocks of ~30 entities
+│  Clustering     │  (subprocess — avoids MPS/FAISS conflict)
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  LLM Matching   │  Gemini Flash via DSPy BlockMatch
+│  (per block)    │  20-50 concurrent requests
+│                 │  Sees ALL entity fields, not just name
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Merge          │  Lowest ID = master
+│                 │  source_ids tracks full merge lineage
+│                 │  source_uuids for cross-iteration tracking
+└────────┬────────┘
+         │
+         ▼
+    Converged?  ──no──→  Re-embed & re-block (tighter clusters)
+         │
+        yes
+         │
+         ▼
+   Resolved Entities (Parquet + CSV)
+```
+
+## Key Design Decisions
+
+- **Embeddings are for blocking ONLY** — they group similar entities together. All match decisions are made by the LLM.
+- **Name-only embedding** — only the entity name/title is embedded for blocking. Including other fields adds noise. The LLM sees everything during matching.
+- **Subprocess isolation** — PyTorch embedding and FAISS clustering run in separate subprocesses to avoid memory conflicts on macOS (MPS/FAISS segfault).
+- **Iterative convergence** — each round merges obvious duplicates, then re-embeds the smaller dataset for tighter clusters. Stops when reduction per round drops below the threshold.
+- **Complete merge lineage** — every merged entity tracks `source_ids` (which entities were merged) and `source_uuids` (for cross-iteration tracking). No entity is silently dropped.
+
+## Next Steps
+
+- **Fine-tune the embedding model** for your domain — see [FINE_TUNING.md](FINE_TUNING.md)
+- **Scale beyond RAM** with a vector database — see [SCALABILITY.md](SCALABILITY.md)
+- **Optimize prompts** with DSPy MIPROv2 for better matching quality
+- **Add edge resolution** for knowledge graph deduplication

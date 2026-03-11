@@ -237,7 +237,7 @@ Replace `poetry install` with `uv sync`, `poetry run` with `uv run`, `poetry add
 - **VARIANT type**: Handle heterogeneous entity schemas from different sources without rigid struct definitions
 - **Spark Connect**: Decouple SERF CLI (lightweight Python) from compute cluster
 - **Arrow-optimized UDFs**: Efficient embedding computation via `pandas_udf`
-- **`applyInPandas`**: Process each block independently with full Python library access (DSPy, FAISS)
+- **`mapInPandas`**: Process blocks independently with full Python library access (DSPy, FAISS)
 - **Python Data Source API**: Custom data sources written in pure Python
 
 ### 4.4 Apache Iceberg Integration
@@ -869,7 +869,7 @@ This cascade can reduce costs by 80%+ while maintaining F1 within 1-2% of full e
 
 - LLM inference: ~1-10 seconds per block
 - 500 blocks with 50 concurrent requests: ~10-100 seconds wall-clock time
-- PySpark `applyInPandas` distributes across cluster workers
+- PySpark `mapInPandas` distributes across cluster workers
 - `asyncio.Semaphore` within each worker controls API rate limits
 
 ### 9.5 Multi-Round Convergence Efficiency

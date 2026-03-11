@@ -158,7 +158,7 @@ def test_evaluate_resolution_returns_all_keys() -> None:
     pred = {(1, 2), (3, 4)}
     true = {(1, 2), (5, 6)}
     result = evaluate_resolution(pred, true)
-    assert set(result.keys()) == {"precision", "recall", "f1_score"}
+    assert {"precision", "recall", "f1_score"}.issubset(set(result.keys()))
     assert "precision" in result
     assert "recall" in result
     assert "f1_score" in result

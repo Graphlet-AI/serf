@@ -1,4 +1,10 @@
-"""Graph algorithms for SERF entity resolution."""
+"""Graph algorithms for SERF entity resolution.
+
+NOTE: Connected components is not needed in SERF's current architecture.
+SERF matches entire blocks at once via LLM (not pairwise), so transitive
+closure is handled within the block-level matching prompt. This module
+is retained for potential future use with pairwise matching strategies.
+"""
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F

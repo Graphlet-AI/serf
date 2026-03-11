@@ -6,6 +6,7 @@ import time
 from typing import Any
 
 import click
+import pandas as pd
 
 from serf.logs import get_logger, setup_logging
 
@@ -472,9 +473,35 @@ def evaluate(input_path: str, ground_truth: str | None) -> None:
 
         gt_metrics = evaluate_resolution(predicted_pairs, true_pairs)
         click.echo("\n  Ground Truth Comparison:")
-        click.echo(f"    Precision: {gt_metrics['precision']:.4f}")
-        click.echo(f"    Recall:    {gt_metrics['recall']:.4f}")
-        click.echo(f"    F1 Score:  {gt_metrics['f1_score']:.4f}")
+        results_df = pd.DataFrame(
+            [
+                {
+                    "Metric": "Precision",
+                    "Value": f"{gt_metrics['precision']:.4f}",
+                },
+                {
+                    "Metric": "Recall",
+                    "Value": f"{gt_metrics['recall']:.4f}",
+                },
+                {
+                    "Metric": "F1 Score",
+                    "Value": f"{gt_metrics['f1_score']:.4f}",
+                },
+                {
+                    "Metric": "Predicted Pairs",
+                    "Value": str(len(predicted_pairs)),
+                },
+                {
+                    "Metric": "Correct (TP)",
+                    "Value": str(gt_metrics["true_positives"]),
+                },
+                {
+                    "Metric": "Wrong (FP)",
+                    "Value": str(gt_metrics["false_positives"]),
+                },
+            ]
+        )
+        click.echo(results_df.to_string(index=False))
 
 
 # ---------------------------------------------------------------------------
@@ -734,10 +761,17 @@ def benchmark(
     elapsed = time.time() - start
 
     click.echo(f"\n  Benchmark Results ({elapsed:.1f}s):")
-    click.echo(f"    Precision: {metrics['precision']:.4f}")
-    click.echo(f"    Recall:    {metrics['recall']:.4f}")
-    click.echo(f"    F1 Score:  {metrics['f1_score']:.4f}")
-    click.echo(f"    Predicted pairs: {len(predicted_pairs)}")
+    results_df = pd.DataFrame(
+        [
+            {"Metric": "Precision", "Value": f"{metrics['precision']:.4f}"},
+            {"Metric": "Recall", "Value": f"{metrics['recall']:.4f}"},
+            {"Metric": "F1 Score", "Value": f"{metrics['f1_score']:.4f}"},
+            {"Metric": "Predicted Pairs", "Value": str(len(predicted_pairs))},
+            {"Metric": "Correct (TP)", "Value": str(metrics["true_positives"])},
+            {"Metric": "Wrong (FP)", "Value": str(metrics["false_positives"])},
+        ]
+    )
+    click.echo(results_df.to_string(index=False))
 
     if output_path:
         os.makedirs(output_path, exist_ok=True)

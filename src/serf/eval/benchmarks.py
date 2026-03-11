@@ -420,7 +420,7 @@ class BenchmarkDataset:
             "Expected tableA.csv/tableB.csv or data.zip."
         )
 
-    def evaluate(self, predicted_pairs: set[tuple[int, int]]) -> dict[str, float]:
+    def evaluate(self, predicted_pairs: set[tuple[int, int]]) -> dict[str, float | int]:
         """Evaluate predictions against ground truth.
 
         Parameters
@@ -430,8 +430,8 @@ class BenchmarkDataset:
 
         Returns
         -------
-        dict[str, float]
-            Metrics: precision, recall, f1_score
+        dict[str, float | int]
+            Metrics: precision, recall, f1_score, true_positives, false_positives
         """
         return evaluate_resolution(predicted_pairs, self.ground_truth)
 

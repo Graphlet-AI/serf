@@ -170,7 +170,7 @@ def cluster_f1(
 
 def evaluate_resolution(
     predicted_pairs: set[tuple[int, int]], true_pairs: set[tuple[int, int]]
-) -> dict[str, float]:
+) -> dict[str, float | int]:
     """Compute all metrics and return as a dict.
 
     Parameters
@@ -182,13 +182,19 @@ def evaluate_resolution(
 
     Returns
     -------
-    dict of str to float
-        Dict with keys: precision, recall, f1_score.
+    dict of str to float | int
+        Dict with keys: precision, recall, f1_score, true_positives, false_positives.
     """
+    pred = _normalize_pairs(predicted_pairs)
+    true = _normalize_pairs(true_pairs)
+    tp = len(pred & true)
+    fp = len(pred) - tp
     return {
         "precision": precision(predicted_pairs, true_pairs),
         "recall": recall(predicted_pairs, true_pairs),
         "f1_score": f1_score(predicted_pairs, true_pairs),
+        "true_positives": tp,
+        "false_positives": fp,
     }
 
 

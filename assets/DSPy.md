@@ -7,7 +7,7 @@ This guide provides an overview of how to use the DSPy framework for building an
 1. **Installation**: Install DSPy via pip:
 
    ```
-   pip install dspy
+   uv add dspy-ai
    ```
 
 2. **Basic Usage**: Import DSPy and create a simple pipeline:

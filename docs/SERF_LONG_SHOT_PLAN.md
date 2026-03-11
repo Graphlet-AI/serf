@@ -542,23 +542,31 @@ Key CLI design principles (from CLAUDE.md):
 
 ### 6.2 PySpark DataFrame API
 
-For data scientists working in notebooks or Spark pipelines:
+**The primary interface is DataFrame-in, DataFrame-out.** Users pass any `pyspark.sql.DataFrame` and get a resolved DataFrame back. Pydantic types are an internal implementation detail -- the user never needs to define or see them.
+
+The internal flow for any DataFrame:
+
+1. **Profile**: Inspect `df.schema` (StructType) + sample data to build a `DatasetProfile` identifying field roles (name, identifier, date, etc.)
+2. **Generate types**: Auto-generate a Pydantic `Entity` subclass from the schema + profile (Section 5.1.1). This gives the LLM structured field descriptions and validates output.
+3. **Generate Spark schema**: Use SparkDantic to derive the output Spark schema from the generated Pydantic type (with ER metadata fields added: uuid, source_ids, source_uuids, match_skip, etc.)
+4. **Block/Match/Merge**: All operations work on DataFrames. The Pydantic types are used internally for LLM serialization (block rows → JSON for DSPy) and deserialization (LLM output → validated Pydantic → DataFrame rows).
+5. **Return DataFrame**: The resolved output is a standard `pyspark.sql.DataFrame` with the original columns plus ER metadata columns.
 
 ```python
 from serf.block import SemanticBlocker
 from serf.match import EntityMatcher
 from serf.eval import evaluate_resolution
 
-# Load data
+# Load ANY DataFrame -- no type definitions needed
 companies = spark.read.parquet("data/companies.parquet")
 
-# Block
-blocker = SemanticBlocker(model_name="Qwen/Qwen3-Embedding-0.6B", target_block_size=50)
-blocks = blocker.transform(companies)
+# Block (works on raw DataFrame, embeds the "name" column by default)
+blocker = SemanticBlocker(target_block_size=50)
+blocks = blocker.transform(companies)  # returns DataFrame with block_key, entities array
 
-# Match and merge
+# Match and merge (internally: profile → generate types → serialize → LLM → deserialize)
 matcher = EntityMatcher(model="gemini/gemini-2.0-flash", batch_size=10)
-resolved = matcher.resolve(blocks)
+resolved = matcher.resolve(blocks)  # returns DataFrame with original cols + ER metadata
 
 # Evaluate
 metrics = evaluate_resolution(resolved, companies)
@@ -566,6 +574,23 @@ print(f"Reduction: {metrics.reduction_pct:.1f}%")
 
 # Write to Iceberg
 resolved.writeTo("local.serf.resolved_entities").overwritePartitions()
+```
+
+For advanced users who want control over the entity type:
+
+```python
+from serf.dspy.types import Entity
+
+class Product(Entity):
+    """Custom entity type with domain-specific fields."""
+    entity_type: str = "product"
+    brand: Optional[str] = None
+    category: Optional[str] = None
+    price: Optional[float] = None
+
+# Pass explicit type -- skips auto-generation
+matcher = EntityMatcher(model="gemini/gemini-2.0-flash", entity_type=Product)
+resolved = matcher.resolve(blocks)
 ```
 
 ### 6.3 DSPy Module Interface
@@ -654,7 +679,13 @@ Raw Entities -> Embed (Qwen3) -> FAISS IVF Cluster -> Blocks
 
 ### 7.3 Phase 2: Schema Alignment + Matching + Merging
 
-All three operations in a single DSPy signature. The `schema_info` field is auto-generated from the Pydantic entity type (which itself may have been auto-generated from the input DataFrame schema via Section 5.1.1):
+All three operations in a single DSPy signature. The internal flow from DataFrame to LLM and back:
+
+1. **DataFrame → Pydantic**: Each block's entity rows are converted to the auto-generated (or user-provided) Pydantic Entity subclass instances, then serialized to JSON
+2. **Pydantic → DSPy**: The JSON block + auto-generated schema description are passed to the `BlockMatch` signature
+3. **DSPy → LLM**: DSPy + BAMLAdapter formats the structured prompt and sends to Gemini
+4. **LLM → Pydantic**: BAMLAdapter parses the structured output into `BlockResolution` Pydantic instances, validating all fields
+5. **Pydantic → DataFrame**: Resolved entities are converted back to Spark rows using the SparkDantic-derived schema
 
 ```python
 class BlockMatch(dspy.Signature):
@@ -672,6 +703,8 @@ class BlockMatch(dspy.Signature):
     few_shot_examples: str = dspy.InputField(desc="Examples of correct merge behavior")
     resolution: BlockResolution = dspy.OutputField()
 ```
+
+The `schema_info` is generated automatically from the Pydantic entity type (which itself may have been auto-generated from the input DataFrame schema via Section 5.1.1). This means `serf resolve --input data.parquet` works end-to-end without the user defining any types -- the DataFrame schema drives everything.
 
 Key implementation details from Abzu:
 

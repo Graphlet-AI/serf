@@ -35,6 +35,17 @@ er:
     edges: "data/iteration_{iteration}/edges"
     metrics: "data/iteration_{iteration}/metrics"
 
+mlflow:
+  tracking_uri: "http://127.0.0.1:5001"
+  experiment_name: "SERF-Entity-Resolution"
+  backend_store_uri: "sqlite:///data/mlflow.db"
+  host: "127.0.0.1"
+  port: 5001
+  autolog:
+    log_traces: true
+    log_traces_from_compile: false
+    log_traces_from_eval: true
+
 benchmarks:
   output_dir: "data/benchmarks"
   datasets:

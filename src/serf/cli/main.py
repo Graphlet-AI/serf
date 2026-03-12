@@ -2,6 +2,8 @@
 
 import json
 import os
+import subprocess
+import sys
 import time
 from typing import Any
 
@@ -9,8 +11,12 @@ import click
 import pandas as pd
 
 from serf.logs import get_logger, setup_logging
+from serf.tracking import setup_mlflow
 
 logger = get_logger(__name__)
+
+# Available benchmark dataset names for CLI help
+BENCHMARK_DATASETS = ["dblp-acm", "dblp-scholar", "abt-buy"]
 
 
 @click.group(context_settings={"show_default": True})
@@ -18,6 +24,69 @@ logger = get_logger(__name__)
 def cli() -> None:
     """SERF: Semantic Entity Resolution Framework CLI."""
     setup_logging()
+
+
+# ---------------------------------------------------------------------------
+# mlflow  (start local MLflow server)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--host",
+    type=str,
+    default=None,
+    help="Host to bind the MLflow server to (from config.yml mlflow.host)",
+)
+@click.option(
+    "--port",
+    type=int,
+    default=None,
+    help="Port to run the MLflow server on (from config.yml mlflow.port)",
+)
+@click.option(
+    "--backend-store-uri",
+    type=str,
+    default=None,
+    help="Backend store URI for MLflow (from config.yml mlflow.backend_store_uri)",
+)
+def mlflow(host: str | None, port: int | None, backend_store_uri: str | None) -> None:
+    """Start a local MLflow tracking server.
+
+    Runs `mlflow server` with a SQLite backend for tracing DSPy operations.
+    The UI will be available at http://<host>:<port>.
+    """
+    from serf.config import config as serf_config
+
+    host = host or serf_config.get("mlflow.host", "127.0.0.1")
+    port = port or serf_config.get("mlflow.port", 5000)
+    backend_store_uri = backend_store_uri or serf_config.get(
+        "mlflow.backend_store_uri", "sqlite:///mlflow.db"
+    )
+
+    click.echo(f"Starting MLflow server at http://{host}:{port}")
+    click.echo(f"  Backend store: {backend_store_uri}")
+    click.echo("  Press Ctrl+C to stop\n")
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "mlflow",
+        "server",
+        "--backend-store-uri",
+        str(backend_store_uri),
+        "--host",
+        str(host),
+        "--port",
+        str(port),
+    ]
+    try:
+        subprocess.run(cmd, check=True)
+    except KeyboardInterrupt:
+        click.echo("\nMLflow server stopped.")
+    except subprocess.CalledProcessError as e:
+        click.echo(f"MLflow server exited with code {e.returncode}", err=True)
+        raise SystemExit(e.returncode) from e
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +186,8 @@ def run(
     Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
     """
     from serf.pipeline import ERConfig, run_pipeline
+
+    setup_mlflow()
 
     # Build config: YAML file first, then CLI overrides
     er_config = ERConfig.from_yaml(config_path) if config_path else ERConfig()
@@ -348,6 +419,8 @@ def match(input_path: str, output_path: str, iteration: int, batch_size: int) ->
 
     from serf.dspy.types import EntityBlock
     from serf.match.matcher import EntityMatcher
+
+    setup_mlflow()
 
     logger.info(f"Starting matching: input={input_path}, iteration={iteration}")
     start = time.time()
@@ -615,7 +688,7 @@ def resolve(
 @click.option(
     "--dataset",
     "-d",
-    type=str,
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
     required=True,
     help="Benchmark dataset name to download",
 )
@@ -630,12 +703,6 @@ def resolve(
 def download(dataset: str, output_path: str | None) -> None:
     """Download a benchmark dataset."""
     from serf.eval.benchmarks import BenchmarkDataset
-
-    available = BenchmarkDataset.available_datasets()
-    if dataset not in available:
-        click.echo(f"Unknown dataset: {dataset}")
-        click.echo(f"Available: {', '.join(available)}")
-        return
 
     click.echo(f"Downloading {dataset}...")
     benchmark_data = BenchmarkDataset.download(dataset, output_path)
@@ -654,7 +721,7 @@ def download(dataset: str, output_path: str | None) -> None:
 @click.option(
     "--dataset",
     "-d",
-    type=str,
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
     required=True,
     help="Benchmark dataset name",
 )
@@ -719,11 +786,7 @@ def benchmark(
     """
     from serf.eval.benchmarks import BenchmarkDataset
 
-    available = BenchmarkDataset.available_datasets()
-    if dataset not in available:
-        click.echo(f"Unknown dataset: {dataset}")
-        click.echo(f"Available: {', '.join(available)}")
-        return
+    setup_mlflow()
 
     from serf.config import config as serf_config
 
@@ -862,6 +925,8 @@ def benchmark_all(
     """
     from serf.config import config as serf_config
     from serf.eval.benchmarks import BenchmarkDataset
+
+    setup_mlflow()
 
     model = model or serf_config.get("models.llm")
     datasets = BenchmarkDataset.available_datasets()

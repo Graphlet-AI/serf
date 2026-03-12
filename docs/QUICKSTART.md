@@ -141,7 +141,7 @@ serf benchmark --dataset dblp-acm --output data/results/
 serf benchmark --dataset dblp-acm --limit 10
 
 # Run all benchmarks
-serf benchmark-all
+serf benchmark --all
 ```
 
 Available datasets:

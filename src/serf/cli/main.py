@@ -696,6 +696,12 @@ def download(dataset: str, output_path: str | None) -> None:
     default=20,
     help="Number of concurrent LLM requests",
 )
+@click.option(
+    "--max-iterations",
+    type=int,
+    default=1,
+    help="Maximum ER iterations (re-block and re-match resolved entities)",
+)
 def benchmark(
     dataset: str,
     output_path: str | None,
@@ -704,6 +710,7 @@ def benchmark(
     max_right_entities: int | None,
     limit: int | None,
     concurrency: int,
+    max_iterations: int,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
 
@@ -753,10 +760,35 @@ def benchmark(
         effective_block_size = 5
         click.echo(f"  Auto-scaled target_block_size to {effective_block_size} for --limit={limit}")
 
-    predicted_pairs = _benchmark_llm_matching(
-        all_entities, effective_block_size, model, limit, concurrency
-    )
+    all_predicted_pairs: set[tuple[int, int]] = set()
+    current_entities = all_entities
+    iterations_run = 0
 
+    for iteration in range(1, max_iterations + 1):
+        if max_iterations > 1:
+            click.echo(f"\n  === Iteration {iteration}/{max_iterations} ===")
+        prev_count = len(current_entities)
+
+        pairs, resolved = _benchmark_llm_matching(
+            current_entities, effective_block_size, model, limit, concurrency
+        )
+        all_predicted_pairs.update(pairs)
+        iterations_run = iteration
+
+        if max_iterations > 1:
+            reduction_pct = (prev_count - len(resolved)) / prev_count * 100 if prev_count > 0 else 0
+            click.echo(
+                f"    Entities: {prev_count} -> {len(resolved)} ({reduction_pct:.1f}% reduction)"
+            )
+
+        if len(resolved) >= prev_count or iteration == max_iterations:
+            if len(resolved) >= prev_count and max_iterations > 1 and iteration < max_iterations:
+                click.echo("    Converged (no reduction), stopping early")
+            break
+
+        current_entities = resolved
+
+    predicted_pairs = all_predicted_pairs
     metrics = benchmark_data.evaluate(predicted_pairs)
     elapsed = time.time() - start
 
@@ -769,6 +801,7 @@ def benchmark(
             {"Metric": "Predicted Pairs", "Value": str(len(predicted_pairs))},
             {"Metric": "Correct (TP)", "Value": str(metrics["true_positives"])},
             {"Metric": "Wrong (FP)", "Value": str(metrics["false_positives"])},
+            {"Metric": "Iterations", "Value": str(iterations_run)},
         ]
     )
     click.echo(results_df.to_string(index=False))
@@ -901,7 +934,7 @@ def _benchmark_llm_matching(
     model: str | None = None,
     limit: int | None = None,
     concurrency: int = 20,
-) -> set[tuple[int, int]]:
+) -> tuple[set[tuple[int, int]], list[Any]]:
     """Run LLM-based matching for benchmarks.
 
     Embeddings are used for blocking only. Matching is done by LLM
@@ -922,8 +955,8 @@ def _benchmark_llm_matching(
 
     Returns
     -------
-    set[tuple[int, int]]
-        Predicted match pairs
+    tuple[set[tuple[int, int]], list[Entity]]
+        Predicted match pairs and resolved entities for next iteration
     """
     import asyncio
 
@@ -943,6 +976,7 @@ def _benchmark_llm_matching(
     resolutions = asyncio.run(matcher.resolve_blocks(blocks, limit=limit))
 
     predicted_pairs: set[tuple[int, int]] = set()
+    resolved_entities: list[Any] = []
     for r in resolutions:
         # Extract from explicit match decisions
         for m in r.matches:
@@ -955,9 +989,10 @@ def _benchmark_llm_matching(
             if e.source_ids:
                 for sid in e.source_ids:
                     predicted_pairs.add((min(e.id, sid), max(e.id, sid)))
+        resolved_entities.extend(r.resolved_entities)
 
     click.echo(f"    Predicted {len(predicted_pairs)} match pairs")
-    return predicted_pairs
+    return predicted_pairs, resolved_entities
 
 
 if __name__ == "__main__":

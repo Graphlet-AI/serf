@@ -1,0 +1,81 @@
+services:
+  serf:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: serf
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yml:/app/config.yml:ro
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    entrypoint: ["uv", "run", "serf"]
+    command: ["--help"]
+
+  # Run a benchmark
+  benchmark:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: serf-benchmark
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yml:/app/config.yml:ro
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    entrypoint: ["uv", "run", "serf"]
+    command: ["benchmark", "--dataset", "dblp-acm", "--output", "data/benchmarks/docker"]
+    profiles:
+      - benchmark
+
+  # Run entity resolution on input data
+  resolve:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: serf-resolve
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yml:/app/config.yml:ro
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    entrypoint: ["uv", "run", "serf"]
+    command: ["run", "--input", "data/input.csv", "--output", "data/resolved"]
+    profiles:
+      - resolve
+
+  # Analyze a dataset and generate ER config
+  analyze:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: serf-analyze
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./config.yml:/app/config.yml:ro
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    entrypoint: ["uv", "run", "serf"]
+    command: ["analyze", "--input", "data/input.csv", "--output", "data/er_config.yml"]
+    profiles:
+      - analyze
+
+  # Run tests
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: serf-test
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    environment:
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    entrypoint: ["uv", "run", "pytest"]
+    command: ["tests/", "-v", "--ignore=tests/test_dspy.py"]
+    profiles:
+      - test

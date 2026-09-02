@@ -1,6 +1,6 @@
 # SERF: Agentic Semantic Entity Resolution Framework -- Build Plan
 
-This document is a comprehensive implementation plan for building **SERF** (Semantic Entity Resolution Framework) -- an open-source, agentic system for semantic entity resolution. It is designed for an AI coding agent (Cursor Agent grind mode) to execute overnight (8-12 hours) and produce a working, tested framework.
+This document is a comprehensive implementation plan for building **SERF** (Semantic Entity Resolution Framework) -- an open-source, agentic system for semantic entity resolution. It is designed for a frontier AI coding agent to execute with engineering judgment and produce a working, tested framework. Step sequencing reflects technical dependencies and complexity, not calendar-time estimates; a more capable coding agent should exercise judgment on implementation details rather than requiring exhaustive line-by-line prescription.
 
 **Repository:** [github.com/Graphlet-AI/serf](https://github.com/Graphlet-AI/serf)
 
@@ -36,6 +36,8 @@ This plan is aligned to the current implementation directives:
 7. Pin PySpark to `4.1+`.
 8. Prioritize benchmark validation order: DBLP-ACM, then Walmart-Amazon, then DBLP-Scholar.
 9. Reference Abzu prompt semantics and semantic blocking code directly; defer name-based blocking.
+10. Remove calendar/time-boxed "grind mode" framing from the plan. Sequencing and scope are defined by technical dependency and complexity, reflecting execution by a more capable coding agent that needs less exhaustive prescriptive hand-holding.
+11. Adopt `dspy.GEPA` as the primary reflective prompt optimizer, using Gemini 2.5 Pro as the `reflection_lm` and Gemini 2.0 Flash as the task LM being optimized -- this directly implements the "reflection by DSPy GEPA" validation/optimization use case for Gemini 2.5 Pro within the budget guard.
 
 ## 1. Introduction and Motivation
 
@@ -297,6 +299,7 @@ serf/
         type_generator.py          # Auto-generate entity types from DataFrame schemas (NEW)
         signatures.py              # DSPy signatures for ER (NEW)
         agents.py                  # DSPy ReAcT agents (NEW)
+        optimize.py                # GEPA-based reflective optimization for ER signatures (NEW)
         budget.py                  # Gemini token/cost budget guard (NEW)
       block/
         __init__.py
@@ -348,6 +351,7 @@ serf/
     test_benchmarks.py
     test_signatures.py
     test_agents.py
+    test_optimize.py
     test_cli.py
     test_pipeline_integration.py
   docs/
@@ -551,6 +555,9 @@ serf benchmark --dataset walmart-amazon --output data/benchmark_results/
 
 # Download benchmark datasets
 serf download --dataset walmart-amazon --output data/datasets/
+
+# Optimize ER signatures with GEPA reflection (Gemini 2.5 Pro reflection_lm, budget-guarded)
+serf optimize --signature block-match --trainset data/labeled/train.jsonl --valset data/labeled/val.jsonl
 ```
 
 Key CLI design principles (from CLAUDE.md):
@@ -749,12 +756,50 @@ Per-iteration metrics tracked (from Abzu's `IterationMetrics` and `er_eval.py`):
 
 ### 7.7 DSPy Optimization
 
-Use DSPy compilers to optimize ER prompts:
+**`dspy.GEPA` is the primary optimizer for SERF's ER signatures.** GEPA (Genetic-Pareto, Agrawal et al. 2025) is a reflective, evolutionary prompt optimizer: it runs the task program with a student LM, scores each rollout with a metric that returns both a score and natural-language feedback (`dspy.Prediction(score, feedback)`), then uses a separate, stronger `reflection_lm` to read the feedback and propose improved instructions. This maps directly onto SERF's model policy: **Gemini 2.0 Flash is the student/task LM being optimized, and Gemini 2.5 Pro is the `reflection_lm`.**
 
-- **`BootstrapFewShot`**: Auto-select best few-shot examples from labeled training data
-- **`MIPROv2`**: Jointly optimize instruction text and few-shot examples
-- **`BootstrapFinetune`**: Use expensive model (Gemini Pro) traces to fine-tune cheaper model (Gemini Flash) for production deployment
-- **Metric function**: F1 score on a validation set of labeled entity pairs
+```python
+import dspy
+
+reflection_lm = dspy.LM("gemini/gemini-2.5-pro", api_key=GEMINI_API_KEY, temperature=1.0)
+
+def er_metric(gold, pred, trace=None, pred_name=None, pred_trace=None) -> dspy.Prediction:
+    """Score a BlockMatch/EntityMerge prediction and explain the score.
+
+    Returns both a scalar score (for the Pareto frontier) and a text
+    explanation (fed verbatim to the reflection LM) so GEPA can
+    diagnose specific match/merge/ID-tracking failures.
+    """
+    score = f1_against_ground_truth(gold, pred)
+    feedback = explain_match_merge_errors(gold, pred)  # e.g. missed matches, bad ID lineage
+    return dspy.Prediction(score=score, feedback=feedback)
+
+optimizer = dspy.GEPA(
+    metric=er_metric,
+    reflection_lm=reflection_lm,
+    auto="light",  # bounded budget; escalate to "medium" only if headroom remains
+    num_threads=4,
+    track_stats=True,
+    log_dir="data/gepa_logs",  # supports resume/checkpoint across runs
+)
+optimized_matcher = optimizer.compile(
+    dspy.ChainOfThought(BlockMatch), trainset=labeled_blocks_train, valset=labeled_blocks_val
+)
+```
+
+Key implementation notes:
+
+- **Every GEPA reflection call goes through the budget guard** (`serf.dspy.budget`, Section 9.6) exactly like any other Gemini 2.5 Pro call -- GEPA calls are not exempt from the `$100` hard cap.
+- Use `auto="light"` by default (a small, bounded number of candidate evaluations); only raise to `"medium"`/`"heavy"` if the budget ledger has clear headroom after primary ER validation runs.
+- The `trainset`/`valset` for GEPA should come from the labeled validation data generated per Section 9.6 (Gemini 2.5 Pro, capped at < 2,000 calls), not from unlabeled production data.
+- GEPA is DSPy's current recommended reflective optimizer for complex, feedback-rich tasks (superseding MIPROv2 for this use case), so it is the default choice for optimizing `BlockMatch`, `EntityMerge`, and `EdgeResolve` signatures.
+
+Secondary optimizers, used only if GEPA does not fit a specific need:
+
+- **`BootstrapFewShot`**: Auto-select best few-shot examples from labeled training data when reflection-based instruction rewriting is unnecessary.
+- **`MIPROv2`**: Joint instruction + few-shot optimization; a fallback if GEPA's reflection budget must be avoided entirely.
+- **`BootstrapFinetune`**: Use expensive model (Gemini 2.5 Pro) traces to fine-tune the cheaper model (Gemini 2.0 Flash) for production deployment, as a later-stage optimization beyond the initial build.
+- **Metric function**: All optimizers share the same F1-against-ground-truth metric; GEPA additionally requires the textual feedback channel described above.
 
 ---
 
@@ -884,21 +929,21 @@ After 3 rounds with merge factor 0.8 per round:
 - Comparison pairs shrink to 0.8^6 = 26.2% of original
 - Each round is cheaper than the last due to smaller dataset
 
-### 9.6 Overnight Build Budget Constraint
+### 9.6 Gemini API Budget Constraint
 
-**Hard budget: $100 total Gemini API spend for the overnight build.**
+**Hard budget: $100 total Gemini API spend for this implementation effort.**
 
 A `GEMINI_API_KEY` environment variable will be provided. The agent must stay within budget by following these rules:
 
 1. **Use Gemini 2.0 Flash exclusively** for all ER pipeline operations (blocking analysis, matching, merging, edge resolution). At $0.10/$0.40 per 1M input/output tokens, this allows ~160M+ input tokens -- more than enough for iterative ER across all three benchmark datasets.
 
-2. **Gemini 2.5 Pro is allowed ONLY for generating validation data** -- high-quality labeled match/non-match pairs and few-shot examples that will be used to evaluate and optimize the pipeline. Limit Gemini 2.5 Pro to **fewer than 2,000 API calls** total. At ~2,500 tokens per call with $1.25/$10.00 per 1M input/output tokens, 2K calls costs roughly $50 -- leaving ample headroom for Flash usage.
+2. **Gemini 2.5 Pro is allowed ONLY for two bounded use cases**: (a) generating validation data -- high-quality labeled match/non-match pairs and few-shot examples used to evaluate and optimize the pipeline, and (b) serving as the `reflection_lm` for `dspy.GEPA` optimization (Section 7.7). Limit Gemini 2.5 Pro to **fewer than 2,000 API calls** total across both use cases combined. At ~2,500 tokens per call with $1.25/$10.00 per 1M input/output tokens, 2K calls costs roughly $50 -- leaving ample headroom for Flash usage.
 
-3. **Never use Claude, GPT-4o, or any non-Gemini model** for pipeline operations during the build. The DSPy signatures and pipeline code should be model-agnostic, but all actual LLM calls during this build session must go through Gemini.
+3. **Never use Claude, GPT-4o, or any non-Gemini model** for pipeline operations. The DSPy signatures and pipeline code should be model-agnostic, but all actual LLM calls must go through Gemini.
 
-4. **Track token usage** by logging input/output token counts from API responses. If cumulative spend approaches $80, stop making Gemini 2.5 Pro calls and finish remaining work with Flash only.
+4. **Track token usage** by logging input/output token counts from API responses. If cumulative spend approaches $80, stop making Gemini 2.5 Pro calls (including GEPA reflection) and finish remaining work with Flash only.
 
-5. **Hard stop at $100**: Before every Gemini API call, estimate worst-case incremental cost from token limits and reject the call if it would push cumulative spend above $100. Persist cumulative usage to a local budget ledger so restarts cannot bypass limits.
+5. **Hard stop at $100**: Before every Gemini API call, estimate worst-case incremental cost from token limits and reject the call if it would push cumulative spend above $100. Persist cumulative usage to a local budget ledger so restarts cannot bypass limits. `dspy.GEPA`'s `reflection_lm` calls must be wrapped so they pass through this same ledger.
 
 | Use Case                       | Model            | Max Calls                 | Est. Cost  |
 | ------------------------------ | ---------------- | ------------------------- | ---------- |
@@ -910,9 +955,9 @@ A `GEMINI_API_KEY` environment variable will be provided. The agent must stay wi
 
 ## 10. Implementation Plan
 
-The following ordered steps should be executed by the Cursor Agent. Each step produces working, tested code.
+The following ordered steps should be executed by a frontier coding agent exercising engineering judgment. Steps are sequenced by technical dependency, not calendar time; each step produces working, tested code, and the agent should use discretion on implementation details not spelled out explicitly here.
 
-### Step 1: Project Infrastructure (30 min)
+### Step 1: Project Infrastructure
 
 1. Convert `pyproject.toml` from Poetry to uv (PEP 621 format). This must be completed before any major feature build work.
 2. Update `.pre-commit-config.yaml` to use Ruff instead of black/isort/flake8
@@ -920,13 +965,13 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 4. Create all module directories with `__init__.py` files
 5. Update `CLAUDE.md` to reflect new tooling (uv, Ruff)
 
-### Step 1.5: Research Deliverable and Design Freeze (45 min)
+### Step 1.5: Research Deliverable and Design Freeze
 
 1. Update this plan with implementation constraints and benchmark-first priorities.
 2. Confirm architecture choices (no BAMLAdapter runtime, PySpark 4.1+, Gemini budget guard).
 3. Pause for user instruction before beginning complete implementation.
 
-### Step 2: Core Type System (1.5 hr)
+### Step 2: Core Type System
 
 1. Rewrite `src/serf/dspy/types.py` from scratch with fresh, DSPy-appropriate Pydantic types -- do NOT copy Abzu's BAML-generated types. Build domain-agnostic `Entity` base class with ER metadata (id, uuid, source_ids, source_uuids, match_skip, match_skip_reason, match_skip_history) + example `Company`, `Person` specializations
 2. Add `EntityBlock`, `MatchDecision`, `BlockResolution` types
@@ -936,7 +981,7 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 6. Add benchmark-ready schema mappings for DBLP-ACM, Walmart-Amazon, and DBLP-Scholar entity fields.
 7. Write exhaustive unit tests: `tests/test_types.py`, `tests/test_type_generator.py`
 
-### Step 3: DSPy Signatures and LM Configuration (1 hr)
+### Step 3: DSPy Signatures and LM Configuration
 
 1. Create `src/serf/dspy/signatures.py` with DSPy signatures:
    - `BlockMatch` -- match entire blocks
@@ -946,7 +991,7 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 2. Configure DSPy with Gemini model routing and typed output validation (no `BAMLAdapter`).
 3. Write unit tests: `tests/test_signatures.py`
 
-### Step 4: Embeddings and Blocking (1.5 hr)
+### Step 4: Embeddings and Blocking
 
 1. Create `src/serf/block/embeddings.py` -- `EntityEmbedder` class (generalized from Abzu's `CompanyEmbedder`)
 2. Create `src/serf/block/faiss_blocker.py` -- `FAISSBlocker` class (ported from Abzu)
@@ -954,31 +999,31 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 4. Create `src/serf/block/pipeline.py` -- PySpark blocking pipeline with subprocess isolation, auto-scaling target block size by iteration, 7-section analysis report, UDTF-based block splitting
 5. Write unit tests: `tests/test_embeddings.py`, `tests/test_faiss_blocker.py`, `tests/test_normalize.py`
 
-### Step 5: UUID Mapping and Matching (2 hr)
+### Step 5: UUID Mapping and Matching
 
 1. Create `src/serf/match/uuid_mapper.py` -- `UUIDMapper` class (ported from Abzu)
 2. Create `src/serf/match/matcher.py` -- `EntityMatcher` with async block processing, semaphore rate limiting
 3. Create `src/serf/match/few_shot.py` -- Few-shot example generation
 4. Write unit tests: `tests/test_uuid_mapper.py`, `tests/test_matcher.py`
 
-### Step 6: Evaluation and Metrics (1 hr)
+### Step 6: Evaluation and Metrics
 
 1. Create `src/serf/eval/metrics.py` -- Precision, recall, F1, pair completeness, reduction ratio
 2. Create `src/serf/eval/benchmarks.py` -- Benchmark dataset download/loading/evaluation
 3. Write unit tests: `tests/test_metrics.py`, `tests/test_benchmarks.py`
 
-### Step 7: Dataset Analysis (1 hr)
+### Step 7: Dataset Analysis
 
 1. Create `src/serf/analyze/profiler.py` -- Dataset profiling with PySpark
 2. Create `src/serf/analyze/field_detection.py` -- Auto-detect field types using regex patterns and statistical analysis
 3. Write unit tests: `tests/test_profiler.py`, `tests/test_field_detection.py`
 
-### Step 8: Edge Resolution (45 min)
+### Step 8: Edge Resolution
 
 1. Create `src/serf/edge/resolver.py` -- Async edge resolution (ported from Abzu)
 2. Write unit tests: `tests/test_edge_resolver.py`
 
-### Step 9: Spark Integration (1.5 hr)
+### Step 9: Spark Integration
 
 1. Create `src/serf/spark/schemas.py` -- SparkDantic bridge: SparkModel subclasses of Pydantic types, `get_entity_spark_schema()` with IntegerType-to-LongType conversion, `normalize_entity_dataframe()` for consistent field order/types, `validate_block_schema()` for early schema drift detection, `get_matches_schema()` for reading matches JSONL, `build_udtf_return_type()` for dynamic UDTF return types
 2. Create `src/serf/spark/utils.py` -- `create_split_large_blocks_udtf()` factory for block splitting, `select_most_common_property()` window function utility
@@ -986,13 +1031,14 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 4. Create `src/serf/spark/graph.py` -- GraphFrames connected components + manual fallback
 5. Write unit tests: `tests/test_schemas.py`, `tests/test_iceberg.py`, `tests/test_graph.py`
 
-### Step 10: DSPy Agents (1 hr)
+### Step 10: DSPy Agents and Reflective Optimization
 
 1. Create `src/serf/dspy/agents.py` -- `ERAgent` with ReAct pattern, tool definitions
 2. Implement convergence checking, dynamic parameter adjustment
-3. Write unit tests: `tests/test_agents.py`
+3. Create `src/serf/dspy/optimize.py` -- `dspy.GEPA`-based reflective optimization for `BlockMatch`/`EntityMerge`/`EdgeResolve` signatures, with Gemini 2.5 Pro as `reflection_lm` and Gemini 2.0 Flash as the task LM (Section 7.7). All reflection calls route through `serf.dspy.budget`.
+4. Write unit tests: `tests/test_agents.py`, `tests/test_optimize.py` (mock the reflection LM; do not make real API calls in unit tests)
 
-### Step 11: CLI (1 hr)
+### Step 11: CLI
 
 1. Extend `src/serf/cli/main.py` with commands:
    - `serf analyze` -- Dataset profiling
@@ -1003,9 +1049,10 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
    - `serf edges` -- Edge resolution
    - `serf benchmark` -- Run against benchmarks
    - `serf download` -- Download benchmark datasets
+   - `serf optimize` -- Run GEPA-based reflective optimization on ER signatures against labeled validation data
 2. Write unit tests: `tests/test_cli.py`
 
-### Step 12: Integration Testing (1.5 hr)
+### Step 12: Integration Testing
 
 1. Create `tests/test_pipeline_integration.py` -- End-to-end pipeline test with small synthetic dataset
 2. Test iterative convergence (3 rounds)
@@ -1015,7 +1062,7 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
    - **Walmart-Amazon** (hard, products) -- Cross-schema product matching and robustness check
    - **DBLP-Scholar** (medium, bibliographic) -- Scale asymmetry (2.6K vs 64K) and fuzzy matching
 
-### Step 13: Documentation and Cleanup (30 min)
+### Step 13: Documentation and Cleanup
 
 1. Update `README.md` with new CLI commands, API examples, benchmark results
 2. Update `config.yml` with all new configuration keys
@@ -1036,10 +1083,11 @@ Every module gets exhaustive unit tests. Tests should:
 - Include type hints on all functions
 - Use fixtures for setup/teardown
 - Use `pytest-asyncio` for async tests
-- Mock LLM calls (don't make real API calls in unit tests)
+- Mock LLM calls (don't make real API calls in unit tests), including `dspy.GEPA`'s `reflection_lm` calls
 - Test edge cases: empty blocks, single-entity blocks, oversized blocks
 - Test UUID mapping roundtrip consistency
 - Test metric calculations with known inputs/outputs
+- Test the budget guard rejects calls (including GEPA reflection calls) that would exceed the ledgered cap
 
 ### 11.2 Integration Tests
 
@@ -1103,4 +1151,4 @@ Create synthetic test datasets in `tests/fixtures/`:
 
 ---
 
-_This plan was prepared for Cursor Agent grind mode execution. Expected build time: 8-12 hours. The plan covers ~25 new source files, ~20 test files, and significant updates to configuration and documentation. All code should follow the conventions documented in CLAUDE.md and the PySpark Style Guide at assets/PYSPARK.md._
+_This plan is prepared for execution by a frontier coding agent exercising engineering judgment, not a time-boxed "grind mode" session. The plan covers ~26 new source files (including `dspy/optimize.py` for GEPA-based reflective optimization), ~21 test files, and significant updates to configuration and documentation. All code should follow the conventions documented in CLAUDE.md and the PySpark Style Guide at assets/PYSPARK.md._

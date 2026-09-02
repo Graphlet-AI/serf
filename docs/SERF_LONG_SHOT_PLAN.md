@@ -30,15 +30,16 @@ This plan is aligned to the current implementation directives:
 1. Migrate from Poetry to `uv` first, before complete system implementation.
 2. Exclude BAML runtime integration and `BAMLAdapter` for now.
 3. Enforce a hard Gemini spend cap of `$100` for the build.
-4. Use Gemini 2.0 Flash for ER pipeline operations; allow limited Gemini 2.5 Pro for validation data and GEPA/reflection workflows.
+4. Use Gemini 3.5 Flash-Lite for ER pipeline operations; allow limited Gemini 2.5 Pro for validation data and GEPA/reflection workflows.
 5. Complete research and document updates first, then pause for instruction before full implementation.
 6. Start with entities represented by all three key benchmark tracks: DBLP-ACM, Walmart-Amazon, DBLP-Scholar.
 7. Pin PySpark to `4.1+`.
 8. Prioritize benchmark validation order: DBLP-ACM, then Walmart-Amazon, then DBLP-Scholar.
 9. Reference Abzu prompt semantics and semantic blocking code directly; defer name-based blocking.
 10. Remove calendar/time-boxed "grind mode" framing from the plan. Sequencing and scope are defined by technical dependency and complexity, reflecting execution by a more capable coding agent that needs less exhaustive prescriptive hand-holding.
-11. Adopt `dspy.GEPA` as the primary reflective prompt optimizer, using Gemini 2.5 Pro as the `reflection_lm` and Gemini 2.0 Flash as the task LM being optimized -- this directly implements the "reflection by DSPy GEPA" validation/optimization use case for Gemini 2.5 Pro within the budget guard.
+11. Adopt `dspy.GEPA` as the primary reflective prompt optimizer, using Gemini 2.5 Pro as the `reflection_lm` and Gemini 3.5 Flash-Lite as the task LM being optimized -- this directly implements the "reflection by DSPy GEPA" validation/optimization use case for Gemini 2.5 Pro within the budget guard.
 12. Adopt `dspy.Flex` (Section 7.8) as a secondary, post-baseline enhancement that lets `dspy.GEPA` optimize the *code structure* of match/merge signatures, not just their prompts -- enabling automatic discovery of cost-saving cascades (Python-only resolution for easy cases, LM calls reserved for ambiguous ones). Treat it as experimental and optional given its Deno sandbox dependency; implement it only after the fixed-structure GEPA-optimized baseline (item 11) is working.
+13. Move the ER pipeline task LM from the now-deprecated Gemini 2.0 Flash (shut down June 1, 2026) to **Gemini 3.5 Flash-Lite** -- the current generation's most cost-efficient GA model ($0.30/$2.50 per 1M input/output tokens), chosen over pricier current-generation options (Gemini 3.6 Flash, Gemini 3.5 Flash) to preserve the same cost-efficiency posture as the original plan. Gemini 2.5 Pro remains the `reflection_lm`/validation model: it is not deprecated and is meaningfully cheaper than the newer Gemini 3.1 Pro Preview, so switching it would only add cost without a corresponding need addressed by this change.
 
 ## 1. Introduction and Motivation
 
@@ -61,7 +62,7 @@ Senzing's Jeff Jonas has argued that LLMs are [too slow, too expensive, and too 
 | Concern           | SERF's Counter                                                                                  |
 | ----------------- | ----------------------------------------------------------------------------------------------- |
 | Too slow          | Semantic blocking reduces LLM calls to O(blocks); PySpark parallelizes across clusters          |
-| Too expensive     | Gemini 2.0 Flash at $0.10/1M tokens; block-level matching reduces calls 50x or more vs pairwise |
+| Too expensive     | Gemini 3.5 Flash-Lite at $0.30/1M input tokens; block-level matching reduces calls 50x or more vs pairwise |
 | Hallucinations    | DSPy structured outputs + Pydantic typing + multi-round convergence                             |
 | Not deterministic | Temperature=0, multiple convergence rounds, confidence scoring                                  |
 | Not explainable   | Chain-of-thought reasoning, match rationale in structured output fields                         |
@@ -212,7 +213,7 @@ During implementation, fetch and reference the Abzu repository directly and map 
 | **Embeddings**         | **Qwen3-Embedding** via sentence-transformers                                                   | Top MTEB leaderboard, multilingual support                              |
 | **Vector Search**      | **FAISS IndexIVFFlat**                                                                          | Fast approximate nearest neighbor for semantic blocking                 |
 | **Graph Processing**   | **GraphFrames**                                                                                 | Connected components for transitive closure of match decisions          |
-| **LLM Models**         | **Gemini 2.0 Flash** (all ER pipeline), **Gemini 2.5 Pro** (limited validation/GEPA reflection) | Flash for cost efficiency; Pro only for constrained quality workflows   |
+| **LLM Models**         | **Gemini 3.5 Flash-Lite** (all ER pipeline), **Gemini 2.5 Pro** (limited validation/GEPA reflection) | Flash-Lite for cost efficiency (2.0 Flash is deprecated); Pro only for constrained quality workflows   |
 | **CLI**                | **Click**                                                                                       | Existing SERF pattern, `show_default=True`                              |
 | **Type Checking**      | **zuban** (mypy-compatible)                                                                     | Existing SERF pattern                                                   |
 | **Linting/Formatting** | **Ruff** (replacing black/isort/flake8)                                                         | Single tool, 10-100x faster                                             |
@@ -586,7 +587,7 @@ blocker = SemanticBlocker(model_name="Qwen/Qwen3-Embedding-0.6B", target_block_s
 blocks = blocker.transform(companies)
 
 # Match and merge
-matcher = EntityMatcher(model="gemini/gemini-2.0-flash", batch_size=10)
+matcher = EntityMatcher(model="gemini/gemini-3.5-flash-lite", batch_size=10)
 resolved = matcher.resolve(blocks)
 
 # Evaluate
@@ -607,7 +608,7 @@ from serf.dspy.signatures import BlockMatch, EntityMerge
 from serf.dspy.agents import ERAgent
 
 # Configure DSPy
-lm = dspy.LM("gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
+lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
 dspy.configure(lm=lm)
 
 # Use individual signatures
@@ -758,7 +759,7 @@ Per-iteration metrics tracked (from Abzu's `IterationMetrics` and `er_eval.py`):
 
 ### 7.7 DSPy Optimization
 
-**`dspy.GEPA` is the primary optimizer for SERF's ER signatures.** GEPA (Genetic-Pareto, Agrawal et al. 2025) is a reflective, evolutionary prompt optimizer: it runs the task program with a student LM, scores each rollout with a metric that returns both a score and natural-language feedback (`dspy.Prediction(score, feedback)`), then uses a separate, stronger `reflection_lm` to read the feedback and propose improved instructions. This maps directly onto SERF's model policy: **Gemini 2.0 Flash is the student/task LM being optimized, and Gemini 2.5 Pro is the `reflection_lm`.**
+**`dspy.GEPA` is the primary optimizer for SERF's ER signatures.** GEPA (Genetic-Pareto, Agrawal et al. 2025) is a reflective, evolutionary prompt optimizer: it runs the task program with a student LM, scores each rollout with a metric that returns both a score and natural-language feedback (`dspy.Prediction(score, feedback)`), then uses a separate, stronger `reflection_lm` to read the feedback and propose improved instructions. This maps directly onto SERF's model policy: **Gemini 3.5 Flash-Lite is the student/task LM being optimized, and Gemini 2.5 Pro is the `reflection_lm`.**
 
 ```python
 import dspy
@@ -800,7 +801,7 @@ Secondary optimizers, used only if GEPA does not fit a specific need:
 
 - **`BootstrapFewShot`**: Auto-select best few-shot examples from labeled training data when reflection-based instruction rewriting is unnecessary.
 - **`MIPROv2`**: Joint instruction + few-shot optimization; a fallback if GEPA's reflection budget must be avoided entirely.
-- **`BootstrapFinetune`**: Use expensive model (Gemini 2.5 Pro) traces to fine-tune the cheaper model (Gemini 2.0 Flash) for production deployment, as a later-stage optimization beyond the initial build.
+- **`BootstrapFinetune`**: Use expensive model (Gemini 2.5 Pro) traces to fine-tune the cheaper model (Gemini 3.5 Flash-Lite) for production deployment, as a later-stage optimization beyond the initial build.
 - **Metric function**: All optimizers share the same F1-against-ground-truth metric; GEPA additionally requires the textual feedback channel described above.
 
 ### 7.8 `dspy.Flex` for Discoverable Match/Merge Decomposition (Secondary, Post-Baseline)
@@ -935,24 +936,24 @@ Blocking is essential. Without it, LLM-based ER is economically impossible beyon
 
 - 500 blocks x 2,500 tokens avg = 1.25M tokens total
 
-| Model            | Input Cost | Output Cost | Total (10K records) |
-| ---------------- | ---------- | ----------- | ------------------- |
-| Gemini 2.0 Flash | $0.10/1M   | $0.40/1M    | **~$0.63**          |
-| Gemini 2.5 Pro   | $1.25/1M   | $10.00/1M   | **~$6.56**          |
-| Claude Sonnet 4  | $3.00/1M   | $15.00/1M   | **~$11.25**         |
-| Claude Opus 4    | $15.00/1M  | $75.00/1M   | **~$56.25**         |
-| GPT-4o           | $2.50/1M   | $10.00/1M   | **~$8.13**          |
+| Model                 | Input Cost | Output Cost | Total (10K records) |
+| --------------------- | ---------- | ----------- | -------------------- |
+| Gemini 3.5 Flash-Lite | $0.30/1M   | $2.50/1M    | **~$0.93**          |
+| Gemini 2.5 Pro        | $1.25/1M   | $10.00/1M   | **~$6.56**          |
+| Claude Sonnet 4       | $3.00/1M   | $15.00/1M   | **~$11.25**         |
+| Claude Opus 4         | $15.00/1M  | $75.00/1M   | **~$56.25**         |
+| GPT-4o                | $2.50/1M   | $10.00/1M   | **~$8.13**          |
 
-The non-Gemini rows are comparative market context only; this build should use Gemini models exclusively per Section 9.6.
+The non-Gemini rows are comparative market context only; this build should use Gemini models exclusively per Section 9.6. Gemini 2.0 Flash (previously the pipeline model) is deprecated and was shut down June 1, 2026; Gemini 3.5 Flash-Lite is Google's current-generation, cost-efficient GA replacement (this estimate assumes an 80%/20% input/output token split, consistent with an extraction-style prompt: large record context in, compact structured output out).
 
-**Key insight**: Block-level matching reduces costs by 20-40x compared to pairwise LLM matching. At $0.63 per 10K records with Gemini Flash, SERF can process 1M records for ~$63.
+**Key insight**: Block-level matching reduces costs by 20-40x compared to pairwise LLM matching. At ~$0.93 per 10K records with Gemini Flash-Lite, SERF can process 1M records for ~$93 -- still comfortably within a $100 budget for the Flash-tier share of the workload alone (see Section 9.6 for how this is split against the overall cap).
 
 ### 9.3 Recommended Cascade Architecture
 
 For production at scale, implement a Gemini-only cost-optimization cascade:
 
 1. **Embedding similarity filter** (free): Skip blocks where all pairwise embedding similarities < threshold
-2. **Gemini 2.0 Flash** ($0.10/$0.40 per 1M input/output tokens): Process all ER pipeline blocks
+2. **Gemini 3.5 Flash-Lite** ($0.30/$2.50 per 1M input/output tokens): Process all ER pipeline blocks
 3. **Gemini 2.5 Pro** ($1.25/$10.00 per 1M input/output tokens): Reserved for limited validation-data generation and GEPA reflection workflows
 
 This policy keeps operational ER on Flash and reserves Pro for bounded quality loops while staying under budget.
@@ -980,7 +981,7 @@ After 3 rounds with merge factor 0.8 per round:
 
 A `GEMINI_API_KEY` environment variable will be provided. The agent must stay within budget by following these rules:
 
-1. **Use Gemini 2.0 Flash exclusively** for all ER pipeline operations (blocking analysis, matching, merging, edge resolution). At $0.10/$0.40 per 1M input/output tokens, this allows ~160M+ input tokens -- more than enough for iterative ER across all three benchmark datasets.
+1. **Use Gemini 3.5 Flash-Lite exclusively** for all ER pipeline operations (blocking analysis, matching, merging, edge resolution) -- Gemini 2.0 Flash, the model originally specified here, is deprecated and was shut down June 1, 2026. At $0.30/$2.50 per 1M input/output tokens and ~$0.93 per 10K records (Section 9.2), the ~$10-30 Flash-tier allocation below still comfortably covers hundreds of thousands of records across multiple convergence rounds for all three benchmark datasets.
 
 2. **Gemini 2.5 Pro is allowed ONLY for two bounded use cases**: (a) generating validation data -- high-quality labeled match/non-match pairs and few-shot examples used to evaluate and optimize the pipeline, and (b) serving as the `reflection_lm` for `dspy.GEPA` optimization (Section 7.7). Limit Gemini 2.5 Pro to **fewer than 2,000 API calls** total across both use cases combined. At ~2,500 tokens per call with $1.25/$10.00 per 1M input/output tokens, 2K calls costs roughly $50 -- leaving ample headroom for Flash usage.
 
@@ -990,11 +991,11 @@ A `GEMINI_API_KEY` environment variable will be provided. The agent must stay wi
 
 5. **Hard stop at $100**: Before every Gemini API call, estimate worst-case incremental cost from token limits and reject the call if it would push cumulative spend above $100. Persist cumulative usage to a local budget ledger so restarts cannot bypass limits. `dspy.GEPA`'s `reflection_lm` calls must be wrapped so they pass through this same ledger.
 
-| Use Case                       | Model            | Max Calls                 | Est. Cost  |
-| ------------------------------ | ---------------- | ------------------------- | ---------- |
-| ER pipeline (match/merge/edge) | Gemini 2.0 Flash | Unlimited (within budget) | ~$10-30    |
-| Validation data generation     | Gemini 2.5 Pro   | < 2,000                   | ~$50       |
-| **Total**                      |                  |                           | **< $100** |
+| Use Case                       | Model                 | Max Calls                 | Est. Cost  |
+| ------------------------------ | --------------------- | ------------------------- | ---------- |
+| ER pipeline (match/merge/edge) | Gemini 3.5 Flash-Lite | Unlimited (within budget) | ~$10-30    |
+| Validation data generation     | Gemini 2.5 Pro        | < 2,000                   | ~$50       |
+| **Total**                      |                       |                           | **< $100** |
 
 ---
 
@@ -1080,7 +1081,7 @@ The following ordered steps should be executed by a frontier coding agent exerci
 
 1. Create `src/serf/dspy/agents.py` -- `ERAgent` with ReAct pattern, tool definitions
 2. Implement convergence checking, dynamic parameter adjustment
-3. Create `src/serf/dspy/optimize.py` -- `dspy.GEPA`-based reflective optimization for `BlockMatch`/`EntityMerge`/`EdgeResolve` signatures, with Gemini 2.5 Pro as `reflection_lm` and Gemini 2.0 Flash as the task LM (Section 7.7). All reflection calls route through `serf.dspy.budget`.
+3. Create `src/serf/dspy/optimize.py` -- `dspy.GEPA`-based reflective optimization for `BlockMatch`/`EntityMerge`/`EdgeResolve` signatures, with Gemini 2.5 Pro as `reflection_lm` and Gemini 3.5 Flash-Lite as the task LM (Section 7.7). All reflection calls route through `serf.dspy.budget`.
 4. Write unit tests: `tests/test_agents.py`, `tests/test_optimize.py` (mock the reflection LM; do not make real API calls in unit tests)
 
 ### Step 11: CLI

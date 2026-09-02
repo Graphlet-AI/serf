@@ -40,6 +40,7 @@ This plan is aligned to the current implementation directives:
 11. Adopt `dspy.GEPA` as the primary reflective prompt optimizer, using Gemini 2.5 Pro as the `reflection_lm` and Gemini 3.5 Flash-Lite as the task LM being optimized -- this directly implements the "reflection by DSPy GEPA" validation/optimization use case for Gemini 2.5 Pro within the budget guard.
 12. Adopt `dspy.Flex` (Section 7.8) as a secondary, post-baseline enhancement that lets `dspy.GEPA` optimize the *code structure* of match/merge signatures, not just their prompts -- enabling automatic discovery of cost-saving cascades (Python-only resolution for easy cases, LM calls reserved for ambiguous ones). Treat it as experimental and optional given its Deno sandbox dependency; implement it only after the fixed-structure GEPA-optimized baseline (item 11) is working.
 13. Move the ER pipeline task LM from the now-deprecated Gemini 2.0 Flash (shut down June 1, 2026) to **Gemini 3.5 Flash-Lite** -- the current generation's most cost-efficient GA model ($0.30/$2.50 per 1M input/output tokens), chosen over pricier current-generation options (Gemini 3.6 Flash, Gemini 3.5 Flash) to preserve the same cost-efficiency posture as the original plan. Gemini 2.5 Pro remains the `reflection_lm`/validation model: it is not deprecated and is meaningfully cheaper than the newer Gemini 3.1 Pro Preview, so switching it would only add cost without a corresponding need addressed by this change.
+14. In addition to the Gemini models above, also evaluate **`gpt-oss-120b-maas`** (Section 7.9) -- OpenAI's open-weight 120B model served as a Model-as-a-Service on Vertex AI -- as a secondary, benchmark-comparison-only model. It is not part of the production ER pipeline and is tracked under its own small, separate budget ledger, not the $100 Gemini cap in Section 9.6 (its Vertex AI billing path and auth are entirely separate from the Gemini Developer API).
 
 ## 1. Introduction and Motivation
 
@@ -213,7 +214,7 @@ During implementation, fetch and reference the Abzu repository directly and map 
 | **Embeddings**         | **Qwen3-Embedding** via sentence-transformers                                                   | Top MTEB leaderboard, multilingual support                              |
 | **Vector Search**      | **FAISS IndexIVFFlat**                                                                          | Fast approximate nearest neighbor for semantic blocking                 |
 | **Graph Processing**   | **GraphFrames**                                                                                 | Connected components for transitive closure of match decisions          |
-| **LLM Models**         | **Gemini 3.5 Flash-Lite** (all ER pipeline), **Gemini 2.5 Pro** (limited validation/GEPA reflection) | Flash-Lite for cost efficiency (2.0 Flash is deprecated); Pro only for constrained quality workflows   |
+| **LLM Models**         | **Gemini 3.5 Flash-Lite** (all ER pipeline), **Gemini 2.5 Pro** (limited validation/GEPA reflection), **`gpt-oss-120b-maas`** (secondary benchmark comparison, Section 7.9) | Flash-Lite for cost efficiency (2.0 Flash is deprecated); Pro only for constrained quality workflows; open-weight OSS model for cross-model comparison |
 | **CLI**                | **Click**                                                                                       | Existing SERF pattern, `show_default=True`                              |
 | **Type Checking**      | **zuban** (mypy-compatible)                                                                     | Existing SERF pattern                                                   |
 | **Linting/Formatting** | **Ruff** (replacing black/isort/flake8)                                                         | Single tool, 10-100x faster                                             |
@@ -240,6 +241,7 @@ dependencies = [
     "faiss-cpu>=1.9",
     "graphframes>=0.8",
     "pyiceberg>=0.8",
+    "google-auth>=2.0",  # ADC token flow for the gpt-oss-120b-maas Vertex AI endpoint (Section 7.9)
 ]
 
 [project.scripts]
@@ -556,6 +558,9 @@ serf edges --input data/resolved/ --output data/edges/
 # Load and evaluate against a benchmark dataset
 serf benchmark --dataset walmart-amazon --output data/benchmark_results/
 
+# Compare models on the same benchmark (Section 7.9); gpt-oss-120b-maas uses its own budget ledger
+serf benchmark --dataset walmart-amazon --model gpt-oss-120b-maas --output data/benchmark_results/
+
 # Download benchmark datasets
 serf download --dataset walmart-amazon --output data/datasets/
 
@@ -845,6 +850,47 @@ Constraints and sequencing:
 - **`max_predictor_calls`** (default `100`) guards against runaway generated code during optimization and inference; keep the default unless a specific signature needs a tighter bound.
 - Add `src/serf/dspy/flex_optimize.py` (optional module, built after `optimize.py`) and `tests/test_flex_optimize.py` (mocking the sandbox/interpreter and reflection LM) if/when this enhancement is pursued.
 
+### 7.9 Model Comparison: `gpt-oss-120b-maas` (Secondary Evaluation Model)
+
+**In addition to the Gemini models, benchmark `gpt-oss-120b-maas`** -- OpenAI's 120B open-weight model (Apache 2.0, near-parity with o4-mini on reasoning benchmarks per Google's model card), served as a fully managed Model-as-a-Service (MaaS) on Vertex AI -- against the same `BlockMatch`/`EntityMerge`/`EdgeResolve` signatures used for the Gemini pipeline. This is a **benchmark-comparison exercise, not a pipeline replacement**: Gemini 3.5 Flash-Lite remains the production task LM (Section 9.6); `gpt-oss-120b-maas` is run through `serf benchmark`/`serf eval` on the same labeled benchmark datasets (Section 8) to compare quality and cost against Gemini, giving SERF users evidence for choosing between a managed Gemini deployment and an OSS-model deployment.
+
+Why this model specifically:
+
+- **GA and text-native**: `gpt-oss-120b-maas` supports structured output and function calling (both required by DSPy's signature-driven approach), has a 131,072-token context window, and is generally available (launched August 13, 2025) -- not a preview model.
+- **Extremely cheap**: $0.09/$0.36 per 1M input/output tokens -- cheaper than even Gemini 3.5 Flash-Lite ($0.30/$2.50) -- so evaluating it does not meaningfully threaten the overall budget.
+- **Open-weight**: as an Apache 2.0 model, it is also self-hostable, which is relevant to SERF's goal of being a usable, non-vendor-locked framework; the Vertex AI MaaS endpoint is the fastest path to evaluate it without standing up dedicated GPU infrastructure.
+
+Access is fundamentally different from the Gemini Developer API and must be handled separately:
+
+- **Different auth**: `gpt-oss-120b-maas` is reached through Vertex AI's OpenAI-compatible endpoint, authenticated with a Google Cloud access token (Application Default Credentials), not `GEMINI_API_KEY`. A `GOOGLE_CLOUD_PROJECT` environment variable and `gcloud auth application-default login` (or an equivalent service-account credential) are required.
+- **Different billing path**: usage is billed through Vertex AI, not the Gemini Developer API, so it does **not** count against the `$100` Gemini budget cap in Section 9.6. Track it in a separate, small budget ledger (e.g. `< $5`, given the per-token cost above) using the same `serf.dspy.budget` module, generalized to support multiple named ledgers.
+- **Lower default quotas**: the managed endpoint is capped around 650 QPM and 790K input / 120K output tokens per minute (subject to change) -- comfortably enough for benchmark-sized evaluation runs, but far lower than Gemini's production quotas, so this model should not be considered for high-throughput pipeline use without a quota increase.
+
+```python
+import os
+
+import google.auth
+import google.auth.transport.requests
+import dspy
+
+PROJECT_ID = os.environ["GOOGLE_CLOUD_PROJECT"]
+REGION = "us-central1"
+
+creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+creds.refresh(google.auth.transport.requests.Request())
+
+gpt_oss_lm = dspy.LM(
+    "openai/gpt-oss-120b-maas",
+    api_base=f"https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}/locations/{REGION}/endpoints/openapi",
+    api_key=creds.token,  # short-lived; refresh before long-running jobs
+)
+
+with dspy.context(lm=gpt_oss_lm):
+    result = dspy.ChainOfThought(BlockMatch)(block_records=block_json, schema_info=schema_desc)
+```
+
+Add `google-auth` to `pyproject.toml` dependencies (Section 4.2) for the ADC token flow, and extend `serf benchmark`/`serf eval` (Section 6.1) with a `--model` option so the same benchmark run can target `gemini-3.5-flash-lite` or `gpt-oss-120b-maas` and produce directly comparable metrics.
+
 ---
 
 ## 8. Standard ER Benchmark Datasets
@@ -985,17 +1031,20 @@ A `GEMINI_API_KEY` environment variable will be provided. The agent must stay wi
 
 2. **Gemini 2.5 Pro is allowed ONLY for two bounded use cases**: (a) generating validation data -- high-quality labeled match/non-match pairs and few-shot examples used to evaluate and optimize the pipeline, and (b) serving as the `reflection_lm` for `dspy.GEPA` optimization (Section 7.7). Limit Gemini 2.5 Pro to **fewer than 2,000 API calls** total across both use cases combined. At ~2,500 tokens per call with $1.25/$10.00 per 1M input/output tokens, 2K calls costs roughly $50 -- leaving ample headroom for Flash usage.
 
-3. **Never use Claude, GPT-4o, or any non-Gemini model** for pipeline operations. The DSPy signatures and pipeline code should be model-agnostic, but all actual LLM calls must go through Gemini.
+3. **Never use Claude, GPT-4o, or any other non-Gemini model** for pipeline operations. The DSPy signatures and pipeline code should be model-agnostic, but all actual pipeline LLM calls must go through Gemini. The sole exception is **`gpt-oss-120b-maas`** (Section 7.9), which may be used strictly for benchmark comparison via `serf benchmark`/`serf eval`, tracked under its own separate budget ledger (rule 6 below) -- never as the production pipeline LM.
 
 4. **Track token usage** by logging input/output token counts from API responses. If cumulative spend approaches $80, stop making Gemini 2.5 Pro calls (including GEPA reflection) and finish remaining work with Flash only.
 
 5. **Hard stop at $100**: Before every Gemini API call, estimate worst-case incremental cost from token limits and reject the call if it would push cumulative spend above $100. Persist cumulative usage to a local budget ledger so restarts cannot bypass limits. `dspy.GEPA`'s `reflection_lm` calls must be wrapped so they pass through this same ledger.
 
+6. **`gpt-oss-120b-maas` is tracked under a separate, small budget ledger, not the $100 Gemini cap**: since it is billed through Vertex AI rather than the Gemini Developer API (Section 7.9), give it its own conservative cap -- e.g. `< $5` -- enforced by the same `serf.dspy.budget` module generalized to support multiple named ledgers (one per billing path). It is for benchmark comparison only and must never carry pipeline traffic.
+
 | Use Case                       | Model                 | Max Calls                 | Est. Cost  |
 | ------------------------------ | --------------------- | ------------------------- | ---------- |
 | ER pipeline (match/merge/edge) | Gemini 3.5 Flash-Lite | Unlimited (within budget) | ~$10-30    |
 | Validation data generation     | Gemini 2.5 Pro        | < 2,000                   | ~$50       |
-| **Total**                      |                       |                           | **< $100** |
+| **Gemini Total**               |                       |                           | **< $100** |
+| Benchmark comparison (separate ledger, Section 7.9) | `gpt-oss-120b-maas` | Benchmark-sized only | ~$1-5 |
 
 ---
 
@@ -1134,6 +1183,7 @@ Every module gets exhaustive unit tests. Tests should:
 - Test UUID mapping roundtrip consistency
 - Test metric calculations with known inputs/outputs
 - Test the budget guard rejects calls (including GEPA reflection calls) that would exceed the ledgered cap
+- Test the budget guard's multiple named ledgers (Gemini `$100` cap, `gpt-oss-120b-maas` separate small cap, Section 9.6) are tracked and enforced independently
 
 ### 11.2 Integration Tests
 
@@ -1144,6 +1194,7 @@ Every module gets exhaustive unit tests. Tests should:
   - **DBLP-Scholar** (medium) -- Verify handling of scale asymmetry (2.6K vs 64K records)
 - **Iceberg test**: Write/read/time-travel with local Iceberg catalog
 - **GraphFrames test**: Connected components on known graph structure
+- **Model comparison test**: Run the DBLP-ACM benchmark through `serf benchmark` with both `gemini-3.5-flash-lite` and `gpt-oss-120b-maas` (Section 7.9) and confirm both produce valid, comparable metrics output; mock the Vertex AI MaaS endpoint in CI so this does not require live GCP credentials
 
 ### 11.3 Test Data
 

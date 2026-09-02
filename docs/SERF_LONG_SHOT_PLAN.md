@@ -38,6 +38,7 @@ This plan is aligned to the current implementation directives:
 9. Reference Abzu prompt semantics and semantic blocking code directly; defer name-based blocking.
 10. Remove calendar/time-boxed "grind mode" framing from the plan. Sequencing and scope are defined by technical dependency and complexity, reflecting execution by a more capable coding agent that needs less exhaustive prescriptive hand-holding.
 11. Adopt `dspy.GEPA` as the primary reflective prompt optimizer, using Gemini 2.5 Pro as the `reflection_lm` and Gemini 2.0 Flash as the task LM being optimized -- this directly implements the "reflection by DSPy GEPA" validation/optimization use case for Gemini 2.5 Pro within the budget guard.
+12. Adopt `dspy.Flex` (Section 7.8) as a secondary, post-baseline enhancement that lets `dspy.GEPA` optimize the *code structure* of match/merge signatures, not just their prompts -- enabling automatic discovery of cost-saving cascades (Python-only resolution for easy cases, LM calls reserved for ambiguous ones). Treat it as experimental and optional given its Deno sandbox dependency; implement it only after the fixed-structure GEPA-optimized baseline (item 11) is working.
 
 ## 1. Introduction and Motivation
 
@@ -207,6 +208,7 @@ During implementation, fetch and reference the Abzu repository directly and map 
 | **Data Processing**    | **PySpark 4.1+**                                                                                | Python-first, Spark Connect, VARIANT type, Arrow UDFs                   |
 | **Table Format**       | **Apache Iceberg**                                                                              | ACID transactions, time travel for iteration tracking, schema evolution |
 | **LLM Framework**      | **DSPy 3.x** with native structured outputs                                                     | Programming-not-prompting, automatic optimization, Pydantic integration |
+| **Prompt Optimization** | **`dspy.GEPA`** (reflective optimizer); **`dspy.Flex`** (secondary, experimental)               | Reflection-driven instruction/code evolution against a feedback metric  |
 | **Embeddings**         | **Qwen3-Embedding** via sentence-transformers                                                   | Top MTEB leaderboard, multilingual support                              |
 | **Vector Search**      | **FAISS IndexIVFFlat**                                                                          | Fast approximate nearest neighbor for semantic blocking                 |
 | **Graph Processing**   | **GraphFrames**                                                                                 | Connected components for transitive closure of match decisions          |
@@ -229,7 +231,7 @@ requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
 authors = [{name = "Russell Jurney", email = "rjurney@graphlet.ai"}]
 dependencies = [
-    "dspy-ai>=3.0.3",
+    "dspy-ai>=3.3.0",
     "click>=8.1",
     "pyyaml>=6.0",
     "pyspark>=4.1,<5.0",
@@ -253,7 +255,7 @@ dev-dependencies = [
 ```
 
 Replace `poetry install` with `uv sync`, `poetry run` with `uv run`, `poetry add` with `uv add`.
-This migration is mandatory as Step 1 and must complete before full pipeline implementation.
+This migration is mandatory as Step 1 and must complete before full pipeline implementation. `dspy-ai>=3.3.0` is the minimum version supporting `dspy.Flex` (Section 7.8). Flex's default sandbox additionally requires **Deno** installed as a system binary (not a Python package) -- this is only needed if/when Flex is actually used (Section 7.8), not for the core `uv sync` install.
 
 ### 4.3 PySpark 4.1 Features to Leverage
 
@@ -801,6 +803,47 @@ Secondary optimizers, used only if GEPA does not fit a specific need:
 - **`BootstrapFinetune`**: Use expensive model (Gemini 2.5 Pro) traces to fine-tune the cheaper model (Gemini 2.0 Flash) for production deployment, as a later-stage optimization beyond the initial build.
 - **Metric function**: All optimizers share the same F1-against-ground-truth metric; GEPA additionally requires the textual feedback channel described above.
 
+### 7.8 `dspy.Flex` for Discoverable Match/Merge Decomposition (Secondary, Post-Baseline)
+
+**`dspy.Flex` (DSPy 3.3.0+, experimental)** is a module whose *implementation* -- not just its prompt -- is an optimizable parameter. Unlike `dspy.Predict`/`dspy.ChainOfThought`, which fix the program structure and let optimizers only tune instructions, `dspy.Flex` lets `dspy.GEPA` rewrite the module's entire source: splitting a task into multiple predictors, moving deterministic logic into plain Python, and choosing when an LM call is worth its cost at all. This is directly applicable to SERF's match/merge signatures, where the best split between cheap deterministic checks (exact ID/ticker match, string similarity thresholds, numeric field equality) and genuinely ambiguous cases needing LLM judgment is not obvious upfront -- exactly the problem `dspy.Flex` targets, and the pattern demonstrated in DSPy's own reference example is an entity-matching task structurally identical to SERF's `BlockMatch`.
+
+```python
+import dspy
+
+flex_matcher = dspy.Flex("block_records, schema_info -> resolution: BlockResolution")
+
+LLM_CALL_PENALTY = 0.05
+
+def er_flex_metric(gold, pred, trace=None, pred_name=None, pred_trace=None, program_trace=None):
+    """Score a Flex-generated match/merge program and penalize unnecessary LM calls."""
+    score = f1_against_ground_truth(gold, pred)
+    n_calls = len(program_trace) if program_trace else 0
+    adjusted = max(0.0, score - LLM_CALL_PENALTY * n_calls)
+    feedback = explain_match_merge_errors(gold, pred) + f" Used {n_calls} LM call(s) this block."
+    return dspy.Prediction(score=adjusted, feedback=feedback)
+
+optimized_flex_matcher = dspy.GEPA(
+    metric=er_flex_metric,
+    reflection_lm=reflection_lm,  # Gemini 2.5 Pro, same as Section 7.7
+    auto="light",
+).compile(flex_matcher, trainset=labeled_blocks_train, valset=labeled_blocks_val)
+
+print(optimized_flex_matcher.module_src)  # the discovered match/merge program, reviewable and diffable
+```
+
+Why this matters for SERF specifically:
+
+- **Automatic cost cascades**: Section 9.3's "Recommended Cascade Architecture" (embedding filter -> Flash -> Pro) is currently hand-designed. A `program_trace`-aware metric lets GEPA *discover* an analogous cascade per signature -- e.g. resolving unambiguous blocks entirely in Python (identical names, matching identifiers) and reserving Gemini calls for records that actually need semantic judgment -- rather than requiring us to hand-tune the cascade thresholds.
+- **Reviewable artifacts**: `module_src` is plain, readable Python (not a black-box weight update), consistent with the plan's emphasis on explainability (Section 1's "Not explainable" counter-argument).
+- **Same budget guard applies**: The sandboxed generated code only bridges back to the host for predictor/LM calls, so those calls still route through `serf.dspy.budget` and count against the `$100` cap and the Gemini 2.5 Pro call limit exactly like any other signature.
+
+Constraints and sequencing:
+
+- **Experimental and secondary**: `dspy.Flex` is explicitly marked experimental in DSPy 3.3.0; pin the DSPy version if depending on it, and treat it as a post-baseline enhancement, not a Step 1-13 blocker. Get `BlockMatch`/`EntityMerge`/`EdgeResolve` working and GEPA-optimized as fixed-structure `dspy.ChainOfThought` signatures first (Section 7.7); apply `dspy.Flex` afterward as an optional structural-optimization pass on top of that working baseline.
+- **New runtime dependency**: `dspy.Flex`'s default sandbox (`dspy.PythonInterpreter`) requires **Deno** installed on the execution host. This is an external, non-Python system binary, not a hard requirement for the core `uv sync` install -- document it as a one-time setup step only for whoever runs the `dspy.Flex` optimization pass.
+- **`max_predictor_calls`** (default `100`) guards against runaway generated code during optimization and inference; keep the default unless a specific signature needs a tighter bound.
+- Add `src/serf/dspy/flex_optimize.py` (optional module, built after `optimize.py`) and `tests/test_flex_optimize.py` (mocking the sandbox/interpreter and reflection LM) if/when this enhancement is pursued.
+
 ---
 
 ## 8. Standard ER Benchmark Datasets
@@ -913,6 +956,8 @@ For production at scale, implement a Gemini-only cost-optimization cascade:
 3. **Gemini 2.5 Pro** ($1.25/$10.00 per 1M input/output tokens): Reserved for limited validation-data generation and GEPA reflection workflows
 
 This policy keeps operational ER on Flash and reserves Pro for bounded quality loops while staying under budget.
+
+This cascade is hand-designed. Once the baseline pipeline is working, `dspy.Flex` (Section 7.8) is the planned path to letting `dspy.GEPA` discover an analogous, per-signature cascade automatically from a `program_trace`-penalized metric, rather than requiring manually tuned thresholds.
 
 ### 9.4 Latency and Parallelism
 
@@ -1151,4 +1196,4 @@ Create synthetic test datasets in `tests/fixtures/`:
 
 ---
 
-_This plan is prepared for execution by a frontier coding agent exercising engineering judgment, not a time-boxed "grind mode" session. The plan covers ~26 new source files (including `dspy/optimize.py` for GEPA-based reflective optimization), ~21 test files, and significant updates to configuration and documentation. All code should follow the conventions documented in CLAUDE.md and the PySpark Style Guide at assets/PYSPARK.md._
+_This plan is prepared for execution by a frontier coding agent exercising engineering judgment, not a time-boxed "grind mode" session. The plan covers ~26 new source files (including `dspy/optimize.py` for GEPA-based reflective optimization), ~21 test files, and significant updates to configuration and documentation, plus an optional post-baseline `dspy.Flex` enhancement (Section 7.8) not counted in that total. All code should follow the conventions documented in CLAUDE.md and the PySpark Style Guide at assets/PYSPARK.md._

@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with the SERF: Semantic Entity Resolution Framework in this repository. See @README.md for general project information.
 
+## Read These First
+
+SERF is a research project aimed at an academic paper. These documents are authoritative and take precedence over habit:
+
+- @docs/MISSION.md — what we are proving, what counts as state of the art, and the non-negotiables
+- @docs/CODING_STANDARDS.md — **the project coding standard: simple, minimal code that satisfies the specific requirement alone.** Read before writing any code.
+- @docs/ID_INVARIANTS.md — the identifier-conservation contract for match/merge. These semantics were proven in Abzu and must be reproduced exactly. The implementation may improve; the semantics may not change.
+- @docs/RESEARCH_LOOP.md — experiment registry (E1–E8), metrics, evaluation protocols, and reproducibility rules
+- @.cursor/scratchpad.md — the current plan, task breakdown, and status board
+
+Two rules that come from those documents and are easy to violate:
+
+1. **Never compare F1 across evaluation protocols.** Every reported number carries its protocol label.
+2. **Identifier conservation always holds.** Every integer identifier entering a block appears on the way out, either as an output record's identifier or in exactly one output record's merge list.
+
 ## Commands
 
 ### Development
@@ -13,7 +28,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Lint: `uv run ruff check src tests`
 - Format: `uv run ruff format src tests`
 - Lint + Fix: `uv run ruff check --fix src tests`
-- Type check: `uv run zuban check src tests`
 - Pre-commit: `pre-commit run --all-files`
 
 ### Docker Development (via Taskfile)
@@ -76,11 +90,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Tests: Use pytest for testing, include type hints in test functions, use fixtures for setup/teardown
 - Tests: Don't make a class to contain unit tests. Just write the tests in pytest style.
 - Type hints: Use Python 3.9 type hints for all function parameters and return types. Use `list`, `dict`, `tuple`, etc. instead of `List`, `Dict`, `Tuple` from the `typing` module. Use `Optional` from the `typing` module for optional parameters.
-- Type checking: Use zuban for type checking, run zuban before committing code. It is mypy compatible.
 - Logging: Use logging for error handling, avoid print statements. Always use `from serf.logs import get_logger` and `logger = get_logger(__name__)`
 - Documentation: Use Sphinx for documentation, include docstrings in all public functions/classes
 - Code style: Follow PEP 8 for Python code style, use Ruff for linting and formatting
-- Zuban: Use zuban for type checking, run zuban before committing code. Configure it in `pyproject.toml`.
 - Pre-commit: Use pre-commit for linting and formatting, configure it in `.pre-commit-config.yaml`
 - Git: Use git for version control, commit often with clear messages, use branches for new features/bug fixes. Always test new features in the CLI before you commit them.
 - uv: Use uv for dependency management and packaging, configure it in `pyproject.toml`
@@ -107,7 +119,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - PySpark - don't handle obscure edge cases, just implement the logic that I ask DIRECTLY.
 - PySpark - SparkSessions should be created BELOW any imports. Do not create SparkSessions at the top of the file.
 - Ruff - fix ruff lint and format errors without being asked and without my verification.
-- Zuban - fix mypy errors without being asked and without my verification.
 - Pre-commit - fix pre-commit errors without being asked and without my verification.
 - New Modules - create a folder for a new module without being asked and without my verification.
 - **init**.py - add these files to new module directories without being asked and without my verification.
@@ -177,7 +188,7 @@ In addition, when writing PySpark code:
 
 - Python 3.12 required
 - Core packages: dspy-ai, pyspark, sentence-transformers, faiss-cpu, click, pyyaml
-- Development tools: uv, ruff, zuban, pytest
+- Development tools: uv, ruff, pytest
 - See pyproject.toml for complete dependency list
 
 ### Environment Variables

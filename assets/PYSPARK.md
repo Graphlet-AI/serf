@@ -36,7 +36,7 @@ By contrast, `F.col('colA')` will always reference a column designated `colA` in
 
 In some contexts there may be access to columns from more than one dataframe, and there may be an overlap in names. A common example is in matching expressions like `df.join(df2, on=(df.key == df2.key), how='left')`. In such cases it is fine to reference columns by their dataframe directly. You can also disambiguate joins using dataframe aliases (see more in the **Joins** section in this guide).
 
-# Use struct.\* whenever possible. Avoid long lists of columns
+# Use struct. whenever possible. Avoid long lists of columns
 
 Long lists of columns for `pyspark.sql.DataFrame.select()` calls quickly become outdated and introduce bugs.
 
@@ -216,8 +216,7 @@ for c in cols:
     df = df.withColumn(c, F.from_unixtime(F.col(c) / 1000).cast(TimestampType()))
 ```
 
-In the example above, we can see that those columns are getting cast to Timestamp. The comment doesn't add much value. Moreover, a more verbose comment might still be unhelpful if it only
-provides information that already exists in the code. For example:
+In the example above, we can see that those columns are getting cast to Timestamp. The comment doesn't add much value. Moreover, a more verbose comment might still be unhelpful if it only provides information that already exists in the code. For example:
 
 ```python
 # bad
@@ -272,8 +271,7 @@ flights = aircraft.join(flights, 'aircraft_id', how='right')
 flights = flights.join(aircraft, 'aircraft_id', how='left')
 ```
 
-Avoid renaming all columns to avoid collisions. Instead, give an alias to the
-whole dataframe, and use that alias to select which columns you want in the end.
+Avoid renaming all columns to avoid collisions. Instead, give an alias to the whole dataframe, and use that alias to select which columns you want in the end.
 
 ```python
 # bad
@@ -410,7 +408,7 @@ df = df.select(F.sum('num').over(w).alias('sum'))
 df = df.agg(F.sum('num').alias('sum'))
 ```
 
-# Chaining of expressions
+## Chaining of Expressions
 
 Chaining expressions is a contentious topic, however, since this is an opinionated guide, we are opting to recommend some limits on the usage of chaining. See the conclusion of this section for a discussion of the rationale behind this recommendation.
 
@@ -449,8 +447,7 @@ df = (
 )
 ```
 
-Having each group of expressions isolated into its own logical code block improves legibility and makes it easier to find relevant logic.
-For example, a reader of the code below will probably jump to where they see dataframes being assigned `df = df...`.
+Having each group of expressions isolated into its own logical code block improves legibility and makes it easier to find relevant logic. For example, a reader of the code below will probably jump to where they see dataframes being assigned `df = df...`.
 
 ```python
 # bad
@@ -471,8 +468,7 @@ df = (
 df = df.join(another_table, 'some_field', how='inner')
 ```
 
-There are legitimate reasons to chain expressions together. These commonly represent atomic logic steps, and are acceptable. Apply a rule with a maximum of number chained expressions in the same block to keep the code readable.
-We recommend chains of no longer than 5 statements.
+There are legitimate reasons to chain expressions together. These commonly represent atomic logic steps, and are acceptable. Apply a rule with a maximum of number chained expressions in the same block to keep the code readable. We recommend chains of no longer than 5 statements.
 
 If you find you are making longer chains, or having trouble because of the size of your variables, consider extracting the logic into a separate function:
 
@@ -553,27 +549,14 @@ df = (
 
 # Other Considerations and Recommendations
 
-0. Do not split a single file's dataflow into multiple functions. Just implement a linear dataflow. If you have to repeat the same code of more than three lines more than two times, implement a function for that logic.
-1. Be wary of functions that grow too large. As a general rule, a file
-   should not be over 250 lines, and a function should not be over 70 lines.
-2. Try to keep your code in logical blocks. For example, if you have
-   multiple lines referencing the same things, try to keep them
-   together. Separating them reduces context and readability.
-3. Avoid `.otherwise(value)` as a general fallback. If you are mapping
-   a list of keys to a list of values and a number of unknown keys appear,
-   using `otherwise` will mask all of these into one value.
-4. Do not keep commented out code checked in the repository. This applies
-   to single line of codes, functions, classes or modules. Rely on git
-   and its capabilities of branching or looking at history instead.
-5. Try to be as explicit and descriptive as possible when naming functions
-   or variables. Strive to capture what the function is actually doing
-   as opposed to naming it based the objects used inside of it.
-6. Think twice about introducing new import aliases, unless there is a good
-   reason to do so. Some of the established ones are `types` and `functions` from PySpark `from pyspark.sql import types as T, functions as F`.
-7. Avoid using literal strings or integers in filtering conditions, new
-   values of columns etc. Instead, to capture their meaning, extract them into variables, constants,
-   dicts or classes as suitable. This makes the
-   code more readable and enforces consistency across the repository.
+1. Do not split a single file's dataflow into multiple functions. Just implement a linear dataflow. If you have to repeat the same code of more than three lines more than two times, implement a function for that logic.
+2. Be wary of functions that grow too large. As a general rule, a file should not be over 250 lines, and a function should not be over 70 lines.
+3. Try to keep your code in logical blocks. For example, if you have multiple lines referencing the same things, try to keep them together. Separating them reduces context and readability.
+4. Avoid `.otherwise(value)` as a general fallback. If you are mapping a list of keys to a list of values and a number of unknown keys appear, using `otherwise` will mask all of these into one value.
+5. Do not keep commented out code checked in the repository. This applies to single line of codes, functions, classes or modules. Rely on git and its capabilities of branching or looking at history instead.
+6. Try to be as explicit and descriptive as possible when naming functions or variables. Strive to capture what the function is actually doing as opposed to naming it based the objects used inside of it.
+7. Think twice about introducing new import aliases, unless there is a good reason to do so. Some of the established ones are `types` and `functions` from PySpark `from pyspark.sql import types as T, functions as F`.
+8. Avoid using literal strings or integers in filtering conditions, new values of columns etc. Instead, to capture their meaning, extract them into variables, constants, dicts or classes as suitable. This makes the code more readable and enforces consistency across the repository.
 
 WIP - To enforce consistent code style, each main repository should have [Pylint](https://www.pylint.org/) enabled, with the same configuration. We provide some PySpark specific checkers you can include in your Pylint to match the rules listed in this document. These checkers for Pylint still need some more energy put into them, but feel free to contribute and improve them.
 

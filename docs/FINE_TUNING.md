@@ -4,7 +4,7 @@ Lessons learned from the [Eridu](https://github.com/Graphlet-AI/eridu) project �
 
 ## Overview
 
-SERF uses pre-trained sentence-transformer embeddings (`intfloat/multilingual-e5-large`) for semantic blocking. While the pre-trained model works well out of the box, fine-tuning on domain-specific labeled pairs can significantly improve blocking quality — putting more true matches in the same blocks.
+SERF uses pre-trained sentence-transformer embeddings (`microsoft/harrier-oss-v1-0.6b`) for semantic blocking. While the pre-trained model works well out of the box, fine-tuning on domain-specific labeled pairs can significantly improve blocking quality — putting more true matches in the same blocks.
 
 Eridu demonstrates the full fine-tuning pipeline: from data preparation through contrastive learning to threshold optimization. The lessons below are directly applicable to SERF's blocking embeddings.
 
@@ -54,13 +54,13 @@ Eridu found that fine-tuned models struggle with **corporate suffixes**: "Inc.",
 
 Eridu's evolution of base models:
 
-| Model                                   | Parameters | Dimensions | Status                                           |
-| --------------------------------------- | ---------- | ---------- | ------------------------------------------------ |
-| `paraphrase-multilingual-MiniLM-L12-v2` | 118M       | 384        | Original — now obsolete                          |
-| `intfloat/multilingual-e5-large`        | 560M       | 1024       | Current — good ROC curve, semantic understanding |
-| `Qwen/Qwen3-Embedding-4B`               | 4B         | 2048       | Testing — MTEB #2, needs 16GB GPU                |
+| Model | Parameters | Dimensions | Status |
+| --- | --- | --- | --- |
+| `paraphrase-multilingual-MiniLM-L12-v2` | 118M | 384 | Original — now obsolete |
+| `intfloat/multilingual-e5-large` | 560M | 1024 | Current — good ROC curve, semantic understanding |
+| `Qwen/Qwen3-Embedding-4B` | 4B | 2048 | Testing — MTEB #2, needs 16GB GPU |
 
-**SERF's default** is `intfloat/multilingual-e5-large` — the same model Eridu found works best after fine-tuning. For SERF blocking, the pre-trained version is sufficient; fine-tuning is an optimization.
+**SERF's default** is `microsoft/harrier-oss-v1-0.6b` — the same model Eridu found works best after fine-tuning. For SERF blocking, the pre-trained version is sufficient; fine-tuning is an optimization.
 
 ### 5. Training Configuration That Works
 
@@ -150,7 +150,7 @@ trainer.train()
 model.save_pretrained("models/serf-blocking-finetuned")
 ```
 
-4. **Update SERF config** to use the fine-tuned model:
+1. **Update SERF config** to use the fine-tuned model:
 
 ```yaml
 models:
@@ -159,12 +159,12 @@ models:
 
 ### Data Sources for Training Pairs
 
-| Source                     | Type                   | Pairs  | Notes                 |
-| -------------------------- | ---------------------- | ------ | --------------------- |
-| **Open Sanctions**         | Person + company names | 2M+    | Multilingual, curated |
-| **CorpWatch subsidiaries** | Company names          | ~100K  | Corporate endings     |
-| **Your ER ground truth**   | Domain-specific        | Varies | Best for your domain  |
-| **DBLP-ACM / Abt-Buy**     | Benchmark pairs        | ~5K    | Good for testing      |
+| Source | Type | Pairs | Notes |
+| --- | --- | --- | --- |
+| **Open Sanctions** | Person + company names | 2M+ | Multilingual, curated, note - this dataset comes from having all pairs projected from blocks across pairs - thus it clusters so much it is hard to fit on. Need **StratifiedGroupKFold** |
+| **CorpWatch subsidiaries** | Company names | ~100K | Corporate endings |
+| **Your ER ground truth** | Domain-specific | Varies | Best for your domain |
+| **DBLP-ACM / Abt-Buy** | Benchmark pairs | ~5K | Good for testing |
 
 ### Expected Impact
 

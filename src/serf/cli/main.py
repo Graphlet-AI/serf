@@ -722,8 +722,15 @@ def download(dataset: str, output_path: str | None) -> None:
     "--dataset",
     "-d",
     type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
-    required=True,
+    required=False,
     help="Benchmark dataset name",
+)
+@click.option(
+    "--all",
+    "run_all",
+    is_flag=True,
+    default=False,
+    help="Run all benchmark datasets serially",
 )
 @click.option(
     "--output",
@@ -770,7 +777,8 @@ def download(dataset: str, output_path: str | None) -> None:
     help="Maximum ER iterations (re-block and re-match resolved entities)",
 )
 def benchmark(
-    dataset: str,
+    dataset: str | None,
+    run_all: bool,
     output_path: str | None,
     target_block_size: int,
     model: str | None,
@@ -781,9 +789,15 @@ def benchmark(
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
 
+    Specify --dataset for a single benchmark or --all to run all datasets serially.
     Uses embeddings for blocking and LLM for matching.
     Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
     """
+    if not dataset and not run_all:
+        raise click.UsageError("Specify --dataset or --all")
+    if dataset and run_all:
+        raise click.UsageError("Specify --dataset or --all, not both")
+
     from serf.eval.benchmarks import BenchmarkDataset
 
     setup_mlflow()
@@ -791,6 +805,20 @@ def benchmark(
     from serf.config import config as serf_config
 
     model = model or serf_config.get("models.llm")
+
+    if run_all:
+        _benchmark_all_datasets(
+            output_path=output_path or "data/benchmarks",
+            target_block_size=target_block_size,
+            model=model,
+            max_right_entities=max_right_entities or 5000,
+            limit=limit,
+            concurrency=concurrency,
+            max_iterations=max_iterations,
+        )
+        return
+
+    assert dataset is not None  # guaranteed by UsageError check above
     click.echo(f"Running benchmark: {dataset}")
     click.echo(f"  Model: {model}")
     start = time.time()
@@ -888,66 +916,67 @@ def benchmark(
         click.echo(f"\n  Results saved to {results_file}")
 
 
+@cli.command(name="benchmark-all", hidden=True)
+@click.pass_context
+def benchmark_all(ctx: click.Context) -> None:
+    """Deprecated: use `serf benchmark --all` instead."""
+    click.echo("Deprecated: use `serf benchmark --all` instead.")
+    ctx.invoke(benchmark, run_all=True, output_path="data/benchmarks")
+
+
 # ---------------------------------------------------------------------------
-# benchmark-all  (run all datasets)
+# Helpers
 # ---------------------------------------------------------------------------
 
 
-@cli.command(name="benchmark-all")
-@click.option(
-    "--output",
-    "-o",
-    "output_path",
-    type=click.Path(),
-    default="data/benchmarks",
-    help="Output directory for results",
-)
-@click.option(
-    "--model",
-    type=str,
-    default=None,
-    help="LLM model for matching (from config.yml models.llm)",
-)
-@click.option(
-    "--max-right-entities",
-    type=int,
-    default=5000,
-    help="Limit right table size for large datasets",
-)
-def benchmark_all(
+def _benchmark_all_datasets(
     output_path: str,
-    model: str | None,
+    target_block_size: int,
+    model: str,
     max_right_entities: int,
+    limit: int | None,
+    concurrency: int,
+    max_iterations: int,
 ) -> None:
-    """Run LLM-based benchmarks on all available datasets.
+    """Run benchmarks on all datasets serially and print a summary table.
 
-    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    Parameters
+    ----------
+    output_path : str
+        Output directory for results
+    target_block_size : int
+        Target entities per block
+    model : str
+        LLM model name
+    max_right_entities : int
+        Limit right table size for large datasets
+    limit : int | None
+        Max blocks to process per dataset
+    concurrency : int
+        Number of concurrent LLM requests
+    max_iterations : int
+        Maximum ER iterations per dataset
     """
-    from serf.config import config as serf_config
-    from serf.eval.benchmarks import BenchmarkDataset
-
-    setup_mlflow()
-
-    model = model or serf_config.get("models.llm")
-    datasets = BenchmarkDataset.available_datasets()
-    click.echo(f"Running benchmarks on {len(datasets)} datasets...")
+    click.echo(f"Running all {len(BENCHMARK_DATASETS)} benchmarks...")
     click.echo(f"  Model: {model}")
-    click.echo(f"  Max right entities: {max_right_entities}")
 
     results: dict[str, dict[str, float]] = {}
-    for name in datasets:
+    for name in BENCHMARK_DATASETS:
         click.echo(f"\n{'=' * 60}")
         ctx = click.get_current_context()
         ctx.invoke(
             benchmark,
             dataset=name,
+            run_all=False,
             output_path=output_path,
-            target_block_size=30,
+            target_block_size=target_block_size,
             model=model,
             max_right_entities=max_right_entities,
+            limit=limit,
+            concurrency=concurrency,
+            max_iterations=max_iterations,
         )
 
-        # Load saved results
         results_file = os.path.join(output_path, f"{name}_results.json")
         if os.path.exists(results_file):
             with open(results_file) as f:
@@ -967,17 +996,11 @@ def benchmark_all(
             )
     click.echo("=" * 70)
 
-    # Save combined results
     os.makedirs(output_path, exist_ok=True)
     combined_file = os.path.join(output_path, "all_results.json")
     with open(combined_file, "w") as f:
         json.dump(results, f, indent=2)
     click.echo(f"\nCombined results saved to {combined_file}")
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _dataframe_to_entities(df: Any) -> list[Any]:

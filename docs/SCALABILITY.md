@@ -21,6 +21,45 @@ SERF uses **FAISS IndexIVFFlat** for semantic blocking — clustering entity emb
 
 Beyond ~10M entities, FAISS requires either quantization (lossy), memory-mapped indexes (slow), or a distributed solution.
 
+## Embedding Model Choice
+
+Dimension is the multiplier in the table above, so the embedding model is a scalability lever before any vector engine is involved. It is also a _quality_ lever: blocking bounds recall, and recall is currently SERF's binding constraint (0.57–0.74 against precision as high as 0.99), so a better embedder attacks the actual bottleneck.
+
+SERF currently uses `intfloat/multilingual-e5-base`. Microsoft's [harrier-oss-v1](https://huggingface.co/microsoft/harrier-oss-v1-0.6b) family is the strongest open alternative — MIT licensed, multilingual, and state of the art on Multilingual MTEB v2 at release.
+
+| Model | Params | Dim | Max tokens | MTEB v2 | RAM @ 1M entities |
+| --- | --- | --- | --- | --- | --- |
+| `intfloat/multilingual-e5-base` (current) | 278M | 768 | 512 | — | 3.1 GB |
+| [`microsoft/harrier-oss-v1-270m`](https://huggingface.co/microsoft/harrier-oss-v1-270m) | 268M | 640 | 32,768 | 66.5 | 2.6 GB |
+| [`microsoft/harrier-oss-v1-0.6b`](https://huggingface.co/microsoft/harrier-oss-v1-0.6b) | 596M | 1,024 | 32,768 | 69.0 | 4.1 GB |
+| [`microsoft/harrier-oss-v1-27b`](https://huggingface.co/microsoft/harrier-oss-v1-27b) | 27B | 5,376 | 32,768 | 74.3 | 21.5 GB |
+
+The MTEB v2 column is from the harrier model card. No verified MTEB v2 score for e5-base was available, so that cell is blank rather than guessed — do not fill it in without a source.
+
+Read the two axes separately:
+
+- **`harrier-oss-v1-270m` is the scalability play.** At 640 dimensions it needs _less_ memory than the current model while scoring 66.5 on MTEB v2, and it raises the practical FAISS ceiling by roughly 20% at equal RAM.
+- **`harrier-oss-v1-0.6b` is the quality play.** It costs 33% more memory than e5-base (768 → 1,024 dims) and buys a substantially stronger embedder. At SERF's current benchmark scale this is free — the datasets are thousands of records, not millions — so it is the right default until the corpus is large enough for dimension to matter.
+- **`harrier-oss-v1-27b` is not a blocking model.** At 5,376 dimensions it quadruples index memory and needs serious GPU capacity to encode. Useful as an upper bound when measuring how much blocking quality caps recall, not for production blocking.
+
+Three practical notes before swapping the model:
+
+**Query instructions are mandatory.** These are instruction-tuned decoder models; omitting the prompt degrades quality. For entity resolution blocking the right prompt is `sts_query` ("Retrieve semantically similar text"), not `web_search_query`. Documents take no instruction. Since SERF embeds records rather than running query-document retrieval, the sensible reading is to embed every record instruction-free, or apply `sts_query` uniformly — this is worth an ablation rather than an assumption.
+
+**Pooling and metric already match.** harrier uses last-token pooling with L2 normalization, so inner product equals cosine similarity and SERF's existing `METRIC_INNER_PRODUCT` FAISS configuration needs no change.
+
+**The 32,768-token context is a real gain for wide records.** e5-base truncates at 512 tokens, which silently discards content on long product descriptions or bibliographic records. That truncation is invisible in the metrics and could be part of the recall gap.
+
+Switching is a config change, since the model name is not hardcoded:
+
+```yaml
+# config.yml
+models:
+  embedding: "microsoft/harrier-oss-v1-0.6b"
+```
+
+Encoding cost rises with parameter count, and blocking re-embeds the surviving records every iteration, so measure encode throughput alongside quality before adopting a larger model.
+
 ## What SERF Needs From a Vector Engine
 
 SERF's blocking step has specific requirements that differ from typical vector search:
@@ -47,9 +86,7 @@ faiss.write_index(index, "blocks.index")
 index = faiss.read_index("blocks.index", faiss.IO_FLAG_MMAP)
 ```
 
-**Pros**: Zero migration effort. Same API.
-**Cons**: Slower for random access. Still single-machine. Limited by disk I/O.
-**Scale**: ~100M entities on a single machine with fast SSD.
+**Pros**: Zero migration effort. Same API. **Cons**: Slower for random access. Still single-machine. Limited by disk I/O. **Scale**: ~100M entities on a single machine with fast SSD.
 
 #### FAISS with GPU
 
@@ -60,9 +97,7 @@ res = faiss.StandardGpuResources()
 gpu_index = faiss.index_cpu_to_gpu(res, 0, cpu_index)
 ```
 
-**Pros**: Massive speedup for clustering. Same API.
-**Cons**: GPU memory is even more limited than RAM (typically 16-80GB).
-**Scale**: ~5M entities per GPU. Multi-GPU for more.
+**Pros**: Massive speedup for clustering. Same API. **Cons**: GPU memory is even more limited than RAM (typically 16-80GB). **Scale**: ~5M entities per GPU. Multi-GPU for more.
 
 ### Tier 2: Vector Databases (Production Scale)
 
@@ -111,9 +146,7 @@ results = client.search("entities", embeddings, limit=1)
 - **GroupBy API** — Native grouping of results by payload field (useful for blocking)
 - **Filtering** — Filter by entity type, source table, etc. during search
 
-**Pros**: Excellent developer experience. GroupBy is directly useful for blocking.
-**Cons**: No native IVF — uses HNSW which is NN-search oriented, not clustering.
-**Scale**: ~100M entities per node, multi-node clusters.
+**Pros**: Excellent developer experience. GroupBy is directly useful for blocking. **Cons**: No native IVF — uses HNSW which is NN-search oriented, not clustering. **Scale**: ~100M entities per node, multi-node clusters.
 
 #### Weaviate
 
@@ -124,9 +157,7 @@ results = client.search("entities", embeddings, limit=1)
 - **Compression** — Product quantization and binary quantization
 - **Schema-based** — Define entity classes with typed properties
 
-**Pros**: Best hybrid search. Good for combining embedding blocking with keyword blocking.
-**Cons**: Heavier infrastructure. HNSW-based (not IVF clustering).
-**Scale**: ~50M entities per node.
+**Pros**: Best hybrid search. Good for combining embedding blocking with keyword blocking. **Cons**: Heavier infrastructure. HNSW-based (not IVF clustering). **Scale**: ~50M entities per node.
 
 ### Tier 3: Approximate Clustering at Scale
 
@@ -141,9 +172,7 @@ model = kmeans.fit(entity_df)
 assignments = model.transform(entity_df)
 ```
 
-**Pros**: Distributed. Integrates with SERF's PySpark pipeline. No external service.
-**Cons**: Slower than FAISS. Less precise clustering.
-**Scale**: Billions of entities across a Spark cluster.
+**Pros**: Distributed. Integrates with SERF's PySpark pipeline. No external service. **Cons**: Slower than FAISS. Less precise clustering. **Scale**: Billions of entities across a Spark cluster.
 
 #### ScaNN (Google)
 
@@ -157,17 +186,17 @@ assignments = model.transform(entity_df)
 
 ## Recommendation
 
-| Dataset Size | Recommended Engine            | Notes                                  |
-| ------------ | ----------------------------- | -------------------------------------- |
-| < 1M         | **FAISS (current)**           | Fast, simple, in-memory                |
-| 1M - 10M     | **FAISS memory-mapped**       | Same API, disk-backed inverted lists   |
-| 10M - 100M   | **Milvus** or **Qdrant**      | Distributed, disk-based indexes        |
-| 100M - 1B    | **Milvus** (distributed)      | Multi-node, GPU-accelerated            |
-| > 1B         | **Milvus** + **Spark KMeans** | Hybrid: Spark for initial partitioning |
+| Dataset Size | Recommended Engine | Notes |
+| --- | --- | --- |
+| < 1M | **FAISS (current)** | Fast, simple, in-memory |
+| 1M - 10M | **FAISS memory-mapped** | Same API, disk-backed inverted lists |
+| 10M - 100M | **Milvus** or **Qdrant** | Distributed, disk-based indexes |
+| 100M - 1B | **Milvus** (distributed) | Multi-node, GPU-accelerated |
+| > 1B | **Milvus** + **Spark KMeans** | Hybrid: Spark for initial partitioning |
 
 ### Implementation Strategy
 
-SERF should define a **`Blocker` protocol** (Python Protocol class) that `FAISSBlocker` implements. Alternative backends (Milvus, Qdrant, Spark KMeans) implement the same protocol:
+SERF should define a `Blocker` **protocol** (Python Protocol class) that `FAISSBlocker` implements. Alternative backends (Milvus, Qdrant, Spark KMeans) implement the same protocol:
 
 ```python
 from typing import Protocol

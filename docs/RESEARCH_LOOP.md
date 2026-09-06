@@ -237,8 +237,7 @@ Both support structured output and function calling; neither supports extended t
 **Command.** uv run serf benchmark --dataset dblp-acm --target-block-size 100 \
  --model gemini/gemini-3.8-flash --seed 0 --out experiments/runs/E1-...
 
-**Config hash.** a3f9c21 **Code.** 529d6fb
-**Cost.** projected $0.50 / actual $0.42 — day-to-date $12.30 of $100
+**Config hash.** a3f9c21 **Code.** 529d6fb **Cost.** projected $0.50 / actual $0.42 — day-to-date $12.30 of $100
 
 **Result.** Drop rate 3.8% (84/2210). Recovery 100%. Pairwise F1 0.781, B-cubed F1 0.744. Drops concentrated in prompt positions 40-70.
 

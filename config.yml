@@ -1,3 +1,71 @@
 logs:
   file:
     path: logs
+
+models:
+  embedding: "intfloat/multilingual-e5-base"
+  llm: "gemini/gemini-2.0-flash"
+  analyze_llm: "${models.llm}"
+  temperature: 0.0
+
+er:
+  blocking:
+    method: semantic
+    target_block_size: 30
+    max_block_size: 100
+    min_block_size: 2
+    auto_scale_by_iteration: true
+
+  matching:
+    batch_size: 10
+    max_concurrent: 20
+    temperature: 0.0
+    max_retries: 3
+    retry_delay_ms: 300
+
+  eval:
+    coverage_threshold: 0.9999
+    error_threshold: 0.0001
+    overlap_threshold: 0.01
+
+  paths:
+    blocks: "data/iteration_{iteration}/blocks"
+    matches: "data/iteration_{iteration}/matches"
+    resolved: "data/iteration_{iteration}/resolved"
+    edges: "data/iteration_{iteration}/edges"
+    metrics: "data/iteration_{iteration}/metrics"
+
+mlflow:
+  tracking_uri: "http://127.0.0.1:5001"
+  experiment_name: "SERF-Entity-Resolution"
+  backend_store_uri: "sqlite:///data/mlflow.db"
+  host: "127.0.0.1"
+  port: 5001
+  autolog:
+    log_traces: true
+    log_traces_from_compile: false
+    log_traces_from_eval: true
+
+benchmarks:
+  output_dir: "data/benchmarks"
+  datasets:
+    walmart-amazon:
+      url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"
+      domain: products
+      difficulty: hard
+    abt-buy:
+      url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Textual/Abt-Buy/exp_data"
+      domain: products
+      difficulty: hard
+    amazon-google:
+      url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Amazon-Google/amazon_google_exp_data.zip"
+      domain: products
+      difficulty: hard
+    dblp-acm:
+      url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-ACM/dblp_acm_exp_data.zip"
+      domain: bibliographic
+      difficulty: easy
+    dblp-scholar:
+      url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-GoogleScholar/dblp_scholar_exp_data.zip"
+      domain: bibliographic
+      difficulty: medium

@@ -19,7 +19,7 @@ import dspy
 # isort: on
 import random
 from collections.abc import Callable
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from serf.block.pipeline import SemanticBlockingPipeline
 from serf.dspy.adapters import RobustXMLAdapter
@@ -29,6 +29,9 @@ from serf.eval.benchmarks import BenchmarkDataset
 from serf.logs import get_logger
 from serf.match.few_shot import get_default_few_shot_examples
 from serf.match.uuid_mapper import UUIDMapper
+
+if TYPE_CHECKING:
+    from serf.dspy.budget import TrackedLM
 
 logger = get_logger(__name__)
 
@@ -331,6 +334,77 @@ def er_metric(
     return dspy.Prediction(score=score, feedback=" ".join(feedback_parts))
 
 
+def _build_tracked_lm(model: str, temperature: float, max_tokens: int) -> "TrackedLM":
+    """Build a TrackedLM for either the Gemini Developer API or gpt-oss-*-maas
+    on Vertex AI, routed by model name (docs/SERF_LONG_SHOT_PLAN.md Section 7.9).
+
+    Parameters
+    ----------
+    model : str
+        Model identifier, e.g. "gemini/gemini-3.5-flash-lite" or
+        "openai/gpt-oss-120b-maas"
+    temperature : float
+        Sampling temperature
+    max_tokens : int
+        Max output tokens
+
+    Returns
+    -------
+    TrackedLM
+        A TrackedLM ready to use, billed against the matching named ledger
+
+    Raises
+    ------
+    ValueError
+        If a gpt-oss-*-maas model is requested without GOOGLE_CLOUD_PROJECT
+        set (no GEMINI_API_KEY substitute exists for Vertex AI; see
+        docs/SERF_LONG_SHOT_PLAN.md Section 7.9)
+    google.auth.exceptions.DefaultCredentialsError
+        If GOOGLE_CLOUD_PROJECT is set but Application Default Credentials
+        are not configured (no `gcloud auth application-default login` and
+        no GOOGLE_APPLICATION_CREDENTIALS service-account key)
+    """
+    import os
+
+    from serf.dspy.budget import TrackedLM, get_ledger
+
+    if "gpt-oss" in model:
+        import google.auth.transport.requests
+
+        project_id = os.environ.get("GOOGLE_CLOUD_PROJECT")
+        if not project_id:
+            raise ValueError(
+                "GOOGLE_CLOUD_PROJECT environment variable required for "
+                f"{model} (Vertex AI Model-as-a-Service; see "
+                "docs/SERF_LONG_SHOT_PLAN.md Section 7.9). Also requires "
+                "Application Default Credentials: `gcloud auth "
+                "application-default login`, or a service-account key via "
+                "GOOGLE_APPLICATION_CREDENTIALS."
+            )
+        region = os.environ.get("GOOGLE_CLOUD_REGION", "us-central1")
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+        creds.refresh(google.auth.transport.requests.Request())
+        return TrackedLM(
+            model,
+            ledger=get_ledger("gpt_oss_120b_maas"),
+            api_base=(
+                f"https://{region}-aiplatform.googleapis.com/v1/projects/"
+                f"{project_id}/locations/{region}/endpoints/openapi"
+            ),
+            api_key=creds.token,
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    return TrackedLM(
+        model,
+        ledger=get_ledger("gemini"),
+        api_key=os.environ["GEMINI_API_KEY"],
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+
+
 def evaluate_program(
     program: Callable[..., dspy.Prediction], examples: list[dspy.Example]
 ) -> float:
@@ -405,10 +479,6 @@ def run_gepa_optimization(
     dict[str, object]
         baseline_f1, optimized_f1, n_train, n_val, n_test, optimized_program
     """
-    import os
-
-    from serf.dspy.budget import TrackedLM, get_ledger
-
     dataset = BenchmarkDataset.download(dataset_name)
     blocks = build_candidate_blocks(
         dataset, target_block_size=target_block_size, sample_size=sample_size, seed=seed
@@ -426,28 +496,18 @@ def run_gepa_optimization(
     testset = examples[n_train + n_val :]
     logger.info(f"Split: {len(trainset)} train, {len(valset)} val, {len(testset)} test (sealed)")
 
-    api_key = os.environ["GEMINI_API_KEY"]
     # Task LM stays at temperature=0, matching production (EntityMatcher):
     # an optimized prompt is only useful if it was tuned under the same
-    # deterministic conditions it will actually run under. Only the
-    # reflection_lm benefits from higher temperature (DSPy's GEPA convention
-    # for creative instruction proposals, Section 7.7 of the plan doc).
+    # conditions it will actually run under. The reflection_lm uses 1.0
+    # (DSPy's GEPA convention for creative instruction proposals, Section
+    # 7.7 of the plan doc; also required for reliable behavior specifically
+    # on Gemini 3.x models, per LiteLLM's own provider guidance).
     from serf.config import config as serf_config
 
     max_output_tokens = serf_config.get("er.matching.max_output_tokens", 65536)
-    task_lm = TrackedLM(
-        task_model,
-        ledger=get_ledger("gemini"),
-        api_key=api_key,
-        temperature=0.0,
-        max_tokens=max_output_tokens,
-    )
-    reflection_lm = TrackedLM(
-        reflection_model,
-        ledger=get_ledger("gemini"),
-        api_key=api_key,
-        temperature=1.0,
-        max_tokens=max_output_tokens,
+    task_lm = _build_tracked_lm(task_model, temperature=0.0, max_tokens=max_output_tokens)
+    reflection_lm = _build_tracked_lm(
+        reflection_model, temperature=1.0, max_tokens=max_output_tokens
     )
     dspy.configure(lm=task_lm, adapter=RobustXMLAdapter())
 

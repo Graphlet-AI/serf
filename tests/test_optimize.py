@@ -9,7 +9,12 @@ import dspy
 
 # isort: on
 
+from unittest.mock import patch
+
+import pytest
+
 from serf.dspy.optimize import (
+    _build_tracked_lm,
     _map_gold_resolution,
     build_gepa_examples,
     er_metric,
@@ -182,3 +187,36 @@ def test_evaluate_program_handles_exceptions_as_zero() -> None:
     ).with_inputs("block_records", "schema_info", "few_shot_examples")
     avg_f1 = evaluate_program(failing_program, [example])
     assert avg_f1 == 0.0
+
+
+def test_build_tracked_lm_routes_gemini_model_to_gemini_ledger() -> None:
+    """A gemini/* model is billed against the 'gemini' ledger using
+    GEMINI_API_KEY, never Vertex AI credentials."""
+    with patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}, clear=False):
+        lm = _build_tracked_lm("gemini/gemini-3.5-flash-lite", temperature=0.0, max_tokens=100)
+    assert lm.ledger.name == "gemini"
+
+
+def test_build_tracked_lm_gpt_oss_without_project_raises_actionable_error() -> None:
+    """Requesting a gpt-oss-*-maas model without GOOGLE_CLOUD_PROJECT set
+    fails with a clear, actionable message (docs/SERF_LONG_SHOT_PLAN.md
+    Section 7.9), not a bare KeyError."""
+    with (
+        patch.dict("os.environ", {}, clear=True),
+        pytest.raises(ValueError, match="GOOGLE_CLOUD_PROJECT"),
+    ):
+        _build_tracked_lm("openai/gpt-oss-120b-maas", temperature=0.0, max_tokens=100)
+
+
+def test_build_tracked_lm_gpt_oss_routes_to_separate_ledger() -> None:
+    """A gpt-oss-*-maas model is billed against its own ledger, never the
+    Gemini $100 cap (docs/SERF_LONG_SHOT_PLAN.md Section 9.6, rule 6)."""
+    import google.auth
+
+    fake_creds = type("FakeCreds", (), {"token": "fake-token", "refresh": lambda self, req: None})()
+    with (
+        patch.dict("os.environ", {"GOOGLE_CLOUD_PROJECT": "fake-project"}, clear=False),
+        patch.object(google.auth, "default", return_value=(fake_creds, "fake-project")),
+    ):
+        lm = _build_tracked_lm("openai/gpt-oss-120b-maas", temperature=0.0, max_tokens=100)
+    assert lm.ledger.name == "gpt_oss_120b_maas"

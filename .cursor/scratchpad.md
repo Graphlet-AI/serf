@@ -62,6 +62,21 @@ loop), before any optimization (Stage 3).
 
 ## Executor's Feedback or Assistance Requests
 
+**BLOCKED (user notified, continuing other work in the meantime):** Latest
+instruction is teacher=Gemini 3.5 Flash-Lite, student=`gpt-oss-120b-maas`
+(inverting the earlier student/teacher assignment now that correctness work
+is done). `gpt-oss-120b-maas` requires Vertex AI access (`GOOGLE_CLOUD_PROJECT`
++ Application Default Credentials), which this environment does not have --
+only `GEMINI_API_KEY` is configured as a secret. User supplied a project ID,
+then retracted it ("wrong account") -- not used. `_build_tracked_lm()` in
+`src/serf/dspy/optimize.py` is fully implemented and routes by model name
+(Gemini API key vs. Vertex AI ADC), with tests covering both paths and the
+missing-credential failure mode; it just cannot actually be exercised
+end-to-end against the real gpt-oss-120b-maas endpoint without proper
+Google Cloud credentials being added as a secret (Cursor Dashboard > Cloud
+Agents > Secrets: `GOOGLE_CLOUD_PROJECT` + either
+`GOOGLE_APPLICATION_CREDENTIALS` (service-account key) or equivalent ADC).
+
 **Task 1 complete.** Wrote all 9 required tests from ID_INVARIANTS.md §9
 (`tests/test_id_invariants.py`), ran them against the pre-fix code to find real
 failures empirically rather than trust the audit's reasoning alone, then fixed:

@@ -63,7 +63,7 @@ def test_max_output_tokens_read_from_config() -> None:
     matcher = EntityMatcher()
     with (
         patch.dict("os.environ", {"GEMINI_API_KEY": "test-key"}),
-        patch("serf.match.matcher.dspy.LM") as mock_lm,
+        patch("serf.match.matcher.TrackedLM") as mock_lm,
     ):
         matcher._ensure_lm()
     _, kwargs = mock_lm.call_args

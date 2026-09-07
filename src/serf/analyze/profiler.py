@@ -132,10 +132,12 @@ def generate_er_config(
         YAML string with the recommended ER configuration
     """
     from serf.config import config as serf_config
+    from serf.dspy.budget import TrackedLM, get_ledger
 
     effective_model = model or serf_config.get("models.analyze_llm")
     api_key = os.environ.get("GEMINI_API_KEY", "")
-    lm = dspy.LM(effective_model, api_key=api_key)
+    ledger_name = "gpt_oss_120b_maas" if "gpt-oss" in effective_model else "gemini"
+    lm = TrackedLM(effective_model, ledger=get_ledger(ledger_name), api_key=api_key)
     logger.info(f"Using LLM model: {effective_model}")
 
     predictor = dspy.ChainOfThought(GenerateERConfig)

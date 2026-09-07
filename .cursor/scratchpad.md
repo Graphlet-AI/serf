@@ -55,8 +55,8 @@ loop), before any optimization (Stage 3).
 ## Project Status Board
 
 - [x] Task 1: Fix identifier-conservation correctness bugs (D1-D8) + max_tokens
-- [ ] Task 2: Experiment log + budget ledger + caching
-- [ ] Task 3: Baseline suite (DBLP-ACM first, then Walmart-Amazon, DBLP-Scholar)
+- [x] Task 2: Experiment log + budget ledger + caching
+- [x] Task 3: Baseline suite (dblp-acm, abt-buy; dblp-scholar deferred -- large, low priority vs GEPA)
 - [ ] Task 4: GEPA optimization loop
 - [ ] Task 5: Final report + PR
 
@@ -101,6 +101,48 @@ design decision that deserves its own pass rather than a rushed fix here.
 Noted for follow-up, not blocking GEPA work.
 
 209 tests pass (was 197 on main), ruff/zuban clean. Moving to Task 2.
+
+**Task 2 complete.** LM response caching needs no new code: `dspy.LM(cache=True)`
+is the default and already uses a persistent on-disk cache
+(`~/.dspy_cache`) — a cached re-run is genuinely free, satisfying
+RESEARCH_LOOP.md's T2.6 out of the box. Built `src/serf/dspy/budget.py`:
+`BudgetLedger` (file-backed, survives restarts, one JSON file per named
+ledger under `data/budget/`) and `TrackedLM` (a `dspy.LM` subclass that
+hooks `update_history` -- the single place both the sync and async call
+paths funnel through -- to record litellm's own computed cost per call,
+and checks the ledger before every call). Wired into `EntityMatcher` and
+`generate_er_config`, routing by model name to the `gemini` ($100 cap) or
+`gpt_oss_120b_maas` ($20 cap) ledger. Verified against real calls: cost
+matches hand-computed pricing exactly (e.g. 7 prompt + 2 completion tokens
+on gemini-3.5-flash-lite = $7.1e-6, matching $0.30/$2.50 per 1M list price).
+Created `experiments/log.md` in RESEARCH_LOOP.md's format (adapted to a
+single $100-total cap per explicit instruction, not $100/day).
+
+**Task 3 complete (partial, by design).** Built `src/serf/eval/baselines.py`
+(random, exact-name-match, TF-IDF cosine -- all vectorized/sampled so they
+scale to DBLP-Scholar's ~168M candidate pairs without a Python double loop)
+and a `serf baselines` CLI command that also reports the blocking recall
+ceiling using the real `SemanticBlockingPipeline`. Ran on dblp-acm and
+abt-buy (logged in experiments/log.md as BASE-2026-09-07-001/002). Found
+something genuinely useful: raising `target_block_size` from 30 to 100 made
+DBLP-ACM's recall ceiling *worse* (0.83 -> 0.53) -- FAISS IVF clustering
+isn't a monotonic refinement across target sizes, so block size can't be
+tuned by intuition. Kept target_block_size=30 (project default, and
+empirically the better of what I measured) for GEPA work.
+
+**Note found, not acted on**: `config.yml`'s `benchmarks.datasets` lists
+`walmart-amazon` and `amazon-google` with Wisconsin DeepMatcher URLs, but
+`serf/eval/benchmarks.py`'s actual `DATASET_REGISTRY` (Leipzig-format URLs)
+only implements `dblp-acm`, `dblp-scholar`, `abt-buy` -- `BENCHMARK_DATASETS`
+in the CLI already reflects this (3 datasets only). Per the plan doc's own
+decision #5 ("adapt so long as you document it"), working with the 3
+datasets that are actually downloadable; walmart-amazon is not available
+without adding DeepMatcher-format loading to `benchmarks.py`, which is a
+separate, undertaken-if-time-permits follow-up, not a GEPA blocker.
+DBLP-Scholar baselines deferred for the same reason (large dataset, and
+GEPA is the higher-priority use of remaining time).
+
+Moving to Task 4 (the core ask): GEPA optimization.
 
 ## Lessons
 

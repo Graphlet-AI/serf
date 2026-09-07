@@ -976,6 +976,107 @@ def benchmark_all(
 
 
 # ---------------------------------------------------------------------------
+# baselines  (no-LLM reference points)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--dataset",
+    "-d",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    required=True,
+    help="Benchmark dataset name",
+)
+@click.option(
+    "--target-block-size",
+    type=int,
+    default=30,
+    help="Target entities per block, for the blocking-recall-ceiling baseline",
+)
+@click.option(
+    "--tfidf-threshold",
+    type=float,
+    default=0.5,
+    help="Cosine similarity threshold for the TF-IDF baseline",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    default="data/benchmarks",
+    help="Output directory for results",
+)
+def baselines(
+    dataset: str,
+    target_block_size: int,
+    tfidf_threshold: float,
+    output_path: str,
+) -> None:
+    """Run no-LLM baselines for a benchmark dataset.
+
+    Random, exact-name-match, TF-IDF cosine, and the blocking recall
+    ceiling: the floor and the pre-neural reference point every LLM-based
+    `serf benchmark` result should be reported against.
+    """
+    from serf.block.pipeline import SemanticBlockingPipeline
+    from serf.eval.baselines import (
+        exact_name_match_baseline,
+        random_baseline,
+        tfidf_cosine_baseline,
+    )
+    from serf.eval.benchmarks import BenchmarkDataset
+    from serf.eval.metrics import pair_completeness
+
+    click.echo(f"Running baselines: {dataset}")
+    data = BenchmarkDataset.download(dataset)
+    left, right = data.to_entities()
+    true_pairs = data.ground_truth
+    click.echo(f"  {len(left)} left, {len(right)} right, {len(true_pairs)} ground truth pairs")
+
+    click.echo("  Random...")
+    results: dict[str, dict[str, float]] = {"random": random_baseline(left, right, true_pairs)}
+
+    click.echo("  Exact name match...")
+    results["exact_name_match"] = exact_name_match_baseline(left, right, true_pairs)
+
+    click.echo(f"  TF-IDF cosine (threshold={tfidf_threshold})...")
+    results["tfidf_cosine"] = tfidf_cosine_baseline(
+        left, right, true_pairs, threshold=tfidf_threshold
+    )
+
+    click.echo(f"  Blocking recall ceiling (target_block_size={target_block_size})...")
+    pipeline = SemanticBlockingPipeline(target_block_size=target_block_size)
+    blocks, _ = pipeline.run(left + right)
+    blocked_pairs: set[tuple[int, int]] = set()
+    for block in blocks:
+        ids = [e.id for e in block.entities]
+        for i, a in enumerate(ids):
+            for b in ids[i + 1 :]:
+                blocked_pairs.add((min(a, b), max(a, b)))
+    ceiling = pair_completeness(blocked_pairs, true_pairs)
+    results["blocking_recall_ceiling"] = {"pair_completeness": ceiling, "num_blocks": len(blocks)}
+
+    click.echo(f"\n{'=' * 70}")
+    click.echo(f"{'Baseline':<25} {'Precision':>10} {'Recall':>10} {'F1':>10}")
+    click.echo("-" * 70)
+    for name in ("random", "exact_name_match", "tfidf_cosine"):
+        m = results[name]
+        click.echo(
+            f"{name:<25} {m['precision']:>10.4f} {m['recall']:>10.4f} {m['f1_score']:>10.4f}"
+        )
+    click.echo(f"{'blocking_recall_ceiling':<25} {'':>10} {ceiling:>10.4f} {'':>10}")
+    click.echo("=" * 70)
+
+    os.makedirs(output_path, exist_ok=True)
+    out_file = os.path.join(output_path, f"{dataset}_baselines.json")
+    with open(out_file, "w") as f:
+        json.dump(results, f, indent=2)
+    click.echo(f"\nResults saved to {out_file}")
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

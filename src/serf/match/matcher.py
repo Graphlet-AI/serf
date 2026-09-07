@@ -10,6 +10,7 @@ from uuid import uuid4
 import dspy
 
 from serf.config import config
+from serf.dspy.budget import TrackedLM, get_ledger
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import BlockResolution, EntityBlock
 from serf.logs import get_logger
@@ -61,15 +62,17 @@ class EntityMatcher:
         self._adapter = dspy.XMLAdapter()
 
     def _ensure_lm(self) -> dspy.LM:
-        """Get or create the LM instance."""
+        """Get or create the LM instance, tracked against its budget ledger."""
         if self._lm is None:
             api_key = os.environ.get("GEMINI_API_KEY")
             if not api_key:
                 raise ValueError("GEMINI_API_KEY environment variable required")
             temperature = config.get("er.matching.temperature", 0.0)
             max_output_tokens = config.get("er.matching.max_output_tokens", 65536)
-            self._lm = dspy.LM(
+            ledger_name = "gpt_oss_120b_maas" if "gpt-oss" in self.model else "gemini"
+            self._lm = TrackedLM(
                 self.model,
+                ledger=get_ledger(ledger_name),
                 api_key=api_key,
                 temperature=temperature,
                 max_tokens=max_output_tokens,

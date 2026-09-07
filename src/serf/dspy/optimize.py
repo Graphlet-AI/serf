@@ -53,8 +53,9 @@ def build_candidate_blocks(
     target_block_size : int
         Target entities per block for the real FAISS blocking pipeline
     sample_size : int | None
-        If set, sample this many (left, right) ground-truth pairs' entities
-        plus surrounding context before blocking, to bound cost. None blocks
+        If set, sample roughly this many true-pair entities plus an equal
+        number of random distractor entities before blocking (~2x total),
+        to bound cost while still presenting genuine ambiguity. None blocks
         the full dataset.
     seed : int
         Random seed for sampling
@@ -77,6 +78,15 @@ def build_candidate_blocks(
                 break
             sampled_ids.add(a)
             sampled_ids.add(b)
+        # Add an equal number of random "distractor" entities. Sampling only
+        # true-pair members produces artificially easy blocks (every entity
+        # already has an obvious partner) and was measured to hit a perfect
+        # F1 ceiling on both the baseline and GEPA-optimized program, leaving
+        # no signal for the optimizer. Real production blocks mix matches
+        # with plausible near-miss non-matches; this approximates that.
+        remaining = [e.id for e in all_entities if e.id not in sampled_ids]
+        rng.shuffle(remaining)
+        sampled_ids.update(remaining[: len(sampled_ids)])
         entity_by_id = {e.id: e for e in all_entities}
         all_entities = [entity_by_id[i] for i in sampled_ids if i in entity_by_id]
 
@@ -359,7 +369,8 @@ def run_gepa_optimization(
     reflection_model: str,
     sample_size: int = 60,
     target_block_size: int = 30,
-    auto: str = "light",
+    auto: str | None = "light",
+    max_metric_calls: int | None = None,
     seed: int = 0,
 ) -> dict[str, object]:
     """End-to-end: build labeled blocks, split, optimize BlockMatch with GEPA,
@@ -378,8 +389,14 @@ def run_gepa_optimization(
         Number of ground-truth pairs' entities to sample before blocking
     target_block_size : int
         Target entities per block
-    auto : str
-        GEPA's auto budget: "light", "medium", or "heavy"
+    auto : str | None
+        GEPA's auto budget: "light", "medium", or "heavy". Mutually
+        exclusive with max_metric_calls; set this to None when passing
+        max_metric_calls explicitly.
+    max_metric_calls : int | None
+        Explicit cap on the number of metric calls GEPA may make, for
+        predictable runtime independent of trainset size. Takes precedence
+        over `auto` when both would otherwise be considered.
     seed : int
         Random seed for the train/val/test split
 
@@ -438,11 +455,11 @@ def run_gepa_optimization(
     baseline_f1 = evaluate_program(student, testset)
     logger.info(f"Baseline (hand-written) test F1: {baseline_f1:.4f}")
 
-    auto_literal = cast(Any, auto)
     optimizer = dspy.GEPA(
         metric=cast(Any, er_metric),
         reflection_lm=reflection_lm,
-        auto=auto_literal,
+        auto=None if max_metric_calls else cast(Any, auto),
+        max_metric_calls=max_metric_calls,
         num_threads=4,
         track_stats=True,
     )

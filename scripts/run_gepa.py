@@ -1,7 +1,8 @@
-"""Driver script for a GEPA optimization run against DBLP-ACM.
+"""Driver script for a GEPA optimization run against a benchmark dataset.
 
 Not part of the package: a one-off script for this build session's
-optimization run, invoked directly with `uv run python scripts/run_gepa_dblp_acm.py`.
+optimization runs, invoked directly with
+`uv run python scripts/run_gepa.py <dataset> <sample_size> <auto>`.
 """
 
 # isort: off
@@ -12,6 +13,7 @@ import dspy  # noqa: F401
 
 # isort: on
 import json
+import os
 import sys
 import time
 
@@ -23,17 +25,21 @@ logger = get_logger(__name__)
 
 def main() -> None:
     setup_logging()
-    sample_size = int(sys.argv[1]) if len(sys.argv) > 1 else 300
-    auto = sys.argv[2] if len(sys.argv) > 2 else "light"
+    dataset_name = sys.argv[1] if len(sys.argv) > 1 else "dblp-acm"
+    sample_size = int(sys.argv[2]) if len(sys.argv) > 2 else 300
+    auto_or_calls = sys.argv[3] if len(sys.argv) > 3 else "light"
+    auto = auto_or_calls if auto_or_calls in ("light", "medium", "heavy") else None
+    max_metric_calls = None if auto else int(auto_or_calls)
 
     start = time.time()
     result = run_gepa_optimization(
-        dataset_name="dblp-acm",
+        dataset_name=dataset_name,
         task_model="gemini/gemini-3.5-flash-lite",
         reflection_model="gemini/gemini-3.7-flash",
         sample_size=sample_size,
         target_block_size=30,
         auto=auto,
+        max_metric_calls=max_metric_calls,
         seed=0,
     )
     elapsed = time.time() - start
@@ -42,9 +48,8 @@ def main() -> None:
     print(json.dumps(result, indent=2))
     print(f"Elapsed: {elapsed:.1f}s")
 
-    out_path = f"data/gepa/dblp_acm_optimized_{sample_size}_{auto}.json"
-    import os
-
+    dataset_slug = dataset_name.replace("-", "_")
+    out_path = f"data/gepa/{dataset_slug}_optimized_{sample_size}_{auto_or_calls}.json"
     os.makedirs("data/gepa", exist_ok=True)
     optimized.save(out_path)
     print(f"Saved optimized program to {out_path}")

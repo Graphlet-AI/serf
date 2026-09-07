@@ -114,7 +114,7 @@ pipeline = SemanticBlockingPipeline(target_block_size=50)
 blocks, metrics = pipeline.run(entities)
 
 # Match
-matcher = EntityMatcher(model="gemini/gemini-2.0-flash")
+matcher = EntityMatcher(model="gemini/gemini-3.5-flash-lite")
 resolutions = await matcher.resolve_blocks(blocks)
 
 # Evaluate
@@ -127,7 +127,7 @@ metrics = evaluate_resolution(predicted_pairs, ground_truth_pairs)
 import dspy
 from serf.dspy.signatures import BlockMatch
 
-lm = dspy.LM("gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
+lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
 dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
 
 matcher = dspy.ChainOfThought(BlockMatch)
@@ -136,7 +136,7 @@ result = matcher(block_records=block_json, schema_info=schema, few_shot_examples
 
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses Gemini 2.0 Flash via DSPy BlockMatch.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses Gemini 3.5 Flash-Lite via DSPy BlockMatch.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
@@ -167,7 +167,7 @@ All configuration is centralized in `config.yml`:
 
 ```python
 from serf.config import config
-model = config.get("models.llm")  # "gemini/gemini-2.0-flash"
+model = config.get("models.llm")  # "gemini/gemini-3.5-flash-lite"
 block_size = config.get("er.blocking.target_block_size")  # 50
 ```
 

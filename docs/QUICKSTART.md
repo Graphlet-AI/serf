@@ -62,7 +62,7 @@ Dataset Profile (0.3s)
       target_block_size: 30
       max_block_size: 100
     matching:
-      model: gemini/gemini-2.0-flash
+      model: gemini/gemini-3.5-flash-lite
     max_iterations: 5
     convergence_threshold: 0.01
 ```
@@ -89,7 +89,7 @@ Output:
 SERF Entity Resolution
   Input:  data/companies.csv
   Output: data/resolved/
-  Model:  gemini/gemini-2.0-flash
+  Model:  gemini/gemini-3.5-flash-lite
 
   === Iteration 1 ===
   Entities: 4910
@@ -159,7 +159,7 @@ All settings live in `config.yml`:
 ```yaml
 models:
   embedding: "intfloat/multilingual-e5-base" # Embedding model for blocking
-  llm: "gemini/gemini-2.0-flash" # LLM for matching
+  llm: "gemini/gemini-3.5-flash-lite" # LLM for matching
   analyze_llm: "${models.llm}" # LLM for analyze (defaults to same)
   temperature: 0.0
 
@@ -213,7 +213,7 @@ blocking:
 
 # Matching parameters
 matching:
-  model: gemini/gemini-2.0-flash
+  model: gemini/gemini-3.5-flash-lite
 
 # Iteration control
 max_iterations: 5

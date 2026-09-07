@@ -14,7 +14,7 @@ def lm() -> Generator[dspy.LM, None, None]:
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY environment variable is not set")
 
-    lm = dspy.LM("gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
+    lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
     dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
 
     yield lm

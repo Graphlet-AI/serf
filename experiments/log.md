@@ -91,6 +91,97 @@ target_block_size=30 is not dataset-specific in this case.
 
 ---
 
-## GEPA-2026-09-07-001 — GEPA optimization setup, dblp-acm
+## GEPA-2026-09-07-001 — GEPA optimization, dblp-acm (true-pair-only sample)
 
-See below; entry added once the optimization run completes.
+**Hypothesis.** GEPA-evolved instructions beat the hand-written `BlockMatch`
+signature on a sealed test split, per Experiment E4.
+
+**Command.** `uv run python scripts/run_gepa.py dblp-acm 300 light` (student
+`gemini-3.5-flash-lite` @ temperature=0.0, reflection_lm `gemini-3.7-flash`
+@ temperature=1.0, `target_block_size=30`, seed=0)
+
+**Config hash.** N/A (script run, not yet wired to config hashing). **Code.**
+62609e0. **Cost.** ~$18 (dominated by GEPA's `auto="light"` running many
+reflective iterations against a training set that turned out to be trivial
+-- see verdict). Cumulative Gemini spend at completion: ~$18.9 of $100.
+
+**Result.** `baseline_f1 = 1.0`, `optimized_f1 = 1.0`. n_train=6, n_val=3,
+n_test=0 (!) on the first attempt with `sample_size=40` -- degenerate split,
+re-run at `sample_size=300` gave n_train=6, n_val=3, n_test=4, both still 1.0.
+
+**Verdict.** Hypothesis untestable as run: `build_candidate_blocks`'s initial
+sampling strategy (only entities that are members of a known true pair) made
+every block trivially resolvable -- there was no genuine ambiguity, so both
+the hand-written baseline and the optimizer's output scored perfectly and
+GEPA's own log shows "All subsample scores perfect for parent N. Skipping."
+repeated for over 100 iterations. This is itself a useful finding (Stage 1/2
+validation: the base pipeline has no capacity bug on easy DBLP-ACM blocks,
+consistent with RESEARCH_LOOP.md Stage 2's overfitting check), but it means
+this specific run cannot support or refute the E4 hypothesis. Fixed by mixing
+in random distractor entities (commit 62609e0) and moved the next attempt to
+`abt-buy`, where the no-LLM baselines (BASE-2026-09-07-002) already show much
+more headroom (exact-match F1 0.018 vs. DBLP-ACM's 0.884).
+
+**Side findings from this run** (real bugs, fixed, see commit 377b5d5):
+oversized blocks (71, 41 entities against a target of 30) from unsupervised
+clustering on a small sample, and `dspy.XMLAdapter` failing to parse model
+output containing unescaped `&` (~10% of DBLP-ACM's titles/descriptions
+contain one) -- both root-caused with single, minimal-repro diagnostic calls
+before committing further budget to full runs, per this doc's own guidance
+("smallest experiment that could falsify it").
+
+---
+
+## GEPA-2026-09-07-002 — GEPA optimization, abt-buy (with distractors)
+
+**Hypothesis.** With genuine ambiguity in the training blocks (true pairs
+mixed with random distractor entities, not true-pair members only), GEPA's
+evolved instructions beat the hand-written baseline on Abt-Buy's sealed test
+split, where the no-LLM baselines show real headroom.
+
+**Command.** `uv run python scripts/run_gepa.py abt-buy 150 30` (student
+`gemini-3.5-flash-lite` @ temperature=0.0, reflection_lm `gemini-3.7-flash`
+@ temperature=1.0, `target_block_size=30`, `max_metric_calls=30`, seed=0)
+
+**Config hash.** N/A. **Code.** f9313f4. **Cost.** ~$1.35 (cumulative Gemini
+spend: $32.66 of $100, most of the delta from this run's own baseline eval +
+30 metric calls + reflection).
+
+**Result.** `baseline_f1 = 0.95`, `optimized_f1 = 1.00`. n_train=6, n_val=3,
+n_test=4. Elapsed 347.6s. Zero XML-parsing failures (the ampersand and
+block-size fixes held). Optimized instructions saved to
+`data/gepa/abt_buy_optimized_150_30.json`.
+
+The evolved instructions are dramatically more detailed than the hand-written
+original -- they name specific normalization rules (strip hyphens/underscores/
+case in model numbers), specific brand aliases discovered from the training
+data (Eureka/Electrolux, Transcend/TRANSCEND INFORMATION), typo patterns
+(Tvio/TiVo), and explicit false-positive guards (don't merge different
+storage capacities or receiver tiers of the same brand). Full text: see PR
+description / `data/gepa/abt_buy_optimized_150_30.json`.
+
+**Verdict.** Directionally positive and the plumbing worked end-to-end for
+the first time this session, but **this result must be read with its sample
+size, not despite it**: n_test=4 means going from 0.95 to 1.00 could be a
+single corrected example, and n_train=6 is small enough that the optimizer
+plausibly partly *memorized* specific training-set entities (the brand
+aliases and model numbers named in the evolved instructions are exact
+examples from the ~13 candidate blocks built for this run) rather than
+learning principles that generalize to arbitrary unseen Abt-Buy products.
+Per this doc's own honesty rules ("report the optimization budget", "do not
+tune on test"): the test set here is sealed and was not touched during
+optimization, but it is too small to license a strong claim. Treat this run
+as a validated proof that the full loop (gold-label construction -> GEPA ->
+sealed-test evaluation) works correctly and *can* show improvement, not as
+publishable evidence that it reliably does. A follow-up with a substantially
+larger train/val/test split (all bounded by `max_metric_calls` for
+predictable cost/runtime, per the fix in commit 62609e0) is needed before
+reporting a GEPA effect size with any confidence.
+
+**Note on GPT-OSS-120B-maas.** Per explicit instruction, the intended
+configuration for this and subsequent runs is teacher=`gemini-3.5-flash-lite`,
+student=`gpt-oss-120b-maas`, reverting to student=`gemini-3.5-flash-lite`/
+teacher=`gemini-3.7-flash` (as run here) only as a stopgap until Vertex AI
+credentials (`GOOGLE_CLOUD_PROJECT` + Application Default Credentials) are
+available in this environment -- currently only `GEMINI_API_KEY` is
+configured. `gpt_oss_120b_maas` ledger: $0 spent to date.

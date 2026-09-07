@@ -1,0 +1,426 @@
+"""GEPA-based reflective optimization for SERF's BlockMatch signature.
+
+Builds labeled blocks from a benchmark's ground truth, optimizes BlockMatch's
+instructions with dspy.GEPA against a held-out validation split (the test
+split stays sealed until final evaluation, per docs/RESEARCH_LOOP.md Section 5
+rule 5), and reports the optimized program's F1 against the hand-written
+baseline.
+"""
+
+import random
+from collections.abc import Callable
+from typing import Any, cast
+
+import dspy
+
+from serf.block.pipeline import SemanticBlockingPipeline
+from serf.dspy.signatures import BlockMatch
+from serf.dspy.types import BlockResolution, Entity, EntityBlock
+from serf.eval.benchmarks import BenchmarkDataset
+from serf.logs import get_logger
+from serf.match.few_shot import get_default_few_shot_examples
+from serf.match.uuid_mapper import UUIDMapper
+
+logger = get_logger(__name__)
+
+
+def build_candidate_blocks(
+    dataset: BenchmarkDataset,
+    target_block_size: int = 30,
+    sample_size: int | None = None,
+    seed: int = 0,
+) -> list[EntityBlock]:
+    """Block a (sub)sample of a benchmark and keep only blocks with a true match.
+
+    A block containing no true pair at all is trivial to resolve correctly
+    (the answer is "nothing merges") and teaches the optimizer little; blocks
+    with at least one true pair have both a merge decision and, typically,
+    several correct non-merges to get right in the same call.
+
+    Parameters
+    ----------
+    dataset : BenchmarkDataset
+        Benchmark providing entities and ground truth
+    target_block_size : int
+        Target entities per block for the real FAISS blocking pipeline
+    sample_size : int | None
+        If set, sample this many (left, right) ground-truth pairs' entities
+        plus surrounding context before blocking, to bound cost. None blocks
+        the full dataset.
+    seed : int
+        Random seed for sampling
+
+    Returns
+    -------
+    list[EntityBlock]
+        Blocks that contain at least one true matching pair
+    """
+    left, right = dataset.to_entities()
+    all_entities = left + right
+
+    if sample_size is not None:
+        rng = random.Random(seed)
+        gt_list = sorted(dataset.ground_truth)
+        rng.shuffle(gt_list)
+        sampled_ids: set[int] = set()
+        for a, b in gt_list:
+            if len(sampled_ids) >= sample_size:
+                break
+            sampled_ids.add(a)
+            sampled_ids.add(b)
+        entity_by_id = {e.id: e for e in all_entities}
+        all_entities = [entity_by_id[i] for i in sampled_ids if i in entity_by_id]
+
+    pipeline = SemanticBlockingPipeline(target_block_size=target_block_size)
+    blocks, _ = pipeline.run(all_entities)
+
+    labeled_blocks = []
+    for block in blocks:
+        ids_in_block = {e.id for e in block.entities}
+        has_true_pair = any(
+            a in ids_in_block and b in ids_in_block for a, b in dataset.ground_truth
+        )
+        if has_true_pair:
+            labeled_blocks.append(block)
+    return labeled_blocks
+
+
+def gold_resolution_for_block(
+    block: EntityBlock, ground_truth: set[tuple[int, int]]
+) -> BlockResolution:
+    """Compute the correct BlockResolution for a block from ground truth pairs.
+
+    Groups the block's entities into connected components under the
+    ground-truth match relation restricted to this block, then applies the
+    MDM convention (docs/ID_INVARIANTS.md Section 3): the lowest id in each
+    component becomes the master, all others go into its source_ids.
+
+    Parameters
+    ----------
+    block : EntityBlock
+        Block of entities (real, pre-mapping ids)
+    ground_truth : set[tuple[int, int]]
+        All true (left_id, right_id) matching pairs for the dataset
+
+    Returns
+    -------
+    BlockResolution
+        Gold resolution: matches, merged/standalone resolved_entities
+    """
+    ids_in_block = {e.id for e in block.entities}
+    relevant_pairs = [(a, b) for a, b in ground_truth if a in ids_in_block and b in ids_in_block]
+
+    parent: dict[int, int] = {e.id: e.id for e in block.entities}
+
+    def find(x: int) -> int:
+        while parent[x] != x:
+            x = parent[x]
+        return x
+
+    def union(a: int, b: int) -> None:
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[max(ra, rb)] = min(ra, rb)
+
+    for a, b in relevant_pairs:
+        union(a, b)
+
+    components: dict[int, list[int]] = {}
+    for e in block.entities:
+        components.setdefault(find(e.id), []).append(e.id)
+
+    entity_by_id = {e.id: e for e in block.entities}
+    resolved_entities: list[Entity] = []
+    matches = []
+    for member_ids in components.values():
+        member_ids.sort()
+        master_id = member_ids[0]
+        master = entity_by_id[master_id]
+        if len(member_ids) > 1:
+            resolved_entities.append(master.model_copy(update={"source_ids": member_ids[1:]}))
+            for other_id in member_ids[1:]:
+                matches.append(
+                    {"entity_a_id": master_id, "entity_b_id": other_id, "is_match": True}
+                )
+        else:
+            resolved_entities.append(master.model_copy())
+
+    from serf.dspy.types import MatchDecision
+
+    return BlockResolution(
+        block_key=block.block_key,
+        matches=[
+            MatchDecision(
+                entity_a_id=m["entity_a_id"],
+                entity_b_id=m["entity_b_id"],
+                is_match=True,
+                confidence=1.0,
+                reasoning="ground truth",
+            )
+            for m in matches
+        ],
+        resolved_entities=resolved_entities,
+        was_resolved=any(len(v) > 1 for v in components.values()),
+        original_count=len(block.entities),
+        resolved_count=len(resolved_entities),
+    )
+
+
+def resolution_to_pairs(resolution: BlockResolution) -> set[tuple[int, int]]:
+    """Extract all implied (a, b) match pairs from a resolution's source_ids.
+
+    Parameters
+    ----------
+    resolution : BlockResolution
+        A resolution (gold or predicted)
+
+    Returns
+    -------
+    set[tuple[int, int]]
+        Normalized (min_id, max_id) pairs implied by every merge
+    """
+    pairs: set[tuple[int, int]] = set()
+    for e in resolution.resolved_entities:
+        for sid in e.source_ids or []:
+            if sid != e.id:
+                pairs.add((min(e.id, sid), max(e.id, sid)))
+    return pairs
+
+
+def build_gepa_examples(
+    blocks: list[EntityBlock], ground_truth: set[tuple[int, int]]
+) -> list[dspy.Example]:
+    """Build GEPA-ready examples: one per block, ids mapped exactly as
+    EntityMatcher would map them for a real LLM call, with a mapped gold
+    resolution as the label.
+
+    Parameters
+    ----------
+    blocks : list[EntityBlock]
+        Labeled blocks (real, pre-mapping ids)
+    ground_truth : set[tuple[int, int]]
+        All true (left_id, right_id) matching pairs for the dataset
+
+    Returns
+    -------
+    list[dspy.Example]
+        Examples with inputs block_records/schema_info/few_shot_examples
+        and label resolution, all in block-local mapped-id space
+    """
+    from serf.match.matcher import SCHEMA_INFO
+
+    few_shot = get_default_few_shot_examples()
+    examples = []
+    for block in blocks:
+        gold = gold_resolution_for_block(block, ground_truth)
+        mapper = UUIDMapper()
+        mapped_block = mapper.map_block(block)
+        mapped_gold = _map_gold_resolution(gold, mapper)
+
+        block_records = "\n".join(str(e.model_dump(mode="json")) for e in mapped_block.entities)
+        example = dspy.Example(
+            block_records=block_records,
+            schema_info=SCHEMA_INFO,
+            few_shot_examples=few_shot,
+            resolution=mapped_gold,
+        ).with_inputs("block_records", "schema_info", "few_shot_examples")
+        examples.append(example)
+    return examples
+
+
+def _map_gold_resolution(gold: BlockResolution, mapper: UUIDMapper) -> BlockResolution:
+    """Re-express a gold resolution's real ids as the mapper's mapped ids.
+
+    Parameters
+    ----------
+    gold : BlockResolution
+        Gold resolution in real (pre-mapping) id space
+    mapper : UUIDMapper
+        A mapper that has already run map_block on the corresponding block
+
+    Returns
+    -------
+    BlockResolution
+        Gold resolution with ids translated into mapped-id space
+    """
+    mapped_entities = []
+    for e in gold.resolved_entities:
+        mapped_id = mapper._id_to_int[e.id]
+        mapped_source_ids = [mapper._id_to_int[sid] for sid in (e.source_ids or [])]
+        mapped_entities.append(
+            e.model_copy(update={"id": mapped_id, "source_ids": mapped_source_ids or None})
+        )
+    return gold.model_copy(update={"resolved_entities": mapped_entities})
+
+
+def er_metric(
+    gold: dspy.Example,
+    pred: dspy.Prediction,
+    trace: object = None,
+    pred_name: str | None = None,
+    pred_trace: object = None,
+) -> dspy.Prediction:
+    """Score a BlockMatch prediction against gold and explain the score.
+
+    Parameters
+    ----------
+    gold : dspy.Example
+        Example with the gold `resolution`
+    pred : dspy.Prediction
+        Model output with a predicted `resolution`
+    trace : object
+        Unused; part of the GEPA metric protocol
+    pred_name : str | None
+        Unused; part of the GEPA metric protocol
+    pred_trace : object
+        Unused; part of the GEPA metric protocol
+
+    Returns
+    -------
+    dspy.Prediction
+        `score` (pairwise F1 in [0, 1]) and `feedback` (text explaining
+        missed/extra merges, for the reflection_lm to read)
+    """
+    from serf.eval.metrics import f1_score
+
+    try:
+        gold_pairs = resolution_to_pairs(gold.resolution)
+        pred_pairs = resolution_to_pairs(pred.resolution)
+    except Exception as e:
+        return dspy.Prediction(score=0.0, feedback=f"Failed to parse resolution: {e}")
+
+    score = f1_score(pred_pairs, gold_pairs)
+    missed = gold_pairs - pred_pairs
+    extra = pred_pairs - gold_pairs
+    feedback_parts = [f"Pairwise F1: {score:.3f}."]
+    if missed:
+        feedback_parts.append(f"Missed {len(missed)} true match(es): {sorted(missed)[:10]}.")
+    if extra:
+        feedback_parts.append(
+            f"Incorrectly merged {len(extra)} non-match(es): {sorted(extra)[:10]}."
+        )
+    if not missed and not extra:
+        feedback_parts.append("All matches correct.")
+    return dspy.Prediction(score=score, feedback=" ".join(feedback_parts))
+
+
+def evaluate_program(
+    program: Callable[..., dspy.Prediction], examples: list[dspy.Example]
+) -> float:
+    """Average pairwise F1 of a program over a set of examples.
+
+    Parameters
+    ----------
+    program : Callable[..., dspy.Prediction]
+        A BlockMatch-shaped callable (e.g. dspy.Predict(BlockMatch) or GEPA output)
+    examples : list[dspy.Example]
+        Examples with gold `resolution` labels
+
+    Returns
+    -------
+    float
+        Mean pairwise F1 across examples (0.0 for examples where the call fails)
+    """
+    scores = []
+    for ex in examples:
+        try:
+            pred = program(
+                block_records=ex.block_records,
+                schema_info=ex.schema_info,
+                few_shot_examples=ex.few_shot_examples,
+            )
+            scores.append(er_metric(ex, pred).score)
+        except Exception as e:
+            logger.warning(f"Evaluation call failed: {e}")
+            scores.append(0.0)
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def run_gepa_optimization(
+    dataset_name: str,
+    task_model: str,
+    reflection_model: str,
+    sample_size: int = 60,
+    target_block_size: int = 30,
+    auto: str = "light",
+    seed: int = 0,
+) -> dict[str, object]:
+    """End-to-end: build labeled blocks, split, optimize BlockMatch with GEPA,
+    and evaluate the optimized program against the hand-written baseline on
+    a sealed test split.
+
+    Parameters
+    ----------
+    dataset_name : str
+        Benchmark dataset name (e.g. "dblp-acm")
+    task_model : str
+        Student/task LM, e.g. "gemini/gemini-3.5-flash-lite"
+    reflection_model : str
+        GEPA's reflection_lm, e.g. "gemini/gemini-3.7-flash"
+    sample_size : int
+        Number of ground-truth pairs' entities to sample before blocking
+    target_block_size : int
+        Target entities per block
+    auto : str
+        GEPA's auto budget: "light", "medium", or "heavy"
+    seed : int
+        Random seed for the train/val/test split
+
+    Returns
+    -------
+    dict[str, object]
+        baseline_f1, optimized_f1, n_train, n_val, n_test, optimized_program
+    """
+    import os
+
+    from serf.dspy.budget import TrackedLM, get_ledger
+
+    dataset = BenchmarkDataset.download(dataset_name)
+    blocks = build_candidate_blocks(
+        dataset, target_block_size=target_block_size, sample_size=sample_size, seed=seed
+    )
+    logger.info(f"Built {len(blocks)} labeled blocks (>=1 true pair) from {dataset_name}")
+
+    examples = build_gepa_examples(blocks, dataset.ground_truth)
+    rng = random.Random(seed)
+    rng.shuffle(examples)
+    n = len(examples)
+    n_train = max(1, int(n * 0.5))
+    n_val = max(1, int(n * 0.25))
+    trainset = examples[:n_train]
+    valset = examples[n_train : n_train + n_val]
+    testset = examples[n_train + n_val :]
+    logger.info(f"Split: {len(trainset)} train, {len(valset)} val, {len(testset)} test (sealed)")
+
+    api_key = os.environ["GEMINI_API_KEY"]
+    task_lm = TrackedLM(task_model, ledger=get_ledger("gemini"), api_key=api_key, temperature=1.0)
+    reflection_lm = TrackedLM(
+        reflection_model, ledger=get_ledger("gemini"), api_key=api_key, temperature=1.0
+    )
+    dspy.configure(lm=task_lm, adapter=dspy.XMLAdapter())
+
+    student = cast(dspy.Module, dspy.Predict(BlockMatch))
+    baseline_f1 = evaluate_program(student, testset)
+    logger.info(f"Baseline (hand-written) test F1: {baseline_f1:.4f}")
+
+    auto_literal = cast(Any, auto)
+    optimizer = dspy.GEPA(
+        metric=cast(Any, er_metric),
+        reflection_lm=reflection_lm,
+        auto=auto_literal,
+        num_threads=4,
+        track_stats=True,
+    )
+    optimized = optimizer.compile(student, trainset=trainset, valset=valset)
+
+    optimized_f1 = evaluate_program(optimized, testset)
+    logger.info(f"Optimized (GEPA) test F1: {optimized_f1:.4f}")
+
+    return {
+        "baseline_f1": baseline_f1,
+        "optimized_f1": optimized_f1,
+        "n_train": len(trainset),
+        "n_val": len(valset),
+        "n_test": len(testset),
+        "optimized_program": optimized,
+    }

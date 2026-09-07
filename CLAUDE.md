@@ -37,13 +37,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
     - **match/** - Matching module - matching entire blocks at once with Gemini models
     - **merge/** - Merging module - Record and field-level merging utilities
     - **edge/** - Edge resolution module - deduplication of edges after node merges
-  - **baml_src/** - BAML templates for LLM extraction
 - **data/** - Default data storage directory
 - **tests/** - Test suite
 
 ### Key Technologies
 
-- **LLM Integration**: BAML (Boundary AI Markup Language) for structured extraction
+- **LLM Integration**: DSPy signatures with `dspy.XMLAdapter` for structured output
 - **DSPy**: Programming—not prompting—LMs - a framework for building and optimizing LLM pipelines. See the Project's @assets/DSPy.md [DSPy Programming Guide](assets/DSPy.md) and read the docs at [DSPy Documentation](https://dspy.ai/api/).
 - **Sentence Transformers**: A library for state-of-the-art sentence embeddings
 - **Qwen3 Embeddings**: Top MTEB leaderboard embedding across most categories.
@@ -100,8 +99,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - Read the README - consult the README before taking action. The README contains information about the project and how to use it. If you need to add a new command or change an existing one, consult the README first.
 - Update the README - if appropriate, update the README with any new commands or changes to existing commands. The README should always reflect the current state of the project.
 - Use uv - use uv for dependency management and packaging. Do not use `pip`, `uv pip`, `conda`, or `poetry`. Use `uv add` to add dependencies, `uv sync` to install, `uv run` to execute. Never suggest `pip install` in code, docs, or error messages.
-- Use DSPy - use DSPy signatures and modules for all LLM-related code. Use the BAMLAdapter for structured output formatting.
-- Use PySpark for ETL - use PySpark for ETL and batch data processing to build our knowledge graph. Do not use any other libraries or frameworks for data processing. Use PySpark to take the output of our BAML client and transform it into a knowledge graph.
+- Use DSPy - use DSPy signatures and modules for all LLM-related code. Use `dspy.XMLAdapter` for structured output formatting.
+- Use PySpark for ETL - use PySpark for ETL and batch data processing to build our knowledge graph. Do not use any other libraries or frameworks for data processing. Use PySpark to take the output of the DSPy matching pipeline and transform it into a knowledge graph.
 - PySpark - Do not break up dataflow into functions for loading, computing this, computing that, etc. Create a single function that performs the entire dataflow at hand. Do not check if columns exist, assume they do. Do not check if paths exist, assume they do. We prefer a more linear flow for Spark scripts and simple code over complexity. This only applies to Spark code.
 - PySpark - assume the fields are present, don't handle missing fields unless I ask you to.
 - PySpark - don't handle obscure edge cases, just implement the logic that I ask DIRECTLY.
@@ -187,7 +186,6 @@ In addition, when writing PySpark code:
 
 ### Common Pitfalls to Avoid
 
-- Never edit files in `src/serf/baml_client/` - always regenerate
 - Don't use relative imports - always use absolute imports
 - Don't hardcode paths or config values - use config.yml
 - Don't break up Spark dataflows into multiple functions

@@ -1,6 +1,6 @@
 # SERF: Agentic Semantic Entity Resolution Framework -- Build Plan
 
-This document is a comprehensive implementation plan for building **SERF** (Semantic Entity Resolution Framework) -- an open-source, agentic system for semantic entity resolution. It is designed for an AI coding agent (Cursor Agent grind mode) to execute overnight (8-12 hours) and produce a working, tested framework.
+This document is a comprehensive implementation plan for building **SERF** (Semantic Entity Resolution Framework) -- an open-source, agentic system for semantic entity resolution. It is designed for a frontier AI coding agent to execute with engineering judgment and produce a working, tested framework. Step sequencing reflects technical dependencies and complexity, not calendar-time estimates; a more capable coding agent should exercise judgment on implementation details rather than requiring exhaustive line-by-line prescription.
 
 **Repository:** [github.com/Graphlet-AI/serf](https://github.com/Graphlet-AI/serf)
 
@@ -25,6 +25,29 @@ This document is a comprehensive implementation plan for building **SERF** (Sema
 
 ---
 
+## 0. Research Phase Decisions (2026-03-08)
+
+This plan is aligned to the current implementation directives:
+
+1. Migrate from Poetry to `uv` first, before complete system implementation.
+2. Exclude the BAML runtime entirely; SERF's own code never depends on it (Abzu, the external reference codebase discussed in Section 3, does use BAML, but that is a fact about Abzu, not a SERF design choice). For structured LLM output formatting, SERF uses DSPy's built-in `dspy.XMLAdapter` (see decision #18).
+3. Enforce a hard Gemini spend cap of `$100` for the build.
+4. Use Gemini 3.5 Flash-Lite for ER pipeline operations; allow limited Gemini 3.7 Flash (see decision #16) for validation data and GEPA/reflection workflows.
+5. Complete research and document updates first, then pause for instruction before full implementation.
+6. Start with entities represented by all three key benchmark tracks: DBLP-ACM, Walmart-Amazon, DBLP-Scholar.
+7. Pin PySpark to `4.1+`.
+8. Prioritize benchmark validation order: DBLP-ACM, then Walmart-Amazon, then DBLP-Scholar.
+9. Reference Abzu prompt semantics and semantic blocking code directly; defer name-based blocking.
+10. Remove calendar/time-boxed "grind mode" framing from the plan. Sequencing and scope are defined by technical dependency and complexity, reflecting execution by a more capable coding agent that needs less exhaustive prescriptive hand-holding.
+11. Adopt `dspy.GEPA` as the primary reflective prompt optimizer, using Gemini 3.7 Flash (see decision #16) as the `reflection_lm` and Gemini 3.5 Flash-Lite as the task LM being optimized -- this directly implements the "reflection by DSPy GEPA" validation/optimization use case within the budget guard.
+12. Adopt `dspy.Flex` (Section 7.8) as a secondary, post-baseline enhancement that lets `dspy.GEPA` optimize the _code structure_ of match/merge signatures, not just their prompts -- enabling automatic discovery of cost-saving cascades (Python-only resolution for easy cases, LM calls reserved for ambiguous ones). Treat it as experimental and optional given its Deno sandbox dependency; implement it only after the fixed-structure GEPA-optimized baseline (item 11) is working.
+13. Move the ER pipeline task LM from the now-deprecated Gemini 2.0 Flash (shut down June 1, 2026) to **Gemini 3.5 Flash-Lite** -- the current generation's most cost-efficient GA model ($0.30/$2.50 per 1M input/output tokens), chosen over pricier current-generation options (Gemini 3.6 Flash, Gemini 3.5 Flash) to preserve the same cost-efficiency posture as the original plan. Gemini 2.5 Pro remains the `reflection_lm`/validation model: it is not deprecated and is meaningfully cheaper than the newer Gemini 3.1 Pro Preview, so switching it would only add cost without a corresponding need addressed by this change. **(Superseded by decision #15 below.)**
+14. In addition to the Gemini models above, also evaluate **`gpt-oss-120b-maas`** (Section 7.9) -- OpenAI's open-weight 120B model served as a Model-as-a-Service on Vertex AI -- as a secondary, benchmark-comparison-only model. It is not part of the production ER pipeline and is tracked under its own small, separate budget ledger, not the $100 Gemini cap in Section 9.6 (its Vertex AI billing path and auth are entirely separate from the Gemini Developer API).
+15. Per explicit instruction, move the `reflection_lm`/validation model off **Gemini 2.5 Pro** entirely (superseding decision #13's earlier reasoning) to **Gemini 3 Flash Preview** -- a newer-generation model priced at $0.50/$3.00 per 1M input/output tokens, meeting the "$0.50 or less per 1M tokens" (input) requirement while remaining meaningfully more capable than the Flash-Lite task model, which is the point of a `reflection_lm` being a stronger judge than the model it is optimizing. This is a **Preview**-tier model (not GA); if it becomes unavailable or unstable, fall back to Gemini 3.1 Flash-Lite ($0.25/1M input) as the next-cheapest newer-generation alternative. **(Superseded by decision #16 below.)**
+16. Per explicit instruction to recheck model selection focused on value now that newer Gemini models have shipped, move the `reflection_lm`/validation model again (superseding decision #15) from the now-stale **Gemini 3 Flash Preview** (a Dec 2025 preview build, since surpassed on most agentic/coding benchmarks by the current Flash-Lite task model itself) to **Gemini 3.7 Flash** -- a GA, Stable-tier model ($0.75/$3.75 per 1M input/output tokens) that is a genuine capability jump over prior Flash releases. Gemini 3.8 Flash (released Sept 2, 2026, identically priced) is _not_ chosen here: independent benchmarking shows it gains most on long-horizon agentic workflows while leaving coding/structured-extraction quality "essentially flat" versus 3.7 Flash, at roughly double the thinking-token consumption per call -- since GEPA reflection and validation-data labeling are bounded, structured judgment tasks rather than long-horizon agentic loops, 3.7 Flash delivers equivalent quality for this role at meaningfully lower effective cost, making it the better-value pick. Gemini 3.5 Flash-Lite remains the task LM unchanged: no newer Flash-Lite-tier model has shipped since it went GA (Jul 21, 2026), and it remains a decisive capability jump over Gemini 3.1 Flash-Lite for only a marginal price increase ($0.30 vs $0.25 input; $2.50 vs $1.50 output), so it is still the best-value choice in its tier.
+17. Per explicit instruction, adopt a **two-phase model strategy** (Section 9.7) for the pipeline's task/student LM: (a) **Calibration phase** -- use Gemini 3.5 Flash-Lite, the cheapest available option, to empirically establish the maximum number of records `BlockMatch`/`EntityMerge` can reliably match and merge in a single block, by sweeping block sizes on a fixed labeled sample per benchmark dataset and selecting the largest size that keeps error/missing-record rates and F1 within tolerance; (b) **Paper phase** -- once block size is calibrated, switch the task/student LM to **`gpt-oss-120b-maas`** for all headline, published benchmark results across DBLP-ACM, Walmart-Amazon, and DBLP-Scholar, run at the block size established in (a), for open-weight reproducibility. This elevates `gpt-oss-120b-maas` from the secondary, comparison-only role in decision #14 to the primary paper-reported model. Gemini remains the framework's documented default model for general (non-paper) usage and continues to serve as the `reflection_lm` for GEPA optimization (decision #16), since SERF itself stays model-agnostic and reflection is a separate, model-agnostic judging step regardless of which model is the current task LM.
+18. Per explicit instruction to remove all BAML references and use `XMLAdapter` instead of `BAMLAdapter`: SERF's DSPy configuration uses the built-in `dspy.XMLAdapter` (DSPy 3.x, `ChatAdapter` subclass that renders fields as XML tags with nested-schema hints for complex Pydantic types) for all structured LLM output formatting, everywhere the plan or codebase previously referenced a `BAMLAdapter`. This removes the earlier custom `src/serf/dspy/baml_adapter.py` module entirely -- including the redundancy of maintaining a hand-rolled copy of a formatting technique that DSPy 3.3+ now also ships natively as `dspy.adapters.baml_adapter.BAMLAdapter` -- since `XMLAdapter` achieves the same goal (token-efficient, LM-steerable structured output for nested Pydantic types) as a fully native, tested DSPy adapter with no BAML naming or lineage at all. This decision applies strictly to SERF's own implementation; it does not rewrite historical, factual references to Abzu's actual `.baml` files in Section 3 (Abzu Code Guide), since those describe the external reference codebase being ported from, not a SERF design choice.
+
 ## 1. Introduction and Motivation
 
 Entity resolution (ER) -- the process of determining when two or more records refer to the same real-world entity -- is among the oldest and most important problems in data management. The Fellegi-Sunter model (1969) formalized probabilistic record linkage, and decades of research have produced systems based on string similarity metrics (Jaccard, Jaro-Winkler, Levenshtein), rule-based blocking, and supervised classifiers. These traditional systems, exemplified by production platforms like Senzing and Informatica MDM, are fast and auditable but fundamentally brittle: they require hand-crafted rules per domain, break on schema variations, and cannot capture the deep semantic understanding needed when data sources use different terminology for the same concepts.
@@ -43,14 +66,14 @@ Rather than the traditional pairwise comparison approach, SERF matches entire bl
 
 Senzing's Jeff Jonas has argued that LLMs are [too slow, too expensive, and too prone to hallucination](https://senzing.com/entity-resolution-generative-ai/) for production ER. SERF addresses each concern:
 
-| Concern           | SERF's Counter                                                                                  |
-| ----------------- | ----------------------------------------------------------------------------------------------- |
-| Too slow          | Semantic blocking reduces LLM calls to O(blocks); PySpark parallelizes across clusters          |
-| Too expensive     | Gemini 2.0 Flash at $0.10/1M tokens; block-level matching reduces calls 50x or more vs pairwise |
-| Hallucinations    | BAML structured outputs + DSPy optimization + multi-round convergence                           |
-| Not deterministic | Temperature=0, multiple convergence rounds, confidence scoring                                  |
-| Not explainable   | Chain-of-thought reasoning, match rationale in structured output fields                         |
-| Not scalable      | PySpark for ETL, embedding models for blocking, LLMs only for semantic decisions                |
+| Concern           | SERF's Counter                                                                                             |
+| ----------------- | ---------------------------------------------------------------------------------------------------------- |
+| Too slow          | Semantic blocking reduces LLM calls to O(blocks); PySpark parallelizes across clusters                     |
+| Too expensive     | Gemini 3.5 Flash-Lite at $0.30/1M input tokens; block-level matching reduces calls 50x or more vs pairwise |
+| Hallucinations    | DSPy structured outputs + Pydantic typing + multi-round convergence                                        |
+| Not deterministic | Temperature=0, multiple convergence rounds, confidence scoring                                             |
+| Not explainable   | Chain-of-thought reasoning, match rationale in structured output fields                                    |
+| Not scalable      | PySpark for ETL, embedding models for blocking, LLMs only for semantic decisions                           |
 
 The fundamental insight is that SERF uses LLMs **where they add unique value** (semantic understanding, schema alignment, complex matching decisions) and traditional scalable tools (embeddings, FAISS, PySpark, Iceberg) for everything else.
 
@@ -74,7 +97,7 @@ The concept of **Knowledge Graph Factories** ([blog post](https://blog.graphlet.
 | --------- | ------------------------- | --------------------------------- | ---------------------------------- | --------------------------- |
 | 2019-2022 | Deep Discovery / Graphlet | Sentence-transformers             | Embedding similarity + classifiers | Rule-based field resolution |
 | 2023-2025 | Abzu                      | FAISS IVF + sentence-transformers | Gemini via BAML (block-level)      | LLM-guided via BAML         |
-| 2026+     | **SERF**                  | FAISS IVF + Qwen3 embeddings      | DSPy agents + Gemini/Claude        | DSPy-optimized LLM merging  |
+| 2026+     | **SERF**                  | FAISS IVF + Qwen3 embeddings      | DSPy agents + Gemini models        | DSPy-optimized LLM merging  |
 
 ---
 
@@ -82,23 +105,21 @@ The concept of **Knowledge Graph Factories** ([blog post](https://blog.graphlet.
 
 Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patterns that SERF should adopt and generalize. The agent building SERF should study these files carefully:
 
-### 3.1 BAML Templates (LLM Prompt Engineering)
+### 3.1 Abzu Prompt and Client References (Port Semantics Only)
 
-- **`baml_src/multi_er.baml`** -- The core multi-entity resolution prompt. Defines `MultiEntityResolution` and `FewShotMultiEntityResolution` functions using `Gemini20Flash`. Key types: `CompanyList` (block_key, block_key_type, block_size, companies), `MergeCompany` (id, source_ids only -- no name field). The LLM receives an entire block of companies and returns merged results with comprehensive ID tracking (lowest input ID becomes master, ALL OTHER IDs go to `source_ids`). Company class includes `match_skip_history` field for tracking which iterations skipped each company. Test cases cover two-company merges, UUID tracking, and multiple source UUID accumulation. **This pattern must be preserved in SERF using DSPy signatures instead of BAML.**
+- **`baml_src/multi_er.baml`** -- Primary prompt semantics to port into DSPy signatures. Preserve ID-tracking behavior exactly: lowest input ID becomes master, all others go into `source_ids`, and merged records preserve full source lineage. SERF should reuse this logic in DSPy signatures and Python code (no BAML runtime dependency; see decisions #2 and #18).
 
 - **`baml_src/article.baml`** -- Base schema definitions. `Company` class with fields: id, uuid, name, cik, ticker, description, website_url, headquarters_location, jurisdiction, revenue_usd, employees, founded_year, ceo, linkedin_url, source_ids, source_uuids, match_skip, match_skip_reason, match_skip_history. Also defines `Ticker` (id, uuid, symbol, exchange), `Exchange` enum (50+ Bloomberg codes), and `Relationship` types.
 
-- **`baml_src/edge_er.baml`** -- Edge resolution prompt. Defines comprehensive types: `EdgeRelationshipInput` (type, description, amount, currency, date, percentage, quarter, url), `EdgeBlock` (src_name, dst_name, relationships, block_size), `MergedEdgeRelationship`, and `EdgeResolutionResult` (merged_relationships, was_resolved, original_count, resolved_count). The `ResolveEdgeBlock` function uses `Gemini20Flash` with rules for merging same-deal relationships across different types (e.g., "Supplier" + "SupplyAgreement"). Test cases cover duplicate investments and distinct relationships.
+- **`baml_src/edge_er.baml`** -- Reference edge-merge semantics for `serf.edge.resolver` prompt behavior. Port intent and output constraints into DSPy signatures and typed Python models.
 
-- **`baml_src/clients.baml`** -- LLM client configurations. Active clients: `Gemini20Flash` (60s/120s timeouts), `Gemini20FlashLong` (180s/180s timeouts, same model), `Gemini25FlashLite` (60s/120s timeouts). All use `temperature 0.0` and exponential retry policy (3 retries, 300ms base delay, 1.5x multiplier, 10s max). Commented out: O3Mini, GPT4o, Gemini25Flash, Gemini25Pro, fallback strategies.
+- **`baml_src/clients.baml`** -- Reference timeout/retry policy values to carry over into DSPy LM configuration (`temperature=0`, exponential retries, and bounded request timeouts).
 
-- **`baml_src/company_er.baml`** -- Pairwise company matching for cases where blocking isn't sufficient.
-
-- **`baml_src/final_er.baml`** -- Final deduplication for companies sharing the same UUID across different blocking iterations.
+- **`baml_src/company_er.baml`**, **`baml_src/final_er.baml`** -- Secondary references for fallback and final-dedupe semantics; optional for first complete implementation.
 
 ### 3.2 Python ER Modules
 
-- **`abzu/er/uuid.py`** (574 lines) -- **Critical pattern.** `UUIDMapper` maps UUIDs to consecutive integers for LLM processing (LLMs work better with small integers than UUIDs). `process_block_with_uuid_mapping()` is the core async function: (1) maps UUIDs to ints, (2) strips source_uuids before sending to LLM (avoids context bloat), (3) calls BAML, (4) restores source_uuids from cached data, (5) recovers missing companies via two-phase recovery (Step 1: add back missing UUIDs to existing output companies; Step 2: recover entire missing companies with `match_skip_reason = "missing_in_match_output"`). Ticker normalization handles str, list, Row, dict formats with Exchange enum validation. **This UUID-to-integer mapping pattern is essential for SERF.**
+- **`abzu/er/uuid.py`** (574 lines) -- **Critical pattern.** `UUIDMapper` maps UUIDs to consecutive integers for LLM processing (LLMs work better with small integers than UUIDs). `process_block_with_uuid_mapping()` is the core async function: (1) maps UUIDs to ints, (2) strips source_uuids before sending to LLM (avoids context bloat), (3) calls LLM match/merge logic, (4) restores source_uuids from cached data, (5) recovers missing companies via two-phase recovery (Step 1: add back missing UUIDs to existing output companies; Step 2: recover entire missing companies with `match_skip_reason = "missing_in_match_output"`). Ticker normalization handles str, list, Row, dict formats with Exchange enum validation. **This UUID-to-integer mapping pattern is essential for SERF.**
 
 - **`abzu/er/match.py`** (537 lines) -- Main matching orchestration. `match_entities()` loads blocks from Parquet (Arrow optimization disabled to preserve Python lists), validates block schema via `validate_block_schema()`, separates singleton/multi-company blocks, processes multi-company blocks via `process_blocks_async()` with semaphore-based rate limiting. Includes `backup_file()` for file/directory backup before overwriting (keeps only most recent backup). Comprehensive error recovery: marks error-recovered companies with `match_skip_reason = "error_recovery"`, updates `match_skip_history` with current iteration number, and logs detailed recovery statistics. Always generates new UUIDs for resolved companies.
 
@@ -106,13 +127,13 @@ Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patter
 
 - **`abzu/er/faiss.py`** (142 lines) -- `FAISSBlocker` class using `IndexIVFFlat` with inner product metric. Calculates `nlist` from `target_block_size`, caps at `sqrt(n)`. Optional `max_distance` filtering. Returns `{block_key: [uuid1, uuid2, ...]}`.
 
-- **`abzu/er/edge_match.py`** (176 lines) -- Async edge resolution: `process_edge_block()`, `resolve_edge_blocks()`, `run_edge_resolution()`. Uses `EdgeBlock`, `EdgeRelationshipInput` BAML types with semaphore rate limiting. Error recovery returns original relationships unchanged.
+- **`abzu/er/edge_match.py`** (176 lines) -- Async edge resolution: `process_edge_block()`, `resolve_edge_blocks()`, `run_edge_resolution()`. Uses typed edge blocks with semaphore rate limiting. Error recovery returns original relationships unchanged.
 
 - **`abzu/er/few_shot.py`** (80 lines) -- Few-shot example generation for merge prompts. `company_dicts_to_baml()` converts dicts to `MergeCompanyExampleSet`. Hardcoded `company_id_tracking_dicts` example demonstrating merge of companies with ids 1 (source_ids [3,7]) and 22 (source_ids [2,4]) into master id=1, source_ids=[22,3,7,2,4].
 
 - **`abzu/er/metrics.py`** (161 lines) -- `BlockInfo`, `BlockingMetrics`, `IterationMetrics` TypedDicts. `IterationMetrics` includes `overall_reduction_pct` for cumulative tracking from original baseline. `get_all_iteration_metrics()` computes both per-round and overall reduction by tracking original company count from iteration 1. Also provides `get_blocking_metrics()`, `get_matching_metrics()`, and `get_evaluation_metrics()`.
 
-- **`abzu/er/acronyms.py`** (88 lines) -- **Company name normalization.** `get_basename()` uses `cleanco` library for corporate suffix removal (Inc., LLC, etc.). `get_corporate_ending()` extracts the corporate ending. `get_acronyms()` generates acronyms from cleaned company names, filtering multilingual stop words via `get_multilingual_stop_words()`. Used by name-based blocking for key generation.
+- **`abzu/er/acronyms.py`** (88 lines) -- Name normalization utilities. Keep this as optional preprocessing support, but do not prioritize Abzu's name-based blocking path in the first complete SERF implementation.
 
 ### 3.3 PySpark ER Modules
 
@@ -120,7 +141,7 @@ Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patter
 
 - **`abzu/spark/er_eval.py`** (601 lines) -- Post-match evaluation with iteration-aware validation. `evaluate_er_matches()` explodes resolved companies, deduplicates exact copies, splits into BAML-processed vs skipped companies. Validates source_uuids against ORIGINAL raw companies data (always iteration 0). For iteration 2+, loads previous iteration output for comparison and validates against ALL historical UUIDs from all previous iterations. Comprehensive metrics: `iteration_input_companies`, `total_original_companies`, `companies_that_went_into_matching`, `skipped_records`, `unique_baml_processed`, `reduction_from_matching`, `ids_dropped_by_baml`. Match skip reason analysis: `singleton_block_count`, `error_recovery_count`, `missing_uuid_recovery_count`, `missing_primary_uuid_count`, `missing_source_uuid_count`. Overall status assessment with PASS/FAIL checks (coverage >= 99.99%, error < 0.01%, overlap < 1.0%). Saves `er_evaluation_metrics.parquet` with all metrics.
 
-- **`abzu/spark/er_block.py`** (848 lines) -- Name-based (heuristic) blocking. Three strategies combined via union: first-word extraction (`get_first_word()`), acronym extraction (`get_acronym()` via `abzu.er.acronyms`), and domain suffix removal (`remove_domain_suffix()` with 50+ TLD suffixes). `build_blocks()` is the main entry point. Uses `normalize_company_dataframe()` for consistent schema and `create_split_large_blocks_udtf()` for oversized block splitting.
+- **`abzu/spark/er_block.py`** (848 lines) -- Name-based (heuristic) blocking. Reference only. Do not implement this path in the first full SERF build; prioritize semantic blocking from `er_block_semantic.py`.
 
 - **`abzu/spark/refine_kg.py`** -- Maps relationships to resolved company nodes, optional edge ER.
 
@@ -165,13 +186,23 @@ Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patter
 ### 3.6 Patterns to Evolve in SERF
 
 1. **BAML types -> fresh DSPy Pydantic types** -- Do NOT reuse Abzu's BAML-generated types (`abzu.baml_client.types`). Those types were auto-generated by BAML for a company-specific domain. SERF needs fresh, domain-agnostic Pydantic classes designed for DSPy signatures. Study Abzu's types for field patterns and ER metadata (source_ids, source_uuids, match_skip, match_skip_history), but build new classes from scratch.
-2. **BAML templates -> DSPy signatures** -- Replace BAML templates with DSPy `Signature` classes + `BAMLAdapter` for output formatting. The signatures should use the new Pydantic types as input/output fields.
+2. **Abzu prompt semantics -> DSPy signatures** -- Port merge/match prompt behavior into DSPy `Signature` classes and typed Python orchestration. Do not use the BAML runtime or a BAML-styled adapter at all; SERF signatures use DSPy's built-in `dspy.XMLAdapter` for structured output (decision #18).
 3. **Auto-generate entity types from DataFrames** -- When a user provides a PySpark DataFrame (or Parquet/CSV file), SERF should automatically infer Pydantic entity types from the DataFrame schema. This means inspecting `df.schema` (StructType), mapping Spark types to Python types, and generating a Pydantic class with the appropriate fields. The profiler (Section 5.3) identifies which fields are names, identifiers, dates, etc. -- this metadata enriches the generated type with DSPy field descriptions. Use this approach when it simplifies the user experience (e.g., `serf resolve --input data.parquet` should work without the user defining any types). For advanced use cases, users can define their own Pydantic entity types.
-4. **Poetry -> uv** -- Replace Poetry with the faster, standards-compliant uv package manager
-5. **PySpark 3.5 -> 4.1** -- Leverage VARIANT type, Spark Connect, Python Data Source API
+4. **Poetry -> uv (first task)** -- Replace Poetry with the faster, standards-compliant uv package manager before any major feature work.
+5. **PySpark 3.5 -> 4.1+** -- Pin to PySpark 4.1+ and leverage VARIANT type, Spark Connect, and Python Data Source API.
 6. **Parquet -> Iceberg** -- Add ACID transactions, time travel, schema evolution for iterative ER
 7. **Company-only -> domain-agnostic** -- Generalize entity types beyond companies
 8. **Manual orchestration -> agentic** -- DSPy ReAcT agents control the pipeline dynamically
+9. **Name-based blocking deferred** -- Ignore Abzu name-based blocking for the first complete build; focus on semantic blocking quality and scale.
+
+### 3.7 Required Abzu Reference Workflow During Implementation
+
+During implementation, fetch and reference the Abzu repository directly and map behavior before coding:
+
+1. Pull Abzu and inspect prompt semantics in `baml_src/multi_er.baml` (match + merge rules and ID/source lineage behavior).
+2. Port semantic blocking patterns from `abzu/spark/er_block_semantic.py` first.
+3. Ignore `abzu/spark/er_block.py` (name-based blocking) for the first full SERF build.
+4. Preserve operational parity for UUID mapping, missing-record recovery, and iterative evaluation metrics.
 
 ---
 
@@ -179,19 +210,20 @@ Abzu's codebase at `/Users/rjurney/Software/weave` contains the proven ER patter
 
 ### 4.1 Core Technologies
 
-| Component              | Technology                                                                                              | Rationale                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| **Package Manager**    | **uv** (replacing Poetry)                                                                               | 10-100x faster, PEP 621 compliant, built-in Python version management   |
-| **Data Processing**    | **PySpark 4.1**                                                                                         | Python-first, Spark Connect, VARIANT type, Arrow UDFs                   |
-| **Table Format**       | **Apache Iceberg**                                                                                      | ACID transactions, time travel for iteration tracking, schema evolution |
-| **LLM Framework**      | **DSPy 3.x** with `BAMLAdapter`                                                                         | Programming-not-prompting, automatic optimization, Pydantic integration |
-| **Embeddings**         | **Qwen3-Embedding** via sentence-transformers                                                           | Top MTEB leaderboard, multilingual support                              |
-| **Vector Search**      | **FAISS IndexIVFFlat**                                                                                  | Fast approximate nearest neighbor for semantic blocking                 |
-| **Graph Processing**   | **GraphFrames**                                                                                         | Connected components for transitive closure of match decisions          |
-| **LLM Models**         | **Gemini 2.0 Flash** (production), **Gemini 2.5 Flash Lite** (lightweight), **Claude Opus 4** (quality) | Flash for cost efficiency at temp=0; Opus for difficult cases           |
-| **CLI**                | **Click**                                                                                               | Existing SERF pattern, `show_default=True`                              |
-| **Type Checking**      | **zuban** (mypy-compatible)                                                                             | Existing SERF pattern                                                   |
-| **Linting/Formatting** | **Ruff** (replacing black/isort/flake8)                                                                 | Single tool, 10-100x faster                                             |
+| Component               | Technology                                                                                                                                                                                                                                | Rationale                                                                                                                                                                                                                                                             |
+| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Package Manager**     | **uv** (replacing Poetry)                                                                                                                                                                                                                 | 10-100x faster, PEP 621 compliant, built-in Python version management                                                                                                                                                                                                 |
+| **Data Processing**     | **PySpark 4.1+**                                                                                                                                                                                                                          | Python-first, Spark Connect, VARIANT type, Arrow UDFs                                                                                                                                                                                                                 |
+| **Table Format**        | **Apache Iceberg**                                                                                                                                                                                                                        | ACID transactions, time travel for iteration tracking, schema evolution                                                                                                                                                                                               |
+| **LLM Framework**       | **DSPy 3.x** with `dspy.XMLAdapter` for structured outputs                                                                                                                                                                                | Programming-not-prompting, automatic optimization, Pydantic integration; `XMLAdapter` (not a BAML-styled adapter, decision #18) is native, tested DSPy code                                                                                                           |
+| **Prompt Optimization** | **`dspy.GEPA`** (reflective optimizer); **`dspy.Flex`** (secondary, experimental)                                                                                                                                                         | Reflection-driven instruction/code evolution against a feedback metric                                                                                                                                                                                                |
+| **Embeddings**          | **Qwen3-Embedding** via sentence-transformers                                                                                                                                                                                             | Top MTEB leaderboard, multilingual support                                                                                                                                                                                                                            |
+| **Vector Search**       | **FAISS IndexIVFFlat**                                                                                                                                                                                                                    | Fast approximate nearest neighbor for semantic blocking                                                                                                                                                                                                               |
+| **Graph Processing**    | **GraphFrames**                                                                                                                                                                                                                           | Connected components for transitive closure of match decisions                                                                                                                                                                                                        |
+| **LLM Models**          | **Gemini 3.5 Flash-Lite** (block-size calibration + general pipeline default), **Gemini 3.7 Flash** (limited validation/GEPA reflection), **`gpt-oss-120b-maas`** (primary paper-reported model + benchmark comparison, Sections 7.9/9.7) | Flash-Lite calibrates the operating block size cheaply, then hands off to open-weight `gpt-oss-120b-maas` for reproducible published results (decision #17); GA Flash for constrained quality workflows; open-weight OSS model chosen for the paper's reproducibility |
+| **CLI**                 | **Click**                                                                                                                                                                                                                                 | Existing SERF pattern, `show_default=True`                                                                                                                                                                                                                            |
+| **Type Checking**       | **zuban** (mypy-compatible)                                                                                                                                                                                                               | Existing SERF pattern                                                                                                                                                                                                                                                 |
+| **Linting/Formatting**  | **Ruff** (replacing black/isort/flake8)                                                                                                                                                                                                   | Single tool, 10-100x faster                                                                                                                                                                                                                                           |
 
 ### 4.2 Migration from Poetry to uv
 
@@ -207,14 +239,15 @@ requires-python = ">=3.12"
 license = {text = "Apache-2.0"}
 authors = [{name = "Russell Jurney", email = "rjurney@graphlet.ai"}]
 dependencies = [
-    "dspy-ai>=3.0.3",
+    "dspy-ai>=3.3.0",
     "click>=8.1",
     "pyyaml>=6.0",
-    "pyspark>=4.0,<5.0",
+    "pyspark>=4.1,<5.0",
     "sentence-transformers>=5.1",
     "faiss-cpu>=1.9",
     "graphframes>=0.8",
     "pyiceberg>=0.8",
+    "google-auth>=2.0",  # ADC token flow for the gpt-oss-120b-maas Vertex AI endpoint (Section 7.9)
 ]
 
 [project.scripts]
@@ -231,6 +264,7 @@ dev-dependencies = [
 ```
 
 Replace `poetry install` with `uv sync`, `poetry run` with `uv run`, `poetry add` with `uv add`.
+This migration is mandatory as Step 1 and must complete before full pipeline implementation. `dspy-ai>=3.3.0` is the minimum version supporting `dspy.Flex` (Section 7.8). Flex's default sandbox additionally requires **Deno** installed as a system binary (not a Python package) -- this is only needed if/when Flex is actually used (Section 7.8), not for the core `uv sync` install.
 
 ### 4.3 PySpark 4.1 Features to Leverage
 
@@ -274,9 +308,10 @@ serf/
         __init__.py
         types.py                   # Fresh Pydantic entity types for DSPy (exists, rewrite)
         type_generator.py          # Auto-generate entity types from DataFrame schemas (NEW)
-        baml_adapter.py            # BAMLAdapter for DSPy (exists)
         signatures.py              # DSPy signatures for ER (NEW)
         agents.py                  # DSPy ReAcT agents (NEW)
+        optimize.py                # GEPA-based reflective optimization for ER signatures (NEW)
+        budget.py                  # Gemini token/cost budget guard (NEW)
       block/
         __init__.py
         embeddings.py              # Sentence-transformer embedder (NEW)
@@ -312,7 +347,6 @@ serf/
     test_config.py
     test_types.py
     test_type_generator.py
-    test_baml_adapter.py
     test_embeddings.py
     test_faiss_blocker.py
     test_uuid_mapper.py
@@ -328,6 +362,7 @@ serf/
     test_benchmarks.py
     test_signatures.py
     test_agents.py
+    test_optimize.py
     test_cli.py
     test_pipeline_integration.py
   docs/
@@ -529,8 +564,17 @@ serf edges --input data/resolved/ --output data/edges/
 # Load and evaluate against a benchmark dataset
 serf benchmark --dataset walmart-amazon --output data/benchmark_results/
 
+# Compare models on the same benchmark (Section 7.9); gpt-oss-120b-maas uses its own budget ledger
+serf benchmark --dataset walmart-amazon --model gpt-oss-120b-maas --output data/benchmark_results/
+
+# Calibrate the maximum block size Gemini 3.5 Flash-Lite can reliably match/merge (Section 9.7, Phase A)
+serf calibrate --dataset dblp-acm --model gemini-3.5-flash-lite --block-sizes 5,10,20,30,50,75,100,150,200 --sample-size 1500 --output data/calibration/
+
 # Download benchmark datasets
 serf download --dataset walmart-amazon --output data/datasets/
+
+# Optimize ER signatures with GEPA reflection (Gemini 3.7 Flash reflection_lm, budget-guarded)
+serf optimize --signature block-match --trainset data/labeled/train.jsonl --valset data/labeled/val.jsonl
 ```
 
 Key CLI design principles (from CLAUDE.md):
@@ -565,7 +609,7 @@ blocker = SemanticBlocker(target_block_size=50)
 blocks = blocker.transform(companies)  # returns DataFrame with block_key, entities array
 
 # Match and merge (internally: profile → generate types → serialize → LLM → deserialize)
-matcher = EntityMatcher(model="gemini/gemini-2.0-flash", batch_size=10)
+matcher = EntityMatcher(model="gemini/gemini-3.5-flash-lite", batch_size=10)
 resolved = matcher.resolve(blocks)  # returns DataFrame with original cols + ER metadata
 
 # Evaluate
@@ -589,7 +633,7 @@ class Product(Entity):
     price: Optional[float] = None
 
 # Pass explicit type -- skips auto-generation
-matcher = EntityMatcher(model="gemini/gemini-2.0-flash", entity_type=Product)
+matcher = EntityMatcher(model="gemini/gemini-3.5-flash-lite", entity_type=Product)
 resolved = matcher.resolve(blocks)
 ```
 
@@ -601,11 +645,10 @@ For ML engineers building custom ER pipelines with DSPy optimization:
 import dspy
 from serf.dspy.signatures import BlockMatch, EntityMerge
 from serf.dspy.agents import ERAgent
-from dspy.adapters.baml_adapter import BAMLAdapter
 
 # Configure DSPy
-lm = dspy.LM("gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
-dspy.configure(lm=lm, adapter=BAMLAdapter())
+lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
+dspy.configure(lm=lm)
 
 # Use individual signatures
 matcher = dspy.ChainOfThought(BlockMatch)
@@ -659,7 +702,7 @@ class ERAgent(dspy.Module):
 The agent has access to tools for each pipeline phase:
 
 - `profile_dataset(path)` -- Run dataset profiling
-- `create_blocks(path, method, params)` -- Run semantic or name-based blocking
+- `create_blocks(path, method, params)` -- Run semantic blocking
 - `match_blocks(blocks_path, iteration)` -- Run LLM matching on blocks
 - `evaluate_matches(matches_path, raw_path)` -- Compute quality metrics
 - `check_convergence(metrics)` -- Decide if another round is needed
@@ -683,8 +726,8 @@ All three operations in a single DSPy signature. The internal flow from DataFram
 
 1. **DataFrame → Pydantic**: Each block's entity rows are converted to the auto-generated (or user-provided) Pydantic Entity subclass instances, then serialized to JSON
 2. **Pydantic → DSPy**: The JSON block + auto-generated schema description are passed to the `BlockMatch` signature
-3. **DSPy → LLM**: DSPy + BAMLAdapter formats the structured prompt and sends to Gemini
-4. **LLM → Pydantic**: BAMLAdapter parses the structured output into `BlockResolution` Pydantic instances, validating all fields
+3. **DSPy → LLM**: DSPy's `XMLAdapter` formats the structured prompt (XML-tagged fields, with nested-schema hints for complex Pydantic types) and sends it to Gemini
+4. **LLM → Pydantic**: `XMLAdapter` parses the XML-structured output into `BlockResolution` Pydantic instances, validating all fields
 5. **Pydantic → DataFrame**: Resolved entities are converted back to Spark rows using the SparkDantic-derived schema
 
 ```python
@@ -763,12 +806,132 @@ Per-iteration metrics tracked (from Abzu's `IterationMetrics` and `er_eval.py`):
 
 ### 7.7 DSPy Optimization
 
-Use DSPy compilers to optimize ER prompts:
+**`dspy.GEPA` is the primary optimizer for SERF's ER signatures.** GEPA (Genetic-Pareto, Agrawal et al. 2025) is a reflective, evolutionary prompt optimizer: it runs the task program with a student LM, scores each rollout with a metric that returns both a score and natural-language feedback (`dspy.Prediction(score, feedback)`), then uses a separate, stronger `reflection_lm` to read the feedback and propose improved instructions. This maps directly onto SERF's model policy: **Gemini 3.5 Flash-Lite is the student/task LM being optimized, and Gemini 3.7 Flash is the `reflection_lm`.**
 
-- **`BootstrapFewShot`**: Auto-select best few-shot examples from labeled training data
-- **`MIPROv2`**: Jointly optimize instruction text and few-shot examples
-- **`BootstrapFinetune`**: Use expensive model (Gemini Pro) traces to fine-tune cheaper model (Gemini Flash) for production deployment
-- **Metric function**: F1 score on a validation set of labeled entity pairs
+```python
+import dspy
+
+reflection_lm = dspy.LM("gemini/gemini-3.7-flash", api_key=GEMINI_API_KEY, temperature=1.0)
+
+def er_metric(gold, pred, trace=None, pred_name=None, pred_trace=None) -> dspy.Prediction:
+    """Score a BlockMatch/EntityMerge prediction and explain the score.
+
+    Returns both a scalar score (for the Pareto frontier) and a text
+    explanation (fed verbatim to the reflection LM) so GEPA can
+    diagnose specific match/merge/ID-tracking failures.
+    """
+    score = f1_against_ground_truth(gold, pred)
+    feedback = explain_match_merge_errors(gold, pred)  # e.g. missed matches, bad ID lineage
+    return dspy.Prediction(score=score, feedback=feedback)
+
+optimizer = dspy.GEPA(
+    metric=er_metric,
+    reflection_lm=reflection_lm,
+    auto="light",  # bounded budget; escalate to "medium" only if headroom remains
+    num_threads=4,
+    track_stats=True,
+    log_dir="data/gepa_logs",  # supports resume/checkpoint across runs
+)
+optimized_matcher = optimizer.compile(
+    dspy.ChainOfThought(BlockMatch), trainset=labeled_blocks_train, valset=labeled_blocks_val
+)
+```
+
+Key implementation notes:
+
+- **Every GEPA reflection call goes through the budget guard** (`serf.dspy.budget`, Section 9.6) exactly like any other Gemini 3.7 Flash call -- GEPA calls are not exempt from the `$100` hard cap.
+- Use `auto="light"` by default (a small, bounded number of candidate evaluations); only raise to `"medium"`/`"heavy"` if the budget ledger has clear headroom after primary ER validation runs.
+- The `trainset`/`valset` for GEPA should come from the labeled validation data generated per Section 9.6 (Gemini 3.7 Flash, capped at < 2,000 calls), not from unlabeled production data.
+- GEPA is DSPy's current recommended reflective optimizer for complex, feedback-rich tasks (superseding MIPROv2 for this use case), so it is the default choice for optimizing `BlockMatch`, `EntityMerge`, and `EdgeResolve` signatures.
+
+Secondary optimizers, used only if GEPA does not fit a specific need:
+
+- **`BootstrapFewShot`**: Auto-select best few-shot examples from labeled training data when reflection-based instruction rewriting is unnecessary.
+- **`MIPROv2`**: Joint instruction + few-shot optimization; a fallback if GEPA's reflection budget must be avoided entirely.
+- **`BootstrapFinetune`**: Use the stronger validation model's (Gemini 3.7 Flash) traces to fine-tune the cheaper pipeline model (Gemini 3.5 Flash-Lite) for production deployment, as a later-stage optimization beyond the initial build.
+- **Metric function**: All optimizers share the same F1-against-ground-truth metric; GEPA additionally requires the textual feedback channel described above.
+
+### 7.8 `dspy.Flex` for Discoverable Match/Merge Decomposition (Secondary, Post-Baseline)
+
+**`dspy.Flex` (DSPy 3.3.0+, experimental)** is a module whose _implementation_ -- not just its prompt -- is an optimizable parameter. Unlike `dspy.Predict`/`dspy.ChainOfThought`, which fix the program structure and let optimizers only tune instructions, `dspy.Flex` lets `dspy.GEPA` rewrite the module's entire source: splitting a task into multiple predictors, moving deterministic logic into plain Python, and choosing when an LM call is worth its cost at all. This is directly applicable to SERF's match/merge signatures, where the best split between cheap deterministic checks (exact ID/ticker match, string similarity thresholds, numeric field equality) and genuinely ambiguous cases needing LLM judgment is not obvious upfront -- exactly the problem `dspy.Flex` targets, and the pattern demonstrated in DSPy's own reference example is an entity-matching task structurally identical to SERF's `BlockMatch`.
+
+```python
+import dspy
+
+flex_matcher = dspy.Flex("block_records, schema_info -> resolution: BlockResolution")
+
+LLM_CALL_PENALTY = 0.05
+
+def er_flex_metric(gold, pred, trace=None, pred_name=None, pred_trace=None, program_trace=None):
+    """Score a Flex-generated match/merge program and penalize unnecessary LM calls."""
+    score = f1_against_ground_truth(gold, pred)
+    n_calls = len(program_trace) if program_trace else 0
+    adjusted = max(0.0, score - LLM_CALL_PENALTY * n_calls)
+    feedback = explain_match_merge_errors(gold, pred) + f" Used {n_calls} LM call(s) this block."
+    return dspy.Prediction(score=adjusted, feedback=feedback)
+
+optimized_flex_matcher = dspy.GEPA(
+    metric=er_flex_metric,
+    reflection_lm=reflection_lm,  # Gemini 3.7 Flash, same as Section 7.7
+    auto="light",
+).compile(flex_matcher, trainset=labeled_blocks_train, valset=labeled_blocks_val)
+
+print(optimized_flex_matcher.module_src)  # the discovered match/merge program, reviewable and diffable
+```
+
+Why this matters for SERF specifically:
+
+- **Automatic cost cascades**: Section 9.3's "Recommended Cascade Architecture" (embedding filter -> Flash-Lite -> Flash) is currently hand-designed. A `program_trace`-aware metric lets GEPA _discover_ an analogous cascade per signature -- e.g. resolving unambiguous blocks entirely in Python (identical names, matching identifiers) and reserving Gemini calls for records that actually need semantic judgment -- rather than requiring us to hand-tune the cascade thresholds.
+- **Reviewable artifacts**: `module_src` is plain, readable Python (not a black-box weight update), consistent with the plan's emphasis on explainability (Section 1's "Not explainable" counter-argument).
+- **Same budget guard applies**: The sandboxed generated code only bridges back to the host for predictor/LM calls, so those calls still route through `serf.dspy.budget` and count against the `$100` cap and the Gemini 3.7 Flash call limit exactly like any other signature.
+
+Constraints and sequencing:
+
+- **Experimental and secondary**: `dspy.Flex` is explicitly marked experimental in DSPy 3.3.0; pin the DSPy version if depending on it, and treat it as a post-baseline enhancement, not a Step 1-13 blocker. Get `BlockMatch`/`EntityMerge`/`EdgeResolve` working and GEPA-optimized as fixed-structure `dspy.ChainOfThought` signatures first (Section 7.7); apply `dspy.Flex` afterward as an optional structural-optimization pass on top of that working baseline.
+- **New runtime dependency**: `dspy.Flex`'s default sandbox (`dspy.PythonInterpreter`) requires **Deno** installed on the execution host. This is an external, non-Python system binary, not a hard requirement for the core `uv sync` install -- document it as a one-time setup step only for whoever runs the `dspy.Flex` optimization pass.
+- **`max_predictor_calls`** (default `100`) guards against runaway generated code during optimization and inference; keep the default unless a specific signature needs a tighter bound.
+- Add `src/serf/dspy/flex_optimize.py` (optional module, built after `optimize.py`) and `tests/test_flex_optimize.py` (mocking the sandbox/interpreter and reflection LM) if/when this enhancement is pursued.
+
+### 7.9 `gpt-oss-120b-maas`: From Secondary Comparison to Primary Paper Model
+
+**`gpt-oss-120b-maas`** -- OpenAI's 120B open-weight model (Apache 2.0, near-parity with o4-mini on reasoning benchmarks per Google's model card), served as a fully managed Model-as-a-Service (MaaS) on Vertex AI -- runs against the same `BlockMatch`/`EntityMerge`/`EdgeResolve` signatures used for the Gemini pipeline. Per decision #17 (Section 9.7), it now has two roles: (1) a **benchmark-comparison exercise** against Gemini 3.5 Flash-Lite, run through `serf benchmark`/`serf eval` on the same labeled benchmark datasets (Section 8) to give SERF users evidence for choosing between a managed Gemini deployment and an OSS-model deployment, and (2) **the primary model for SERF's published paper results**: once Gemini 3.5 Flash-Lite calibrates the operating block size (Section 9.7, Phase A), `gpt-oss-120b-maas` runs the headline three-dataset benchmark evaluation (Section 9.7, Phase B) whose numbers are reported in the paper. Gemini 3.5 Flash-Lite remains the framework's documented default task LM for general (non-paper) usage (Section 9.6).
+
+Why this model specifically:
+
+- **GA and text-native**: `gpt-oss-120b-maas` supports structured output and function calling (both required by DSPy's signature-driven approach), has a 131,072-token context window, and is generally available (launched August 13, 2025) -- not a preview model.
+- **Extremely cheap**: $0.09/$0.36 per 1M input/output tokens -- cheaper than even Gemini 3.5 Flash-Lite ($0.30/$2.50) -- so evaluating it, and now running the paper's headline benchmark on it, does not meaningfully threaten the overall budget.
+- **Open-weight**: as an Apache 2.0 model, it is also self-hostable, which is relevant to SERF's goal of being a usable, non-vendor-locked framework -- and is precisely why it is chosen as the primary model for the paper's published results (Section 9.7): readers and reviewers can reproduce SERF's reported numbers without a Gemini API key or Google Cloud billing account. The Vertex AI MaaS endpoint is the fastest path to evaluate it without standing up dedicated GPU infrastructure.
+
+Access is fundamentally different from the Gemini Developer API and must be handled separately:
+
+- **Different auth**: `gpt-oss-120b-maas` is reached through Vertex AI's OpenAI-compatible endpoint, authenticated with a Google Cloud access token (Application Default Credentials), not `GEMINI_API_KEY`. A `GOOGLE_CLOUD_PROJECT` environment variable and `gcloud auth application-default login` (or an equivalent service-account credential) are required.
+- **Different billing path**: usage is billed through Vertex AI, not the Gemini Developer API, so it does **not** count against the `$100` Gemini budget cap in Section 9.6. Track it in a separate budget ledger (e.g. `< $20`, given the per-token cost above and its now-primary role in the paper's headline benchmark run, Section 9.7 Phase B) using the same `serf.dspy.budget` module, generalized to support multiple named ledgers.
+- **Lower default quotas**: the managed endpoint is capped around 650 QPM and 790K input / 120K output tokens per minute (subject to change) -- comfortably enough for benchmark-sized evaluation runs, but far lower than Gemini's production quotas, so this model should not be considered for general high-throughput pipeline use without a quota increase.
+
+```python
+import os
+
+import google.auth
+import google.auth.transport.requests
+import dspy
+
+PROJECT_ID = os.environ["GOOGLE_CLOUD_PROJECT"]
+REGION = "us-central1"
+
+creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/cloud-platform"])
+creds.refresh(google.auth.transport.requests.Request())
+
+gpt_oss_lm = dspy.LM(
+    "openai/gpt-oss-120b-maas",
+    api_base=f"https://{REGION}-aiplatform.googleapis.com/v1/projects/{PROJECT_ID}/locations/{REGION}/endpoints/openapi",
+    api_key=creds.token,  # short-lived; refresh before long-running jobs
+)
+
+with dspy.context(lm=gpt_oss_lm):
+    result = dspy.ChainOfThought(BlockMatch)(block_records=block_json, schema_info=schema_desc)
+```
+
+Add `google-auth` to `pyproject.toml` dependencies (Section 4.2) for the ADC token flow, and extend `serf benchmark`/`serf eval` (Section 6.1) with a `--model` option so the same benchmark run can target `gemini-3.5-flash-lite` or `gpt-oss-120b-maas` and produce directly comparable metrics.
 
 ---
 
@@ -824,6 +987,22 @@ class BenchmarkDataset:
         ...
 ```
 
+### 8.5 Initial Entity Schemas to Support First
+
+The first complete implementation should support entities from all three primary benchmark tracks at the type-system and profiling layers from day one:
+
+1. **DBLP-ACM (bibliographic)**:
+   - `title`, `authors`, `venue`, `year`
+   - Entity focus: publication/citation records
+2. **Walmart-Amazon (product)**:
+   - `title`, `category`, `brand`, `modelno`, `price`
+   - Entity focus: product catalog records across heterogeneous schemas
+3. **DBLP-Scholar (bibliographic at scale)**:
+   - Same core bibliographic fields as DBLP-ACM with larger candidate space
+   - Entity focus: publication records with significant scale asymmetry
+
+The profiler and auto type-generation path should identify these fields reliably and generate matching-ready Pydantic entity types without manual schema coding for common benchmark runs.
+
 ---
 
 ## 9. Scaling Analysis
@@ -845,25 +1024,29 @@ Blocking is essential. Without it, LLM-based ER is economically impossible beyon
 
 - 500 blocks x 2,500 tokens avg = 1.25M tokens total
 
-| Model            | Input Cost | Output Cost | Total (10K records) |
-| ---------------- | ---------- | ----------- | ------------------- |
-| Gemini 2.0 Flash | $0.10/1M   | $0.40/1M    | **~$0.63**          |
-| Gemini 2.5 Pro   | $1.25/1M   | $10.00/1M   | **~$6.56**          |
-| Claude Sonnet 4  | $3.00/1M   | $15.00/1M   | **~$11.25**         |
-| Claude Opus 4    | $15.00/1M  | $75.00/1M   | **~$56.25**         |
-| GPT-4o           | $2.50/1M   | $10.00/1M   | **~$8.13**          |
+| Model                 | Input Cost | Output Cost | Total (10K records) |
+| --------------------- | ---------- | ----------- | ------------------- |
+| Gemini 3.5 Flash-Lite | $0.30/1M   | $2.50/1M    | **~$0.93**          |
+| Gemini 3.7 Flash      | $0.75/1M   | $3.75/1M    | **~$1.69**          |
+| Claude Sonnet 4       | $3.00/1M   | $15.00/1M   | **~$11.25**         |
+| Claude Opus 4         | $15.00/1M  | $75.00/1M   | **~$56.25**         |
+| GPT-4o                | $2.50/1M   | $10.00/1M   | **~$8.13**          |
 
-**Key insight**: Block-level matching reduces costs by 20-40x compared to pairwise LLM matching. At $0.63 per 10K records with Gemini Flash, SERF can process 1M records for ~$63.
+The non-Gemini rows are comparative market context only; this build should use Gemini models exclusively per Section 9.6. Gemini 2.0 Flash (previously the pipeline model) is deprecated and was shut down June 1, 2026; Gemini 3.5 Flash-Lite is Google's current-generation, cost-efficient GA replacement (this estimate assumes an 80%/20% input/output token split, consistent with an extraction-style prompt: large record context in, compact structured output out).
+
+**Key insight**: Block-level matching reduces costs by 20-40x compared to pairwise LLM matching. At ~$0.93 per 10K records with Gemini Flash-Lite, SERF can process 1M records for ~$93 -- still comfortably within a $100 budget for the Flash-tier share of the workload alone (see Section 9.6 for how this is split against the overall cap).
 
 ### 9.3 Recommended Cascade Architecture
 
-For production at scale, implement a cost-optimization cascade:
+For production at scale, implement a Gemini-only cost-optimization cascade:
 
 1. **Embedding similarity filter** (free): Skip blocks where all pairwise embedding similarities < threshold
-2. **Gemini Flash** ($0.10/1M tokens): Process medium-difficulty blocks
-3. **Gemini Pro / Claude Sonnet** ($3-10/1M tokens): Process the hardest blocks where Flash confidence is low
+2. **Gemini 3.5 Flash-Lite** ($0.30/$2.50 per 1M input/output tokens): Process all ER pipeline blocks
+3. **Gemini 3.7 Flash** ($0.75/$3.75 per 1M input/output tokens): Reserved for limited validation-data generation and GEPA reflection workflows
 
-This cascade can reduce costs by 80%+ while maintaining F1 within 1-2% of full expensive-model coverage.
+This policy keeps operational ER on Flash-Lite and reserves the full Flash tier for bounded quality loops while staying under budget.
+
+This cascade is hand-designed. Once the baseline pipeline is working, `dspy.Flex` (Section 7.8) is the planned path to letting `dspy.GEPA` discover an analogous, per-signature cascade automatically from a `program_trace`-penalized metric, rather than requiring manually tuned thresholds.
 
 ### 9.4 Latency and Parallelism
 
@@ -880,60 +1063,97 @@ After 3 rounds with merge factor 0.8 per round:
 - Comparison pairs shrink to 0.8^6 = 26.2% of original
 - Each round is cheaper than the last due to smaller dataset
 
-### 9.6 Overnight Build Budget Constraint
+### 9.6 Gemini API Budget Constraint
 
-**Hard budget: $100 total Gemini API spend for the overnight build.**
+**Hard budget: $100 total Gemini API spend for this implementation effort.**
 
 A `GEMINI_API_KEY` environment variable will be provided. The agent must stay within budget by following these rules:
 
-1. **Use Gemini 2.0 Flash exclusively** for all ER pipeline operations (blocking analysis, matching, merging, edge resolution). At $0.10/$0.40 per 1M input/output tokens, this allows ~160M+ input tokens -- more than enough for iterative ER across all three benchmark datasets.
+1. **Use Gemini 3.5 Flash-Lite exclusively** for all ER pipeline operations (blocking analysis, matching, merging, edge resolution) -- Gemini 2.0 Flash, the model originally specified here, is deprecated and was shut down June 1, 2026. At $0.30/$2.50 per 1M input/output tokens and ~$0.93 per 10K records (Section 9.2), the ~$10-30 Flash-tier allocation below still comfortably covers hundreds of thousands of records across multiple convergence rounds for all three benchmark datasets.
 
-2. **Gemini 2.5 Pro is allowed ONLY for generating validation data** -- high-quality labeled match/non-match pairs and few-shot examples that will be used to evaluate and optimize the pipeline. Limit Gemini 2.5 Pro to **fewer than 2,000 API calls** total. At ~2,500 tokens per call with $1.25/$10.00 per 1M input/output tokens, 2K calls costs roughly $50 -- leaving ample headroom for Flash usage.
+2. **Gemini 3.7 Flash is allowed ONLY for two bounded use cases**: (a) generating validation data -- high-quality labeled match/non-match pairs and few-shot examples used to evaluate and optimize the pipeline, and (b) serving as the `reflection_lm` for `dspy.GEPA` optimization (Section 7.7). Limit Gemini 3.7 Flash to **fewer than 2,000 API calls** total across both use cases combined. At ~2,500 tokens per call with $0.75/$3.75 per 1M input/output tokens, 2K calls costs roughly $7 (using the same 80/20 input/output split as Section 9.2) -- still an order of magnitude cheaper than the original Gemini 2.5 Pro estimate (decision #13), leaving substantial extra headroom versus the original $50 estimate despite the modest per-token increase over the interim Gemini 3 Flash Preview pick (decision #15).
 
-3. **Never use Claude, GPT-4o, or any non-Gemini model** for pipeline operations during the build. The DSPy signatures and pipeline code should be model-agnostic, but all actual LLM calls during this build session must go through Gemini.
+3. **Never use Claude, GPT-4o, or any other non-Gemini model** for this repository's general-purpose production pipeline operations. The DSPy signatures and pipeline code should be model-agnostic, but Gemini 3.5 Flash-Lite is the documented default pipeline LM. The sole exception is **`gpt-oss-120b-maas`** (Section 7.9), which may be used for benchmark comparison AND as the primary model for the paper's headline three-dataset benchmark run (Section 9.7, Phase B) via `serf benchmark`/`serf eval`, tracked under its own separate budget ledger (rule 6 below) -- it is a deliberate, calibrated model switch for publication, not an ad hoc substitution of the default pipeline LM.
 
-4. **Track token usage** by logging input/output token counts from API responses. If cumulative spend approaches $80, stop making Gemini 2.5 Pro calls and finish remaining work with Flash only.
+4. **Track token usage** by logging input/output token counts from API responses. If cumulative spend approaches $80, stop making Gemini 3.7 Flash calls (including GEPA reflection) and finish remaining work with Flash-Lite only.
 
-| Use Case                       | Model            | Max Calls                 | Est. Cost  |
-| ------------------------------ | ---------------- | ------------------------- | ---------- |
-| ER pipeline (match/merge/edge) | Gemini 2.0 Flash | Unlimited (within budget) | ~$10-30    |
-| Validation data generation     | Gemini 2.5 Pro   | < 2,000                   | ~$50       |
-| **Total**                      |                  |                           | **< $100** |
+5. **Hard stop at $100**: Before every Gemini API call, estimate worst-case incremental cost from token limits and reject the call if it would push cumulative spend above $100. Persist cumulative usage to a local budget ledger so restarts cannot bypass limits. `dspy.GEPA`'s `reflection_lm` calls must be wrapped so they pass through this same ledger.
+
+6. **`gpt-oss-120b-maas` is tracked under a separate budget ledger, not the $100 Gemini cap**: since it is billed through Vertex AI rather than the Gemini Developer API (Section 7.9), give it its own conservative cap -- e.g. `< $20`, raised from an earlier `< $5` now that it also carries the paper's headline three-dataset benchmark run (Section 9.7, Phase B), while remaining tiny in absolute terms given its $0.09/$0.36 per 1M token pricing -- enforced by the same `serf.dspy.budget` module generalized to support multiple named ledgers (one per billing path). It must never carry this repository's general-purpose production pipeline traffic, which remains Gemini 3.5 Flash-Lite.
+
+| Use Case                                                            | Model                 | Max Calls                      | Est. Cost  |
+| ------------------------------------------------------------------- | --------------------- | ------------------------------ | ---------- |
+| ER pipeline (match/merge/edge)                                      | Gemini 3.5 Flash-Lite | Unlimited (within budget)      | ~$10-30    |
+| Block-size calibration sweep (Section 9.7, Phase A)                 | Gemini 3.5 Flash-Lite | Sample-sized sweep only        | ~$3-4      |
+| Validation data generation                                          | Gemini 3.7 Flash      | < 2,000                        | ~$7        |
+| **Gemini Total**                                                    |                       |                                | **< $100** |
+| Benchmark comparison + paper headline run (Section 7.9/9.7 Phase B) | `gpt-oss-120b-maas`   | Benchmark + full 3-dataset run | ~$5-10     |
+
+The Gemini Total (~$20-41 realistic) is now well under the $100 cap given how cheap Gemini 3.7 Flash is relative to the original Gemini 2.5 Pro estimate; the freed-up headroom can absorb additional GEPA optimization rounds or extended benchmark validation without renegotiating the cap. The `gpt-oss-120b-maas` ledger stays a small, separate line item even after absorbing the paper's headline run, since its per-token pricing is lower than Gemini's.
+
+### 9.7 Two-Phase Model Strategy: Calibration with Gemini, Publication with `gpt-oss-120b-maas`
+
+Per explicit instruction (decision #17), SERF's task/student LM selection follows two distinct phases with different goals: cheap, fast exploration to find the pipeline's operating point, followed by a reproducible run of the model whose numbers are actually published.
+
+**Phase A -- Block-size calibration (Gemini 3.5 Flash-Lite).** Before running headline benchmark evaluations, empirically establish the maximum number of records `BlockMatch`/`EntityMerge` (Section 7.3) can reliably match and merge in a single block, using Gemini 3.5 Flash-Lite because it is the cheapest available model (Section 9.2) and thus best suited to a wide sweep.
+
+_Methodology:_
+
+1. Draw a fixed, labeled sample of ~1,000-2,000 records per benchmark dataset (Section 8) -- large enough for a statistically meaningful signal, small enough to keep the sweep cheap.
+2. Re-block the same sample at a list of candidate `target_block_size` values (e.g. `5, 10, 20, 30, 50, 75, 100, 150, 200`), holding the semantic blocking method fixed.
+3. Run `BlockMatch`/`EntityMerge` at each block size and record, per size: block-level F1 against ground truth (Section 8.3), the `missing_in_match_output` skip-reason rate (the direct signal that the model silently dropped records; Section 3.5, pattern #10), the `error_recovery` rate (output truncation or malformed JSON at larger blocks), average latency, and $ cost.
+4. Select the **largest block size** where both the missing/error rates stay below a small tolerance (e.g. < 1%) and F1 does not degrade beyond a small tolerance (e.g. 2 percentage points) relative to the best-performing smaller size -- the capacity "knee point." Run this per dataset, since token footprint per record differs by domain (bibliographic vs. product records), and persist the calibrated size per dataset rather than assuming one global value.
+5. Expose this sweep as a new CLI command, `serf calibrate` (Section 6.1), which outputs a block-size-vs-metrics table/report per dataset, analogous to the 7-section blocking analysis report already planned for `serf block` (Section 3.3).
+
+Estimated cost: reprocessing a 1,500-record sample across ~8 candidate block sizes for all three datasets is roughly 1,500 x 8 x 3 = 36,000 record-passes, or ~$3-4 at Gemini 3.5 Flash-Lite's ~$0.93/10K-record rate (Section 9.2) -- a small, separately tracked addition to the Flash-tier allocation in Section 9.6's budget table.
+
+**Phase B -- Publication runs (`gpt-oss-120b-maas`).** Once the block size is calibrated, switch the task/student LM to `gpt-oss-120b-maas` (Section 7.9) for all headline, published benchmark results across DBLP-ACM, Walmart-Amazon, and DBLP-Scholar (Section 8), running at the block size established in Phase A. This elevates `gpt-oss-120b-maas` from the secondary, comparison-only role in decision #14 to **the primary model whose numbers appear in the paper**, chosen for open-weight reproducibility: readers and reviewers can rerun SERF's reported results without a Gemini API key or Google Cloud billing account, using either the same Vertex AI MaaS endpoint or a self-hosted deployment of the Apache-2.0-licensed weights (Section 7.9).
+
+- Before committing to the full three-dataset run, do a light compatibility spot-check: run a small sample (e.g. 100-200 records) through `BlockMatch`/`EntityMerge` with `gpt-oss-120b-maas` at the Gemini-calibrated block size and confirm error/missing rates stay within the same tolerance used in Phase A. `gpt-oss-120b-maas` is cheap enough ($0.09/$0.36 per 1M input/output tokens, Section 7.9) that this check is effectively free; if it fails the tolerance at that block size, recalibrate downward for this model specifically rather than assuming Gemini's ceiling transfers unchanged.
+- SERF itself remains model-agnostic (any `dspy.LM` can be swapped in); this two-phase strategy governs which model's numbers are reported as SERF's official paper results, not a restriction on what the shipped framework supports.
+- Gemini remains the framework's documented default/example model for general (non-paper) usage, and continues to serve as the `reflection_lm` for GEPA optimization (decision #16, Section 7.7) regardless of which model is the current task LM being optimized -- reflection is a separate, model-agnostic judging step.
 
 ---
 
 ## 10. Implementation Plan
 
-The following ordered steps should be executed by the Cursor Agent. Each step produces working, tested code.
+The following ordered steps should be executed by a frontier coding agent exercising engineering judgment. Steps are sequenced by technical dependency, not calendar time; each step produces working, tested code, and the agent should use discretion on implementation details not spelled out explicitly here.
 
-### Step 1: Project Infrastructure (30 min)
+### Step 1: Project Infrastructure
 
-1. Convert `pyproject.toml` from Poetry to uv (PEP 621 format)
+1. Convert `pyproject.toml` from Poetry to uv (PEP 621 format). This must be completed before any major feature build work.
 2. Update `.pre-commit-config.yaml` to use Ruff instead of black/isort/flake8
 3. Update `config.yml` with ER pipeline paths, iteration templates, model configs, benchmark dataset URLs
 4. Create all module directories with `__init__.py` files
 5. Update `CLAUDE.md` to reflect new tooling (uv, Ruff)
 
-### Step 2: Core Type System (1.5 hr)
+### Step 1.5: Research Deliverable and Design Freeze
+
+1. Update this plan with implementation constraints and benchmark-first priorities.
+2. Confirm architecture choices (no BAML runtime, `dspy.XMLAdapter` for structured output, PySpark 4.1+, Gemini budget guard).
+3. Pause for user instruction before beginning complete implementation.
+
+### Step 2: Core Type System
 
 1. Rewrite `src/serf/dspy/types.py` from scratch with fresh, DSPy-appropriate Pydantic types -- do NOT copy Abzu's BAML-generated types. Build domain-agnostic `Entity` base class with ER metadata (id, uuid, source_ids, source_uuids, match_skip, match_skip_reason, match_skip_history) + example `Company`, `Person` specializations
 2. Add `EntityBlock`, `MatchDecision`, `BlockResolution` types
 3. Add `FieldProfile`, `DatasetProfile` types for dataset analysis
 4. Add `IterationMetrics`, `BlockingMetrics` TypedDicts
 5. Create `src/serf/dspy/type_generator.py` -- `entity_type_from_spark_schema()` that auto-generates a Pydantic Entity subclass from a Spark StructType + DatasetProfile. Maps Spark types to Python types, adds ER metadata fields automatically, generates DSPy field descriptions from profiling results
-6. Write exhaustive unit tests: `tests/test_types.py`, `tests/test_type_generator.py`
+6. Add benchmark-ready schema mappings for DBLP-ACM, Walmart-Amazon, and DBLP-Scholar entity fields.
+7. Write exhaustive unit tests: `tests/test_types.py`, `tests/test_type_generator.py`
 
-### Step 3: DSPy Signatures and Adapter (1 hr)
+### Step 3: DSPy Signatures and LM Configuration
 
 1. Create `src/serf/dspy/signatures.py` with DSPy signatures:
    - `BlockMatch` -- match entire blocks
    - `EntityMerge` -- merge matched entities
    - `EdgeResolve` -- merge duplicate edges
    - `AnalyzeDataset` -- profile and recommend ER strategy
-2. Verify `BAMLAdapter` works with new Pydantic types
-3. Write unit tests: `tests/test_signatures.py`, `tests/test_baml_adapter.py`
+2. Configure DSPy with Gemini model routing and typed output validation via `dspy.XMLAdapter` (no BAML runtime or BAML-styled adapter).
+3. Write unit tests: `tests/test_signatures.py`
 
-### Step 4: Embeddings and Blocking (1.5 hr)
+### Step 4: Embeddings and Blocking
 
 1. Create `src/serf/block/embeddings.py` -- `EntityEmbedder` class (generalized from Abzu's `CompanyEmbedder`)
 2. Create `src/serf/block/faiss_blocker.py` -- `FAISSBlocker` class (ported from Abzu)
@@ -941,31 +1161,37 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 4. Create `src/serf/block/pipeline.py` -- PySpark blocking pipeline with subprocess isolation, auto-scaling target block size by iteration, 7-section analysis report, UDTF-based block splitting
 5. Write unit tests: `tests/test_embeddings.py`, `tests/test_faiss_blocker.py`, `tests/test_normalize.py`
 
-### Step 5: UUID Mapping and Matching (2 hr)
+### Step 5: UUID Mapping and Matching
 
 1. Create `src/serf/match/uuid_mapper.py` -- `UUIDMapper` class (ported from Abzu)
 2. Create `src/serf/match/matcher.py` -- `EntityMatcher` with async block processing, semaphore rate limiting
 3. Create `src/serf/match/few_shot.py` -- Few-shot example generation
 4. Write unit tests: `tests/test_uuid_mapper.py`, `tests/test_matcher.py`
 
-### Step 6: Evaluation and Metrics (1 hr)
+### Step 6: Evaluation and Metrics
 
 1. Create `src/serf/eval/metrics.py` -- Precision, recall, F1, pair completeness, reduction ratio
 2. Create `src/serf/eval/benchmarks.py` -- Benchmark dataset download/loading/evaluation
 3. Write unit tests: `tests/test_metrics.py`, `tests/test_benchmarks.py`
 
-### Step 7: Dataset Analysis (1 hr)
+### Step 6.5: Block-Size Calibration Harness
+
+1. Create `src/serf/eval/calibrate.py` -- sweeps `target_block_size` across a configurable candidate list on a fixed, labeled sample per benchmark dataset (Section 9.7, Phase A), running blocking (Step 4) + matching (Step 5) + evaluation (Step 6) at each size and recording F1, `missing_in_match_output`/`error_recovery` rates, latency, and cost.
+2. Select and persist the calibrated block size per dataset (the largest size within the tolerance described in Section 9.7) to a calibration-results file that `serf resolve`/`serf benchmark` read by default.
+3. Write unit tests: `tests/test_calibrate.py` (mock LLM calls; verify the knee-point selection logic against synthetic metrics curves with known optimal sizes).
+
+### Step 7: Dataset Analysis
 
 1. Create `src/serf/analyze/profiler.py` -- Dataset profiling with PySpark
 2. Create `src/serf/analyze/field_detection.py` -- Auto-detect field types using regex patterns and statistical analysis
 3. Write unit tests: `tests/test_profiler.py`, `tests/test_field_detection.py`
 
-### Step 8: Edge Resolution (45 min)
+### Step 8: Edge Resolution
 
 1. Create `src/serf/edge/resolver.py` -- Async edge resolution (ported from Abzu)
 2. Write unit tests: `tests/test_edge_resolver.py`
 
-### Step 9: Spark Integration (1.5 hr)
+### Step 9: Spark Integration
 
 1. Create `src/serf/spark/schemas.py` -- SparkDantic bridge: SparkModel subclasses of Pydantic types, `get_entity_spark_schema()` with IntegerType-to-LongType conversion, `normalize_entity_dataframe()` for consistent field order/types, `validate_block_schema()` for early schema drift detection, `get_matches_schema()` for reading matches JSONL, `build_udtf_return_type()` for dynamic UDTF return types
 2. Create `src/serf/spark/utils.py` -- `create_split_large_blocks_udtf()` factory for block splitting, `select_most_common_property()` window function utility
@@ -973,13 +1199,14 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
 4. Create `src/serf/spark/graph.py` -- GraphFrames connected components + manual fallback
 5. Write unit tests: `tests/test_schemas.py`, `tests/test_iceberg.py`, `tests/test_graph.py`
 
-### Step 10: DSPy Agents (1 hr)
+### Step 10: DSPy Agents and Reflective Optimization
 
 1. Create `src/serf/dspy/agents.py` -- `ERAgent` with ReAct pattern, tool definitions
 2. Implement convergence checking, dynamic parameter adjustment
-3. Write unit tests: `tests/test_agents.py`
+3. Create `src/serf/dspy/optimize.py` -- `dspy.GEPA`-based reflective optimization for `BlockMatch`/`EntityMerge`/`EdgeResolve` signatures, with Gemini 3.7 Flash as `reflection_lm` and Gemini 3.5 Flash-Lite as the task LM (Section 7.7). All reflection calls route through `serf.dspy.budget`.
+4. Write unit tests: `tests/test_agents.py`, `tests/test_optimize.py` (mock the reflection LM; do not make real API calls in unit tests)
 
-### Step 11: CLI (1 hr)
+### Step 11: CLI
 
 1. Extend `src/serf/cli/main.py` with commands:
    - `serf analyze` -- Dataset profiling
@@ -990,19 +1217,22 @@ The following ordered steps should be executed by the Cursor Agent. Each step pr
    - `serf edges` -- Edge resolution
    - `serf benchmark` -- Run against benchmarks
    - `serf download` -- Download benchmark datasets
+   - `serf optimize` -- Run GEPA-based reflective optimization on ER signatures against labeled validation data
+   - `serf calibrate` -- Sweep block sizes on a labeled sample to determine the maximum reliable `target_block_size` (Section 9.7, Phase A)
 2. Write unit tests: `tests/test_cli.py`
 
-### Step 12: Integration Testing (1.5 hr)
+### Step 12: Integration Testing
 
 1. Create `tests/test_pipeline_integration.py` -- End-to-end pipeline test with small synthetic dataset
 2. Test iterative convergence (3 rounds)
 3. Test Iceberg time travel between iterations
-4. Test benchmark evaluation on three datasets covering easy, medium, and hard difficulties:
+4. Test benchmark evaluation on three datasets, in this order:
    - **DBLP-ACM** (easy, bibliographic) -- Baseline sanity check, expect ~99% F1
-   - **DBLP-Scholar** (medium, bibliographic) -- Tests scale (64K right-side records) and fuzzy matching
-   - **Walmart-Amazon** (hard, products) -- Tests cross-schema matching with very different field formats and 22K right-side records
+   - **Walmart-Amazon** (hard, products) -- Cross-schema product matching and robustness check
+   - **DBLP-Scholar** (medium, bibliographic) -- Scale asymmetry (2.6K vs 64K) and fuzzy matching
+5. Run the block-size calibration harness (Step 6.5) on all three datasets with Gemini 3.5 Flash-Lite, then re-run the same three benchmark evaluations with `gpt-oss-120b-maas` at the calibrated block size (Section 9.7, Phase B) to produce the paper's headline results
 
-### Step 13: Documentation and Cleanup (30 min)
+### Step 13: Documentation and Cleanup
 
 1. Update `README.md` with new CLI commands, API examples, benchmark results
 2. Update `config.yml` with all new configuration keys
@@ -1023,20 +1253,25 @@ Every module gets exhaustive unit tests. Tests should:
 - Include type hints on all functions
 - Use fixtures for setup/teardown
 - Use `pytest-asyncio` for async tests
-- Mock LLM calls (don't make real API calls in unit tests)
+- Mock LLM calls (don't make real API calls in unit tests), including `dspy.GEPA`'s `reflection_lm` calls
 - Test edge cases: empty blocks, single-entity blocks, oversized blocks
 - Test UUID mapping roundtrip consistency
 - Test metric calculations with known inputs/outputs
+- Test the budget guard rejects calls (including GEPA reflection calls) that would exceed the ledgered cap
+- Test the budget guard's multiple named ledgers (Gemini `$100` cap, `gpt-oss-120b-maas` separate cap, Section 9.6) are tracked and enforced independently
+- Test the block-size calibration sweep's knee-point selection logic (Section 9.7, Phase A) against synthetic metrics curves with known optimal block sizes
 
 ### 11.2 Integration Tests
 
 - **Pipeline test**: Synthetic dataset through block -> match -> eval -> iterate
-- **Benchmark tests**: Run against all three benchmark datasets from the start:
+- **Benchmark tests**: Run against all three benchmark datasets from the start, in this order:
   - **DBLP-ACM** (easy) -- Verify basic pipeline correctness and metrics computation
-  - **DBLP-Scholar** (medium) -- Verify handling of scale asymmetry (2.6K vs 64K records)
   - **Walmart-Amazon** (hard) -- Verify cross-schema matching with heterogeneous product data
+  - **DBLP-Scholar** (medium) -- Verify handling of scale asymmetry (2.6K vs 64K records)
 - **Iceberg test**: Write/read/time-travel with local Iceberg catalog
 - **GraphFrames test**: Connected components on known graph structure
+- **Model comparison test**: Run the DBLP-ACM benchmark through `serf benchmark` with both `gemini-3.5-flash-lite` and `gpt-oss-120b-maas` (Section 7.9) and confirm both produce valid, comparable metrics output; mock the Vertex AI MaaS endpoint in CI so this does not require live GCP credentials
+- **Calibration-to-publication test**: Run the block-size calibration harness (Section 9.7, Phase A) on a small synthetic sample with a mocked Gemini LM, confirm it selects the expected knee-point block size, then confirm `serf benchmark --model gpt-oss-120b-maas` (Section 9.7, Phase B) accepts and uses that calibrated block size; mock all LLM calls in CI
 
 ### 11.3 Test Data
 
@@ -1090,4 +1325,4 @@ Create synthetic test datasets in `tests/fixtures/`:
 
 ---
 
-_This plan was prepared for Cursor Agent grind mode execution. Expected build time: 8-12 hours. The plan covers ~25 new source files, ~20 test files, and significant updates to configuration and documentation. All code should follow the conventions documented in CLAUDE.md and the PySpark Style Guide at assets/PYSPARK.md._
+_This plan is prepared for execution by a frontier coding agent exercising engineering judgment, not a time-boxed "grind mode" session. The plan covers ~26 new source files (including `dspy/optimize.py` for GEPA-based reflective optimization), ~21 test files, and significant updates to configuration and documentation, plus an optional post-baseline `dspy.Flex` enhancement (Section 7.8) not counted in that total. All code should follow the conventions documented in CLAUDE.md and the PySpark Style Guide at assets/PYSPARK.md._

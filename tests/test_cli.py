@@ -109,16 +109,16 @@ def test_download_unknown_dataset() -> None:
     """Test download with unknown dataset name."""
     runner = CliRunner()
     result = runner.invoke(cli, ["download", "--dataset", "nonexistent"])
-    assert result.exit_code == 0
-    assert "Unknown dataset" in result.output
+    assert result.exit_code == 2
+    assert "Invalid value for '--dataset'" in result.output
 
 
 def test_benchmark_unknown_dataset() -> None:
     """Test benchmark with unknown dataset name."""
     runner = CliRunner()
     result = runner.invoke(cli, ["benchmark", "--dataset", "nonexistent"])
-    assert result.exit_code == 0
-    assert "Unknown dataset" in result.output
+    assert result.exit_code == 2
+    assert "Invalid value for '--dataset'" in result.output
 
 
 def test_run_help() -> None:

@@ -26,11 +26,10 @@ This guide provides an overview of how to use the DSPy framework for building an
 
 ## Example
 
-Here's a simple example of a DSPy pipeline that uses a pre-trained model. Always use `dspy.adapters.baml_adapter.BAMLAdapter` for the adapter if we are using Pydantic classes as complex signatures.
+Here's a simple example of a DSPy pipeline that uses a pre-trained model. Always use `dspy.XMLAdapter` for the adapter if we are using Pydantic classes as complex signatures.
 
 ```python
 import dspy
-from dspy.adapters.baml_adapter import BAMLAdapter
 
 
 # Get Gemini API key from environment variable
@@ -38,9 +37,9 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
     raise ValueError("GEMINI_API_KEY environment variable is
 
-# Setup the LLM with the BAMLAdapter
-lm = dspy.LM("gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
-dspy.configure(lm=lm, adapter=BAMLAdapter())
+# Setup the LLM with the XMLAdapter
+lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
+dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
 
 
 # Define the format of the input and output data via a DSPy signature
@@ -68,7 +67,7 @@ print(response.entities)
 
 ## Advanced Features
 
-- **Custom Adapters**: Create your own adapters to connect to different data sources. We use [BAMLAdapter](https://github.com/prrao87/dspy/blob/main/dspy/adapters/baml_adapter.py) for all DSPy modules.
+- **Custom Adapters**: Create your own adapters to connect to different data sources. We use [`dspy.XMLAdapter`](https://dspy.ai/api/adapters/XMLAdapter/) for all DSPy modules.
 - **Model Fine-tuning**: Fine-tune pre-trained models on your own data for better performance.
 
 ## Conclusion

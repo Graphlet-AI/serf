@@ -3,12 +3,12 @@
 import asyncio
 import json
 import os
+from typing import cast
 from uuid import uuid4
 
 import dspy
 
 from serf.config import config
-from serf.dspy.baml_adapter import BAMLAdapter
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import BlockResolution, EntityBlock
 from serf.logs import get_logger
@@ -57,7 +57,7 @@ class EntityMatcher:
         self.max_concurrent = max_concurrent or config.get("er.matching.max_concurrent", 20)
         self._predictor: dspy.Predict | None = None
         self._lm: dspy.LM | None = None
-        self._adapter = BAMLAdapter()
+        self._adapter = dspy.XMLAdapter()
 
     def _ensure_lm(self) -> dspy.LM:
         """Get or create the LM instance."""
@@ -78,7 +78,7 @@ class EntityMatcher:
     def predictor(self) -> dspy.Predict:
         """Lazy-load the BlockMatch predictor."""
         if self._predictor is None:
-            self._predictor = dspy.Predict(BlockMatch)
+            self._predictor = cast(dspy.Predict, dspy.Predict(BlockMatch))
         return self._predictor
 
     def resolve_block(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:

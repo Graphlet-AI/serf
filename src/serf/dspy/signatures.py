@@ -88,7 +88,7 @@ class GenerateERConfig(dspy.Signature):
     - blocking parameters:
       - target_block_size: aim for 30 entities per block
       - max_block_size: hard cap at 100 entities per block
-    - matching model: use "gemini/gemini-2.0-flash"
+    - matching model: use "gemini/gemini-3.5-flash-lite"
     - max_iterations: at most 5 iterations
     - convergence_threshold: a SMALL number like 0.01 to 0.05, representing
       the minimum fraction of entities reduced per round before stopping.
@@ -106,7 +106,7 @@ class GenerateERConfig(dspy.Signature):
         "name_field (str), text_fields (list of str), "
         "blocking_fields (list of str, usually empty), entity_type (str), "
         "blocking: {method: semantic, target_block_size: 30, max_block_size: 100}, "
-        "matching: {model: gemini/gemini-2.0-flash}, "
+        "matching: {model: gemini/gemini-3.5-flash-lite}, "
         "max_iterations (int, at most 5), "
         "convergence_threshold (float, small number like 0.01-0.05)"
     )

@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from serf.block.pipeline import SemanticBlockingPipeline
+from serf.dspy.adapters import RobustXMLAdapter
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import BlockResolution, Entity, EntityBlock
 from serf.eval.benchmarks import BenchmarkDataset
@@ -79,7 +80,15 @@ def build_candidate_blocks(
         entity_by_id = {e.id: e for e in all_entities}
         all_entities = [entity_by_id[i] for i in sampled_ids if i in entity_by_id]
 
-    pipeline = SemanticBlockingPipeline(target_block_size=target_block_size)
+    # Cap max_block_size at target_block_size itself (rather than the
+    # pipeline's normal 100 default): with a small, true-pair-biased sample,
+    # unsupervised clustering produces a few outsized, disproportionately
+    # dense blocks (observed: 71- and 41-entity blocks from a target of 30),
+    # and those are exactly the blocks that most often fail to parse -- this
+    # is itself evidence for RESEARCH_LOOP.md's E1 block-size hypothesis.
+    pipeline = SemanticBlockingPipeline(
+        target_block_size=target_block_size, max_block_size=target_block_size
+    )
     blocks, _ = pipeline.run(all_entities)
 
     labeled_blocks = []
@@ -401,11 +410,29 @@ def run_gepa_optimization(
     logger.info(f"Split: {len(trainset)} train, {len(valset)} val, {len(testset)} test (sealed)")
 
     api_key = os.environ["GEMINI_API_KEY"]
-    task_lm = TrackedLM(task_model, ledger=get_ledger("gemini"), api_key=api_key, temperature=1.0)
-    reflection_lm = TrackedLM(
-        reflection_model, ledger=get_ledger("gemini"), api_key=api_key, temperature=1.0
+    # Task LM stays at temperature=0, matching production (EntityMatcher):
+    # an optimized prompt is only useful if it was tuned under the same
+    # deterministic conditions it will actually run under. Only the
+    # reflection_lm benefits from higher temperature (DSPy's GEPA convention
+    # for creative instruction proposals, Section 7.7 of the plan doc).
+    from serf.config import config as serf_config
+
+    max_output_tokens = serf_config.get("er.matching.max_output_tokens", 65536)
+    task_lm = TrackedLM(
+        task_model,
+        ledger=get_ledger("gemini"),
+        api_key=api_key,
+        temperature=0.0,
+        max_tokens=max_output_tokens,
     )
-    dspy.configure(lm=task_lm, adapter=dspy.XMLAdapter())
+    reflection_lm = TrackedLM(
+        reflection_model,
+        ledger=get_ledger("gemini"),
+        api_key=api_key,
+        temperature=1.0,
+        max_tokens=max_output_tokens,
+    )
+    dspy.configure(lm=task_lm, adapter=RobustXMLAdapter())
 
     student = cast(dspy.Module, dspy.Predict(BlockMatch))
     baseline_f1 = evaluate_program(student, testset)

@@ -1,4 +1,4 @@
-"""Tests for DSPy integration with the XMLAdapter."""
+"""Tests for DSPy integration with RobustXMLAdapter."""
 
 import os
 from collections.abc import Generator
@@ -6,21 +6,23 @@ from collections.abc import Generator
 import dspy
 import pytest
 
+from serf.dspy.adapters import RobustXMLAdapter
+
 
 @pytest.fixture
 def lm() -> Generator[dspy.LM, None, None]:
-    """Get the XMLAdapter style language model."""
+    """Get the RobustXMLAdapter style language model."""
     GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
     if not GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY environment variable is not set")
 
     lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
-    dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
+    dspy.configure(lm=lm, adapter=RobustXMLAdapter())
 
     yield lm
 
 
 def test_dspy_simple_math(lm: dspy.LM) -> None:
-    """Test the integration of dspy with the XMLAdapter."""
+    """Test the integration of dspy with RobustXMLAdapter."""
     math = dspy.ChainOfThought("question -> answer: float")
     math(question="Two dice are tossed. What is the probability that the sum equals two?")

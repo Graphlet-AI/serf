@@ -132,6 +132,7 @@ def generate_er_config(
         YAML string with the recommended ER configuration
     """
     from serf.config import config as serf_config
+    from serf.dspy.adapters import RobustXMLAdapter
     from serf.dspy.budget import TrackedLM, get_ledger
 
     effective_model = model or serf_config.get("models.analyze_llm")
@@ -146,7 +147,7 @@ def generate_er_config(
     samples_json = json.dumps(sample_records[:10], indent=2, default=str)
 
     logger.info("Generating ER config with LLM...")
-    with dspy.context(lm=lm, adapter=dspy.XMLAdapter()):
+    with dspy.context(lm=lm, adapter=RobustXMLAdapter()):
         result = predictor(
             dataset_profile=profile_json,
             sample_records=samples_json,

@@ -10,6 +10,7 @@ from uuid import uuid4
 import dspy
 
 from serf.config import config
+from serf.dspy.adapters import RobustXMLAdapter
 from serf.dspy.budget import TrackedLM, get_ledger
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import BlockResolution, EntityBlock
@@ -59,7 +60,7 @@ class EntityMatcher:
         self.max_concurrent = max_concurrent or config.get("er.matching.max_concurrent", 20)
         self._predictor: dspy.Predict | None = None
         self._lm: dspy.LM | None = None
-        self._adapter = dspy.XMLAdapter()
+        self._adapter = RobustXMLAdapter()
 
     def _ensure_lm(self) -> dspy.LM:
         """Get or create the LM instance, tracked against its budget ledger."""

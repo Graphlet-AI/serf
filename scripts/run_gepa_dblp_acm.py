@@ -16,13 +16,14 @@ import sys
 import time
 
 from serf.dspy.optimize import run_gepa_optimization
-from serf.logs import get_logger
+from serf.logs import get_logger, setup_logging
 
 logger = get_logger(__name__)
 
 
 def main() -> None:
-    sample_size = int(sys.argv[1]) if len(sys.argv) > 1 else 60
+    setup_logging()
+    sample_size = int(sys.argv[1]) if len(sys.argv) > 1 else 300
     auto = sys.argv[2] if len(sys.argv) > 2 else "light"
 
     start = time.time()

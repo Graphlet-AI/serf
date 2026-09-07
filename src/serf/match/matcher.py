@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+from typing import cast
 from uuid import uuid4
 
 import dspy
@@ -77,7 +78,7 @@ class EntityMatcher:
     def predictor(self) -> dspy.Predict:
         """Lazy-load the BlockMatch predictor."""
         if self._predictor is None:
-            self._predictor = dspy.Predict(BlockMatch)
+            self._predictor = cast(dspy.Predict, dspy.Predict(BlockMatch))
         return self._predictor
 
     def resolve_block(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:

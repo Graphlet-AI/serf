@@ -8,7 +8,6 @@ import dspy
 import yaml
 
 from serf.analyze.field_detection import detect_field_type
-from serf.dspy.baml_adapter import BAMLAdapter
 from serf.dspy.signatures import GenerateERConfig
 from serf.dspy.types import DatasetProfile, FieldProfile
 from serf.logs import get_logger
@@ -145,7 +144,7 @@ def generate_er_config(
     samples_json = json.dumps(sample_records[:10], indent=2, default=str)
 
     logger.info("Generating ER config with LLM...")
-    with dspy.context(lm=lm, adapter=BAMLAdapter()):
+    with dspy.context(lm=lm, adapter=dspy.XMLAdapter()):
         result = predictor(
             dataset_profile=profile_json,
             sample_records=samples_json,

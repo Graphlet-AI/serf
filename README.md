@@ -24,7 +24,7 @@ Clusters records using **Qwen3 sentence embeddings** and **FAISS IVF** to create
 
 ### Phase 2 — Schema Alignment, Matching and Merging
 
-All three operations in a single LLM prompt via **DSPy signatures** with the **BAMLAdapter** for structured output formatting. Block-level matching lets the LLM see all records simultaneously for holistic decisions.
+All three operations in a single LLM prompt via **DSPy signatures** with **`dspy.XMLAdapter`** for structured output formatting. Block-level matching lets the LLM see all records simultaneously for holistic decisions.
 
 ### Phase 3 — Edge Resolution
 
@@ -36,7 +36,7 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 | ------------------ | -------------------------------------------------- |
 | Package Manager    | **uv**                                             |
 | Data Processing    | **PySpark 4.x**                                    |
-| LLM Framework      | **DSPy 3.x** with BAMLAdapter                      |
+| LLM Framework      | **DSPy 3.x** with `XMLAdapter`                     |
 | Embeddings         | **multilingual-e5-base** via sentence-transformers |
 | Vector Search      | **FAISS IndexIVFFlat**                             |
 | Linting/Formatting | **Ruff**                                           |
@@ -126,10 +126,9 @@ metrics = evaluate_resolution(predicted_pairs, ground_truth_pairs)
 ```python
 import dspy
 from serf.dspy.signatures import BlockMatch
-from serf.dspy.baml_adapter import BAMLAdapter
 
 lm = dspy.LM("gemini/gemini-2.0-flash", api_key=GEMINI_API_KEY)
-dspy.configure(lm=lm, adapter=BAMLAdapter())
+dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
 
 matcher = dspy.ChainOfThought(BlockMatch)
 result = matcher(block_records=block_json, schema_info=schema, few_shot_examples=examples)
@@ -150,7 +149,7 @@ Blocking uses name-only embeddings for tighter semantic clusters. All matching d
 ```
 src/serf/
 ├── cli/             # Click CLI commands
-├── dspy/            # DSPy types, signatures, agents, adapter
+├── dspy/            # DSPy types, signatures, agents
 ├── block/           # Semantic blocking (embeddings, FAISS, normalization)
 ├── match/           # UUID mapping, LLM matching, few-shot examples
 ├── merge/           # Field-level entity merging

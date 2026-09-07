@@ -1,10 +1,9 @@
 """Tests for GEPA optimization data preparation and scoring (no LLM calls)."""
 
 # isort: off
-# numpy must load before dspy: dspy lazily proxies the numpy module, and if
-# something later does `from numpy.typing import X` before numpy has been
-# imported for real, the lazy proxy re-execs numpy's __init__ into an
-# already-partially-loaded module and corrupts its C extension state.
+# numpy must load before dspy in a fresh process -- see the matching comment
+# in src/serf/dspy/optimize.py. That module's own guard only helps if this
+# file hasn't already triggered dspy's lazy numpy proxy first.
 import numpy  # noqa: F401
 import dspy
 

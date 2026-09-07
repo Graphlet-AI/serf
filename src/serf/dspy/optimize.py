@@ -7,11 +7,19 @@ rule 5), and reports the optimized program's F1 against the hand-written
 baseline.
 """
 
+# isort: off
+# numpy must load before dspy in a fresh process: dspy lazily proxies the
+# numpy module, and if something later does `from numpy.typing import X`
+# before numpy has been imported for real, the lazy proxy re-execs numpy's
+# __init__ into an already-partially-loaded module and corrupts its C
+# extension state. serf.block.pipeline (imported below) does exactly that.
+import numpy  # noqa: F401
+import dspy
+
+# isort: on
 import random
 from collections.abc import Callable
 from typing import Any, cast
-
-import dspy
 
 from serf.block.pipeline import SemanticBlockingPipeline
 from serf.dspy.signatures import BlockMatch

@@ -41,13 +41,9 @@ def build_candidate_blocks(
     target_block_size: int = 30,
     sample_size: int | None = None,
     seed: int = 0,
+    require_true_pair: bool = True,
 ) -> list[EntityBlock]:
-    """Block a (sub)sample of a benchmark and keep only blocks with a true match.
-
-    A block containing no true pair at all is trivial to resolve correctly
-    (the answer is "nothing merges") and teaches the optimizer little; blocks
-    with at least one true pair have both a merge decision and, typically,
-    several correct non-merges to get right in the same call.
+    """Block a (sub)sample of a benchmark, for use as GEPA training data.
 
     Parameters
     ----------
@@ -62,11 +58,17 @@ def build_candidate_blocks(
         the full dataset.
     seed : int
         Random seed for sampling
+    require_true_pair : bool
+        If True (default), drop blocks with no true pair at all -- trivial
+        to resolve (the answer is always "nothing merges") and, in
+        isolation, teaches the optimizer little. Set False for a
+        substantially larger, more production-realistic training set that
+        also exercises correct non-merging on blocks with no match at all.
 
     Returns
     -------
     list[EntityBlock]
-        Blocks that contain at least one true matching pair
+        Candidate blocks, optionally filtered to those with >=1 true pair
     """
     left, right = dataset.to_entities()
     all_entities = left + right
@@ -103,6 +105,9 @@ def build_candidate_blocks(
         target_block_size=target_block_size, max_block_size=target_block_size
     )
     blocks, _ = pipeline.run(all_entities)
+
+    if not require_true_pair:
+        return blocks
 
     labeled_blocks = []
     for block in blocks:
@@ -441,10 +446,11 @@ def run_gepa_optimization(
     dataset_name: str,
     task_model: str,
     reflection_model: str,
-    sample_size: int = 60,
+    sample_size: int | None = 60,
     target_block_size: int = 30,
     auto: str | None = "light",
     max_metric_calls: int | None = None,
+    require_true_pair: bool = True,
     seed: int = 0,
 ) -> dict[str, object]:
     """End-to-end: build labeled blocks, split, optimize BlockMatch with GEPA,
@@ -459,14 +465,19 @@ def run_gepa_optimization(
         Student/task LM, e.g. "gemini/gemini-3.5-flash-lite"
     reflection_model : str
         GEPA's reflection_lm, e.g. "gemini/gemini-3.7-flash"
-    sample_size : int
-        Number of ground-truth pairs' entities to sample before blocking
+    sample_size : int | None
+        Number of ground-truth pairs' entities to sample before blocking.
+        None blocks the full dataset, for the largest possible training set.
     target_block_size : int
         Target entities per block
     auto : str | None
         GEPA's auto budget: "light", "medium", or "heavy". Mutually
         exclusive with max_metric_calls; set this to None when passing
         max_metric_calls explicitly.
+    require_true_pair : bool
+        If True (default), only train on blocks with >=1 true pair. Set
+        False for a substantially larger, more production-realistic
+        training set (see build_candidate_blocks).
     max_metric_calls : int | None
         Explicit cap on the number of metric calls GEPA may make, for
         predictable runtime independent of trainset size. Takes precedence
@@ -481,9 +492,13 @@ def run_gepa_optimization(
     """
     dataset = BenchmarkDataset.download(dataset_name)
     blocks = build_candidate_blocks(
-        dataset, target_block_size=target_block_size, sample_size=sample_size, seed=seed
+        dataset,
+        target_block_size=target_block_size,
+        sample_size=sample_size,
+        seed=seed,
+        require_true_pair=require_true_pair,
     )
-    logger.info(f"Built {len(blocks)} labeled blocks (>=1 true pair) from {dataset_name}")
+    logger.info(f"Built {len(blocks)} candidate blocks from {dataset_name}")
 
     examples = build_gepa_examples(blocks, dataset.ground_truth)
     rng = random.Random(seed)

@@ -189,6 +189,16 @@ def test_evaluate_program_handles_exceptions_as_zero() -> None:
     assert avg_f1 == 0.0
 
 
+def test_gold_resolution_handles_blocks_with_no_true_pairs() -> None:
+    """A block with no true pair (the require_true_pair=False case) still
+    produces a valid gold resolution: everyone standalone, was_resolved=False."""
+    block = _block([10, 20, 30])
+    gold = gold_resolution_for_block(block, ground_truth=set())
+    assert gold.was_resolved is False
+    assert len(gold.resolved_entities) == 3
+    assert all(e.source_ids is None for e in gold.resolved_entities)
+
+
 def test_build_tracked_lm_routes_gemini_model_to_gemini_ledger() -> None:
     """A gemini/* model is billed against the 'gemini' ledger using
     GEMINI_API_KEY, never Vertex AI credentials."""

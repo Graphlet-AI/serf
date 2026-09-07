@@ -26,10 +26,12 @@ logger = get_logger(__name__)
 def main() -> None:
     setup_logging()
     dataset_name = sys.argv[1] if len(sys.argv) > 1 else "dblp-acm"
-    sample_size = int(sys.argv[2]) if len(sys.argv) > 2 else 300
+    sample_arg = sys.argv[2] if len(sys.argv) > 2 else "300"
+    sample_size = None if sample_arg == "full" else int(sample_arg)
     auto_or_calls = sys.argv[3] if len(sys.argv) > 3 else "light"
     auto = auto_or_calls if auto_or_calls in ("light", "medium", "heavy") else None
     max_metric_calls = None if auto else int(auto_or_calls)
+    require_true_pair = "--all-blocks" not in sys.argv
 
     start = time.time()
     result = run_gepa_optimization(
@@ -40,6 +42,7 @@ def main() -> None:
         target_block_size=30,
         auto=auto,
         max_metric_calls=max_metric_calls,
+        require_true_pair=require_true_pair,
         seed=0,
     )
     elapsed = time.time() - start

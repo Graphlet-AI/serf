@@ -54,7 +54,7 @@ loop), before any optimization (Stage 3).
 
 ## Project Status Board
 
-- [ ] Task 1: Fix identifier-conservation correctness bugs (D1-D8) + max_tokens
+- [x] Task 1: Fix identifier-conservation correctness bugs (D1-D8) + max_tokens
 - [ ] Task 2: Experiment log + budget ledger + caching
 - [ ] Task 3: Baseline suite (DBLP-ACM first, then Walmart-Amazon, DBLP-Scholar)
 - [ ] Task 4: GEPA optimization loop
@@ -62,7 +62,45 @@ loop), before any optimization (Stage 3).
 
 ## Executor's Feedback or Assistance Requests
 
-(none yet)
+**Task 1 complete.** Wrote all 9 required tests from ID_INVARIANTS.md §9
+(`tests/test_id_invariants.py`), ran them against the pre-fix code to find real
+failures empirically rather than trust the audit's reasoning alone, then fixed:
+
+- **D1** (real bug, confirmed via test): `source_ids` now cleared before the LLM
+  call in `map_block`, same as `uuid`/`source_uuids`. Without this, a prior
+  round's real-id provenance collides with this round's block-local mapped ints.
+- **D4** (real bug, confirmed via test): singleton blocks now short-circuit in
+  `resolve_block` before any LLM call, with `match_skip_reason="singleton_block"`.
+- **D5** (real bug, confirmed via test): `_assign_uuids` is now only called when
+  `resolution.was_resolved` is True, so error-recovery and singleton blocks keep
+  their original identity signal.
+- **D6**: mapped ints now start at 1, not 0 (models conflate 0 with null).
+- **D7**: added retry loop (`er.matching.max_retries`/`retry_delay_ms`, already
+  in config.yml but previously unused) around the predictor call.
+- Phase-2 recovery now forces the recovered entity's own id into its own
+  `source_ids` (ID_INVARIANTS.md §5 point 2) — confirmed missing via test.
+- `max_tokens` bug from RESEARCH_LOOP.md: raised from hardcoded 8192 to
+  `er.matching.max_output_tokens` (config, default 65536 — Gemini 3.5
+  Flash-Lite's actual max output, verified via docs).
+- Added a genuine identifier-coverage gate to `evaluate_er_results`
+  (`input_entity_ids` param): the existing `uuid_coverage` check only
+  validates that emitted *references* are valid, not that no record vanished
+  with zero trace. This was a real, previously-untested gap.
+
+**D2 and D3, found NOT to be bugs in this implementation** (empirically —
+wrote the tests from ID_INVARIANTS.md, they passed against the pre-fix code):
+the existing restoration logic already threads prior-round provenance through
+via unconditional cache lookups (`orig_id["source_ids"]`/`src["source_ids"]`),
+which happens to achieve Phase-1-equivalent behavior through different means
+than Abzu's explicit `uuids_to_add_back` map. Kept the tests as regression
+protection regardless, per CODING_STANDARDS.md's testing philosophy.
+
+**D8 (dead `min_block_size` config) deferred**: "Low" severity, no data-loss
+risk, and merging undersized blocks with neighbors is a blocking-algorithm
+design decision that deserves its own pass rather than a rushed fix here.
+Noted for follow-up, not blocking GEPA work.
+
+209 tests pass (was 197 on main), ruff/zuban clean. Moving to Task 2.
 
 ## Lessons
 

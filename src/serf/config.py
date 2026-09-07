@@ -3,7 +3,7 @@
 import os
 import re
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any
 
 import yaml
 
@@ -16,7 +16,7 @@ class Config:
     with the ${variable_name} syntax.
     """
 
-    def __init__(self, config_file: Optional[str] = None):
+    def __init__(self, config_file: str | None = None):
         """Initialize the Config object.
 
         Parameters
@@ -48,12 +48,12 @@ class Config:
     def reload(self) -> None:
         """Reload the configuration file."""
         try:
-            with open(self.config_file, "r", encoding="utf-8") as f:
+            with open(self.config_file, encoding="utf-8") as f:
                 self._config = yaml.safe_load(f)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Configuration file not found: {self.config_file}")
+        except FileNotFoundError as err:
+            raise FileNotFoundError(f"Configuration file not found: {self.config_file}") from err
         except yaml.YAMLError as e:
-            raise ValueError(f"Error parsing configuration file: {e}")
+            raise ValueError(f"Error parsing configuration file: {e}") from e
 
     def _resolve_value(self, value: str) -> str:
         """Resolve a variable reference in a string.
@@ -145,7 +145,7 @@ class Config:
 
         return config
 
-    def get_path(self, key_path: str, default: Optional[str] = None) -> Union[Path, list[Path]]:
+    def get_path(self, key_path: str, default: str | None = None) -> Path | list[Path]:
         """Get a configuration value as a Path object or list of Path objects.
 
         Parameters

@@ -36,14 +36,17 @@ class UUIDMapper:
         Returns
         -------
         EntityBlock
-            New block with mapped IDs (0, 1, 2, ...) and source_uuids stripped
+            New block with mapped IDs (1, 2, 3, ...) and source_ids/source_uuids
+            stripped. Mapped ids start at 1, not 0: models conflate 0 with
+            null/absent in structured output (docs/ID_INVARIANTS.md D6).
         """
         self._id_to_int.clear()
         self._int_to_original.clear()
         self._mapped_ids.clear()
 
         mapped_entities: list[Entity] = []
-        for i, entity in enumerate(block.entities):
+        for offset, entity in enumerate(block.entities):
+            i = offset + 1
             self._id_to_int[entity.id] = i
             self._mapped_ids.add(entity.id)
             self._int_to_original[i] = {
@@ -54,9 +57,16 @@ class UUIDMapper:
                 "entity": entity,
             }
 
+            # source_ids MUST be cleared here, not just uuid/source_uuids: a
+            # prior round's real-id provenance would otherwise occupy the same
+            # numeric space as this round's block-local mapped ints, and
+            # unmapping would resolve it against the wrong record
+            # (docs/ID_INVARIANTS.md D1). The cached copy above is what
+            # restores it correctly after the call.
             mapped_entity = entity.model_copy(deep=True)
             mapped_entity.id = i
             mapped_entity.uuid = None
+            mapped_entity.source_ids = None
             mapped_entity.source_uuids = None
             mapped_entities.append(mapped_entity)
 
@@ -104,12 +114,19 @@ class UUIDMapper:
                 f"missing from LLM output, recovering as singletons"
             )
 
-        # Recover missing entities as un-merged singletons
+        # Recover missing entities as un-merged singletons. A recovered
+        # record is not a merge master, so the "master excludes its own id"
+        # convention (see below) does not apply: its own id is forced into
+        # its own source_ids so coverage validation counts it as accounted
+        # for (docs/ID_INVARIANTS.md Section 5, Phase 2, point 2).
         for mapped_id in sorted(missing_ids):
             orig = self._int_to_original[mapped_id]
             entity = orig["entity"].model_copy(deep=True)
             entity.match_skip = True
             entity.match_skip_reason = "missing_in_match_output"
+            self_id = orig["id"]
+            if self_id not in (entity.source_ids or []):
+                entity.source_ids = [*(entity.source_ids or []), self_id]
             resolution.resolved_entities.append(entity)
 
         # Restore IDs and source_uuids for all resolved entities

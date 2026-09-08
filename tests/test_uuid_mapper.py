@@ -5,7 +5,8 @@ from serf.match.uuid_mapper import UUIDMapper
 
 
 def test_map_block_replaces_ids_with_consecutive_ints() -> None:
-    """map_block replaces entity IDs with 0, 1, 2, ..."""
+    """map_block replaces entity IDs with 1, 2, 3, ... (not 0-based: models
+    conflate 0 with null/absent in structured output)."""
     block = EntityBlock(
         block_key="b1",
         block_size=3,
@@ -17,9 +18,10 @@ def test_map_block_replaces_ids_with_consecutive_ints() -> None:
     )
     mapper = UUIDMapper()
     mapped = mapper.map_block(block)
-    assert [e.id for e in mapped.entities] == [0, 1, 2]
+    assert [e.id for e in mapped.entities] == [1, 2, 3]
     assert [e.name for e in mapped.entities] == ["A", "B", "C"]
     assert all(e.source_uuids is None for e in mapped.entities)
+    assert all(e.source_ids is None for e in mapped.entities)
 
 
 def test_map_block_strips_source_uuids() -> None:
@@ -51,8 +53,9 @@ def test_unmap_block_restores_ids_and_source_uuids() -> None:
     resolution = BlockResolution(
         block_key="b1",
         resolved_entities=[
-            Entity(id=0, name="A merged", source_ids=[1]),
+            Entity(id=1, name="A merged", source_ids=[2]),
         ],
+        was_resolved=True,
         original_count=2,
         resolved_count=1,
     )
@@ -75,12 +78,13 @@ def test_unmap_block_recovers_missing_entities_as_singletons() -> None:
     )
     mapper = UUIDMapper()
     mapper.map_block(block)
-    # LLM only returned entity 0 (A merged with B), entity 2 (C) is missing
+    # LLM only returned mapped entity 1 (A merged with B), mapped 3 (C) is missing
     resolution = BlockResolution(
         block_key="b1",
         resolved_entities=[
-            Entity(id=0, name="A", source_ids=[1]),
+            Entity(id=1, name="A", source_ids=[2]),
         ],
+        was_resolved=True,
         original_count=3,
         resolved_count=1,
     )
@@ -88,14 +92,14 @@ def test_unmap_block_recovers_missing_entities_as_singletons() -> None:
     # Should have 2 entities: A (merged with B) + C (recovered singleton)
     assert len(restored.resolved_entities) == 2
     # The merged entity keeps its source_ids
-    merged = restored.resolved_entities[0]
-    assert merged.id == 100
+    merged = next(e for e in restored.resolved_entities if e.id == 100)
     assert 200 in (merged.source_ids or [])
-    # The recovered entity is a singleton with match_skip
+    # The recovered entity is a singleton with match_skip, self-referenced
     recovered = [e for e in restored.resolved_entities if e.match_skip_reason]
     assert len(recovered) == 1
     assert recovered[0].id == 300
     assert recovered[0].match_skip_reason == "missing_in_match_output"
+    assert 300 in (recovered[0].source_ids or [])
 
 
 def test_unmap_block_deduplicates_source_ids() -> None:
@@ -114,13 +118,14 @@ def test_unmap_block_deduplicates_source_ids() -> None:
     resolution = BlockResolution(
         block_key="b1",
         resolved_entities=[
-            Entity(id=0, name="A merged", source_ids=[1, 2]),
+            Entity(id=1, name="A merged", source_ids=[2, 3]),
         ],
+        was_resolved=True,
         original_count=3,
         resolved_count=1,
     )
     restored = mapper.unmap_block(resolution, block)
-    merged = restored.resolved_entities[0]
+    merged = next(e for e in restored.resolved_entities if e.id == 100)
     assert merged.source_ids is not None
     assert len(merged.source_ids) == len(set(merged.source_ids))
 
@@ -140,8 +145,9 @@ def test_unmap_block_excludes_master_id_from_source_ids() -> None:
     resolution = BlockResolution(
         block_key="b1",
         resolved_entities=[
-            Entity(id=0, name="A merged", source_ids=[1]),
+            Entity(id=1, name="A merged", source_ids=[2]),
         ],
+        was_resolved=True,
         original_count=2,
         resolved_count=1,
     )
@@ -171,8 +177,9 @@ def test_unmap_block_accumulates_source_uuids_transitively() -> None:
     resolution = BlockResolution(
         block_key="b1",
         resolved_entities=[
-            Entity(id=0, name="A merged", source_ids=[1]),
+            Entity(id=1, name="A merged", source_ids=[2]),
         ],
+        was_resolved=True,
         original_count=2,
         resolved_count=1,
     )

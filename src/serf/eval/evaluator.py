@@ -30,6 +30,7 @@ def evaluate_er_results(
     iteration: int = 1,
     historical_uuids: set[str] | None = None,
     previous_entity_count: int | None = None,
+    input_entity_ids: set[int] | None = None,
 ) -> dict[str, Any]:
     """Comprehensive evaluation of entity resolution results.
 
@@ -48,6 +49,13 @@ def evaluate_er_results(
         All UUIDs from all previous iterations (for validation)
     previous_entity_count : int | None
         Entity count from previous iteration (for per-round reduction)
+    input_entity_ids : set[int] | None
+        The exact set of entity ids that entered blocking this iteration.
+        When provided, enables the identifier_coverage gate (docs/ID_INVARIANTS.md):
+        every id must come back as a master id or inside exactly one
+        resolved entity's source_ids. Unlike uuid_validation (which checks
+        that emitted references are *valid*), this catches the case
+        uuid_validation cannot: a record vanishing with no trace at all.
 
     Returns
     -------
@@ -100,6 +108,21 @@ def evaluate_er_results(
     if historical_uuids is not None:
         uuid_validation = validate_source_uuids(unique_entities, historical_uuids)
 
+    # Step 6.5: Identifier coverage if the true input id set is provided
+    identifier_coverage: dict[str, Any] = {"skipped": True}
+    if input_entity_ids is not None:
+        output_ids: set[int] = set()
+        for e in unique_entities:
+            output_ids.add(e.id)
+            output_ids.update(e.source_ids or [])
+        missing_ids = sorted(input_entity_ids - output_ids)
+        identifier_coverage = {
+            "input_count": len(input_entity_ids),
+            "missing_count": len(missing_ids),
+            "missing_ids": missing_ids[:10],
+            "passed": len(missing_ids) == 0,
+        }
+
     # Step 7: Compute reduction metrics
     iteration_input = previous_entity_count or original_entity_count
     reduction_from_matching = iteration_input - len(unique_entities)
@@ -134,6 +157,12 @@ def evaluate_er_results(
             "passed": duplicate_rate < OVERLAP_THRESHOLD,
             "description": f"duplicate entity rate < {OVERLAP_THRESHOLD}%",
         },
+        "identifier_coverage": {
+            "value": identifier_coverage.get("missing_count", 0),
+            "threshold": 0,
+            "passed": identifier_coverage.get("passed", True),
+            "description": "every input id is a master id or in exactly one source_ids list",
+        },
     }
     overall_passed = all(c["passed"] for c in checks.values())
 
@@ -163,6 +192,7 @@ def evaluate_er_results(
             ),
         },
         "uuid_validation": uuid_validation,
+        "identifier_coverage": identifier_coverage,
         "checks": checks,
         "overall_status": "PASS" if overall_passed else "FAIL",
     }

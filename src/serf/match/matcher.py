@@ -3,12 +3,15 @@
 import asyncio
 import json
 import os
+import time
 from typing import cast
 from uuid import uuid4
 
 import dspy
 
 from serf.config import config
+from serf.dspy.adapters import RobustXMLAdapter
+from serf.dspy.budget import TrackedLM, get_ledger
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import BlockResolution, EntityBlock
 from serf.logs import get_logger
@@ -57,20 +60,23 @@ class EntityMatcher:
         self.max_concurrent = max_concurrent or config.get("er.matching.max_concurrent", 20)
         self._predictor: dspy.Predict | None = None
         self._lm: dspy.LM | None = None
-        self._adapter = dspy.XMLAdapter()
+        self._adapter = RobustXMLAdapter()
 
     def _ensure_lm(self) -> dspy.LM:
-        """Get or create the LM instance."""
+        """Get or create the LM instance, tracked against its budget ledger."""
         if self._lm is None:
             api_key = os.environ.get("GEMINI_API_KEY")
             if not api_key:
                 raise ValueError("GEMINI_API_KEY environment variable required")
             temperature = config.get("er.matching.temperature", 0.0)
-            self._lm = dspy.LM(
+            max_output_tokens = config.get("er.matching.max_output_tokens", 65536)
+            ledger_name = "gpt_oss_120b_maas" if "gpt-oss" in self.model else "gemini"
+            self._lm = TrackedLM(
                 self.model,
+                ledger=get_ledger(ledger_name),
                 api_key=api_key,
                 temperature=temperature,
-                max_tokens=8192,
+                max_tokens=max_output_tokens,
             )
         return self._lm
 
@@ -84,6 +90,11 @@ class EntityMatcher:
     def resolve_block(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:
         """Process a single block through the LLM.
 
+        A block of one entity has no possible match, so it is short-circuited
+        before any LLM call: sending it costs money, adds a chance for the
+        model to mangle it, and pollutes match_skip_reason statistics
+        (docs/ID_INVARIANTS.md D4).
+
         Parameters
         ----------
         block : EntityBlock
@@ -96,6 +107,9 @@ class EntityMatcher:
         BlockResolution
             Resolution with merged and non-matched entities
         """
+        if len(block.entities) == 1:
+            return self._singleton_resolution(block, iteration)
+
         mapper = UUIDMapper()
         mapped_block = mapper.map_block(block)
 
@@ -106,25 +120,103 @@ class EntityMatcher:
         few_shot = get_default_few_shot_examples()
 
         try:
-            lm = self._ensure_lm()
-            with dspy.context(lm=lm, adapter=self._adapter):
-                result = self.predictor(
-                    block_records=block_records,
-                    schema_info=SCHEMA_INFO,
-                    few_shot_examples=few_shot,
-                )
-            resolution = result.resolution
+            resolution = self._call_llm_with_retries(block_records, few_shot, block.block_key)
         except Exception as e:
             logger.error(f"LLM failure for block {block.block_key}: {e}")
             resolution = self._error_recovery_resolution(block, iteration)
-            return self._assign_uuids(resolution)
+            return resolution
 
         resolution = mapper.unmap_block(resolution, block)
         for e in resolution.resolved_entities:
             if e.match_skip_reason == "missing_in_match_output":
                 e.match_skip_history = list(e.match_skip_history or []) + [iteration]
-        resolution = self._assign_uuids(resolution)
+        # Only a block the model actually changed gets new identities: this
+        # is what lets cross-iteration validation tell "unchanged" apart
+        # from "resolved" (docs/ID_INVARIANTS.md D5/Section 7).
+        if resolution.was_resolved:
+            resolution = self._assign_uuids(resolution)
         return resolution
+
+    def _call_llm_with_retries(
+        self, block_records: str, few_shot: str, block_key: str
+    ) -> BlockResolution:
+        """Call the BlockMatch predictor, retrying transient failures.
+
+        Parameters
+        ----------
+        block_records : str
+            JSON array of mapped entity records
+        few_shot : str
+            Few-shot merge examples
+        block_key : str
+            Block identifier, for logging
+
+        Returns
+        -------
+        BlockResolution
+            The raw (still block-locally-mapped) LLM resolution
+
+        Raises
+        ------
+        Exception
+            The last attempt's exception, if every retry is exhausted
+        """
+        max_retries = config.get("er.matching.max_retries", 3)
+        retry_delay_ms = config.get("er.matching.retry_delay_ms", 300)
+        lm = self._ensure_lm()
+        last_error: Exception | None = None
+        for attempt in range(max_retries):
+            try:
+                with dspy.context(lm=lm, adapter=self._adapter):
+                    result = self.predictor(
+                        block_records=block_records,
+                        schema_info=SCHEMA_INFO,
+                        few_shot_examples=few_shot,
+                    )
+                return cast(BlockResolution, result.resolution)
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"Block {block_key}: LLM call failed (attempt {attempt + 1}/"
+                        f"{max_retries}), retrying: {e}"
+                    )
+                    time.sleep(retry_delay_ms / 1000)
+        assert last_error is not None
+        raise last_error
+
+    def _singleton_resolution(self, block: EntityBlock, iteration: int) -> BlockResolution:
+        """Pass a one-entity block through untouched, no LLM call.
+
+        Parameters
+        ----------
+        block : EntityBlock
+            Block containing exactly one entity
+        iteration : int
+            Current pipeline iteration number
+
+        Returns
+        -------
+        BlockResolution
+            Pass-through resolution with match_skip_reason='singleton_block'
+        """
+        entity = block.entities[0]
+        skip_history = list(entity.match_skip_history or []) + [iteration]
+        resolved = entity.model_copy(
+            update={
+                "match_skip": True,
+                "match_skip_reason": "singleton_block",
+                "match_skip_history": skip_history,
+            }
+        )
+        return BlockResolution(
+            block_key=block.block_key,
+            matches=[],
+            resolved_entities=[resolved],
+            was_resolved=False,
+            original_count=1,
+            resolved_count=1,
+        )
 
     def _error_recovery_resolution(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:
         """Build resolution with all entities marked error_recovery.

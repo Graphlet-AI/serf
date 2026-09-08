@@ -20,6 +20,7 @@ er:
     batch_size: 10
     max_concurrent: 20
     temperature: 0.0
+    max_output_tokens: 65536
     max_retries: 3
     retry_delay_ms: 300
 
@@ -34,6 +35,14 @@ er:
     resolved: "data/iteration_{iteration}/resolved"
     edges: "data/iteration_{iteration}/edges"
     metrics: "data/iteration_{iteration}/metrics"
+
+budget:
+  # Hard, persistent spend caps (docs/SERF_LONG_SHOT_PLAN.md Section 9.6).
+  # Ledgers live in data/budget/<name>.json and survive process restarts.
+  gemini:
+    cap_usd: 100.0
+  gpt_oss_120b_maas:
+    cap_usd: 20.0
 
 mlflow:
   tracking_uri: "http://127.0.0.1:5001"

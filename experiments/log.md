@@ -185,3 +185,60 @@ teacher=`gemini-3.7-flash` (as run here) only as a stopgap until Vertex AI
 credentials (`GOOGLE_CLOUD_PROJECT` + Application Default Credentials) are
 available in this environment -- currently only `GEMINI_API_KEY` is
 configured. `gpt_oss_120b_maas` ledger: $0 spent to date.
+
+---
+
+## GEPA-2026-09-08-001 — GEPA optimization, abt-buy (full dataset, all blocks)
+
+**Hypothesis.** A much larger, unfiltered training set (all 98 blocks from
+the full Abt-Buy dataset, not just the 39 containing a labeled true pair)
+gives GEPA a more realistic, harder, and more statistically meaningful signal
+than GEPA-2026-09-07-002's 13-block, distractor-only sample, and the
+optimizer improves on the hand-written baseline here too.
+
+**Command.** `uv run python scripts/run_gepa.py abt-buy full 150 --all-blocks`
+(student `gemini-3.5-flash-lite` @ temperature=0.0, reflection_lm
+`gemini-3.7-flash` @ temperature=1.0, `target_block_size=30`,
+`max_metric_calls=150`, `require_true_pair=False`, seed=0)
+
+**Config hash.** N/A. **Code.** 3985e1a. **Cost.** ~$6.03 (cumulative Gemini
+spend: $40.27 of $100). **Wall clock.** 1832.9s (~30.5 min).
+
+**Result.** `baseline_f1 = optimized_f1 = 0.470097...` (identical to full
+float precision). n_train=49, n_val=24, n_test=25. Zero XML-parsing
+failures across 150+ metric calls plus baseline/final eval on 25 test
+examples each.
+
+Inspecting the saved program confirms the optimizer did not change anything:
+`data/gepa/abt_buy_optimized_None_150.json`'s instructions are byte-identical
+to the original hand-written `BlockMatch` docstring. The log shows this was
+not a silent failure -- GEPA proposed and evaluated at least 6 distinct
+candidate instructions against the validation set (aggregate scores around
+0.21-0.24), but every one scored at or below the original ("Selected program
+0" -- the unmodified baseline -- is the most frequent log line, and multiple
+"New subsample score N is not better than old score N, skipping" entries
+confirm proposed candidates were compared and rejected, not ignored).
+
+**Verdict.** Genuine negative result, reported as such per this doc's own
+honesty rules ("say when a number is worse than the baseline" and "report
+the optimization budget"). Three candidate explanations, none mutually
+exclusive: (1) 150 metric calls may simply be too small a budget for GEPA to
+find an improvement on a 49-example training set with this much
+heterogeneity (98 blocks across the whole dataset vs. 13 curated ones) --
+the prior positive result used a budget-to-trainset-size ratio of 30:6 = 5x,
+this run used 150:49 = 3x; (2) instruction-only optimization (no `dspy.Flex`
+restructuring) may have limited headroom against Gemini 3.5 Flash-Lite's
+intrinsic ceiling on this harder distribution; (3) F1=0.47 itself is
+measured by this module's simplified harness (`dspy.Predict(BlockMatch)`
+called directly with block-local mapped ids, scored by `er_metric`'s
+pairwise F1) rather than the full production path (`EntityMatcher` +
+`UUIDMapper` + `evaluate_er_results`), so it is not directly comparable to
+`serf benchmark`'s reported numbers or to MISSION.md's cited baseline
+(0.844 F1 on Abt-Buy, different model, different harness) -- the drop from
+0.95 (previous run) to 0.47 here is a difficulty/realism change in the
+*evaluation set*, not evidence the pipeline regressed.
+
+**Follow-up, not done this session (time/budget):** re-run with a larger
+`max_metric_calls` (e.g. 400-500) to test whether budget was the binding
+constraint, and/or evaluate the same trainset through the full production
+harness for a directly comparable number.

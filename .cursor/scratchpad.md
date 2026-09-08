@@ -57,8 +57,11 @@ loop), before any optimization (Stage 3).
 - [x] Task 1: Fix identifier-conservation correctness bugs (D1-D8) + max_tokens
 - [x] Task 2: Experiment log + budget ledger + caching
 - [x] Task 3: Baseline suite (dblp-acm, abt-buy; dblp-scholar deferred -- large, low priority vs GEPA)
-- [ ] Task 4: GEPA optimization loop
-- [ ] Task 5: Final report + PR
+- [x] Task 4: GEPA optimization loop -- built, validated end-to-end, two real runs
+      logged (one positive on a small curated set, one null result on the full,
+      realistic dataset). See experiments/log.md GEPA-2026-09-07-002 and
+      GEPA-2026-09-08-001.
+- [ ] Task 5: Final report + PR (in progress)
 
 ## Executor's Feedback or Assistance Requests
 
@@ -76,6 +79,27 @@ end-to-end against the real gpt-oss-120b-maas endpoint without proper
 Google Cloud credentials being added as a secret (Cursor Dashboard > Cloud
 Agents > Secrets: `GOOGLE_CLOUD_PROJECT` + either
 `GOOGLE_APPLICATION_CREDENTIALS` (service-account key) or equivalent ADC).
+User said to proceed with Gemini 3.5 Flash-Lite as student in the meantime
+(reverting to the original student=Gemini 3.5 Flash-Lite/teacher=Gemini 3.7
+Flash setup) until Vertex AI is configured.
+
+**Task 4 status at end of session.** Ran a much larger, unfiltered training
+run per explicit instruction (all 98 blocks from the full Abt-Buy dataset,
+49/24/25 train/val/test split, max_metric_calls=150, ~30.5 min, ~$6).
+Result: `baseline_f1 == optimized_f1 == 0.4701` exactly -- GEPA proposed and
+evaluated 6+ candidate instructions but none beat the hand-written original
+on this harder, more realistic distribution, and correctly kept the
+original rather than regressing. Genuine negative result, logged honestly
+(GEPA-2026-09-08-001) rather than hidden or re-run-until-positive. This
+contrasts with the earlier small-scale run (GEPA-2026-09-07-002: 0.95 ->
+1.00 on a 13-block curated set) -- read together, the honest interpretation
+is "the harness works and can show improvement, but a real effect on the
+full, realistic distribution needs either a bigger optimization budget or a
+different lever (e.g. dspy.Flex) than this session had time/budget to test."
+Cumulative Gemini spend: $40.27 of $100 (~40%), all producing either a fixed
+bug or a logged, reproducible result -- none wasted silently. Remaining
+budget (~$60) would support a larger max_metric_calls sweep and/or the
+GPT-OSS-120B-maas run once Vertex AI credentials are available.
 
 **Task 1 complete.** Wrote all 9 required tests from ID_INVARIANTS.md §9
 (`tests/test_id_invariants.py`), ran them against the pre-fix code to find real

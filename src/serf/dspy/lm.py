@@ -128,11 +128,9 @@ def _parse_service_account_info(raw: str) -> dict[str, Any]:
         If the value is not valid service-account JSON
     """
     candidates = [raw]
-    try:
-        decoded = base64.b64decode(raw).decode("utf-8")
+    decoded = _decode_base64(raw)
+    if decoded is not None:
         candidates.append(decoded)
-    except (ValueError, UnicodeDecodeError):
-        pass
 
     for candidate in candidates:
         stripped = candidate.strip()
@@ -149,6 +147,28 @@ def _parse_service_account_info(raw: str) -> dict[str, Any]:
         "VERTEX_AI_TOKEN must be a Google access token, a service account JSON, "
         "or a base64-encoded service account JSON"
     )
+
+
+def _decode_base64(raw: str) -> str | None:
+    """Decode standard or URL-safe base64, adding padding if needed.
+
+    Parameters
+    ----------
+    raw : str
+        Base64-encoded text, possibly without ``=`` padding
+
+    Returns
+    -------
+    str | None
+        Decoded UTF-8 text, or ``None`` if decoding fails
+    """
+    padded = raw + "=" * ((4 - len(raw) % 4) % 4)
+    for decoder in (base64.b64decode, base64.urlsafe_b64decode):
+        try:
+            return decoder(padded).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+    return None
 
 
 def _vertex_project_id(info: dict[str, Any] | None = None) -> str:
@@ -201,7 +221,12 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
     location = config.get("models.vertex_ai.location", "us-central1")
     raw = os.environ.get("VERTEX_AI_TOKEN", "").strip()
     info: dict[str, Any] | None = None
-    if raw and not raw.startswith("ya29."):
+    if (
+        raw
+        and not raw.startswith("ya29.")
+        and not os.environ.get("GOOGLE_CLOUD_PROJECT")
+        and not os.environ.get("VERTEXAI_PROJECT")
+    ):
         info = _parse_service_account_info(raw)
     project = _vertex_project_id(info)
     api_base = (

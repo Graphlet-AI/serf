@@ -5,8 +5,14 @@ from unittest.mock import MagicMock, patch
 
 import dspy
 
-from serf.dspy.optimize import er_metric, optimize_module
-from serf.dspy.types import BlockResolution, MatchDecision
+from serf.dspy.optimize import (
+    er_metric,
+    gold_resolution_for_block,
+    optimize_module,
+    prepare_dataset_splits,
+)
+from serf.dspy.types import BlockResolution, Entity, EntityBlock, MatchDecision
+from serf.eval.splits import SplitSizes
 
 
 def _resolution(matches: list[tuple[int, int]]) -> BlockResolution:
@@ -84,3 +90,36 @@ def test_optimize_module_uses_student_lm_and_teacher_reflection(
     assert compile_kwargs["student"] is module
     assert compile_kwargs["trainset"] is trainset
     assert result is optimizer.compile.return_value
+
+
+def test_gold_resolution_keeps_pairs_inside_the_block() -> None:
+    """Gold labels only include ground-truth pairs fully inside the block."""
+    entities = [Entity(id=i, name=f"e{i}", description="", entity_type="entity") for i in range(4)]
+    block = EntityBlock(block_key="b", block_size=3, entities=entities[:3])
+    gold = gold_resolution_for_block(block, {(0, 1), (0, 9), (2, 3)})
+    pairs = {(m.entity_a_id, m.entity_b_id) for m in gold.matches}
+    assert pairs == {(0, 1)}
+
+
+def test_prepare_dataset_splits_builds_disjoint_examples() -> None:
+    """prepare_dataset_splits turns blocked data into train/val examples plus holdout."""
+    entities = [Entity(id=i, name=f"e{i}", description="", entity_type="entity") for i in range(30)]
+    blocks = [
+        EntityBlock(
+            block_key=str(i),
+            block_size=3,
+            entities=entities[i * 3 : i * 3 + 3],
+        )
+        for i in range(10)
+    ]
+    train, val, holdout = prepare_dataset_splits(
+        entities,
+        ground_truth={(0, 1), (3, 4)},
+        blocks=blocks,
+        sizes=SplitSizes(train_blocks=2, val_records=4, holdout_records=5),
+        seed=3,
+    )
+    assert len(train) == 2
+    assert len(val) >= 1
+    assert len(holdout) == 5
+    assert all(example.resolution is not None for example in train)

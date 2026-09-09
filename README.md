@@ -104,7 +104,8 @@ serf download --dataset dblp-acm
 serf benchmark --dataset dblp-acm --output data/results/
 
 # Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.7 Flash teacher)
-serf optimize --signature block-match --trainset data/labeled/train.jsonl --valset data/labeled/val.jsonl
+# Blocks ALL records, then samples 1000 train blocks / 500 val records / 1000 holdout
+serf optimize --dataset dblp-acm --signature block-match
 ```
 
 ### Python API

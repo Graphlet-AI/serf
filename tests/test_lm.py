@@ -10,8 +10,6 @@ import pytest
 from serf.config import config
 from serf.dspy.lm import (
     create_lm,
-    get_train_sample_size,
-    get_train_sample_sizes,
     is_vertex_maas_model,
     vertex_access_token,
 )
@@ -29,21 +27,6 @@ def test_config_teacher_is_gemini_37_flash() -> None:
     assert config.get("models.analyze_llm") == config.get("models.teacher")
 
 
-def test_train_sample_size_configured_for_each_benchmark_dataset() -> None:
-    """Each benchmark dataset has an explicit training sample size."""
-    sizes = get_train_sample_sizes()
-    expected = {
-        "walmart-amazon": 1500,
-        "abt-buy": 1500,
-        "amazon-google": 1500,
-        "dblp-acm": 1500,
-        "dblp-scholar": 1500,
-    }
-    assert sizes == expected
-    for name, size in expected.items():
-        assert get_train_sample_size(name) == size
-
-
 def test_is_vertex_maas_model() -> None:
     """GPT OSS MaaS models route through Vertex; Gemini does not."""
     assert is_vertex_maas_model("openai/gpt-oss-120b-maas") is True
@@ -56,6 +39,37 @@ def test_vertex_access_token_accepts_raw_bearer(monkeypatch: pytest.MonkeyPatch)
     """A pre-minted access token in VERTEX_AI_TOKEN is used as-is."""
     monkeypatch.setenv("VERTEX_AI_TOKEN", "ya29.fake-access-token")
     assert vertex_access_token() == "ya29.fake-access-token"
+
+
+def test_vertex_access_token_decodes_unpadded_base64_service_account(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """VERTEX_AI_TOKEN may omit base64 padding."""
+    info = {
+        "type": "service_account",
+        "project_id": "test-project",
+        "private_key_id": "abc",
+        "private_key": "-----BEGIN PRIVATE KEY-----\nMII\n-----END PRIVATE KEY-----\n",
+        "client_email": "sa@test-project.iam.gserviceaccount.com",
+        "client_id": "1",
+        "token_uri": "https://oauth2.googleapis.com/token",
+    }
+    encoded = base64.b64encode(json.dumps(info).encode()).decode().rstrip("=")
+    assert "=" not in encoded
+    monkeypatch.setenv("VERTEX_AI_TOKEN", encoded)
+
+    mock_creds = MagicMock()
+    mock_creds.token = "refreshed-token"
+
+    with (
+        patch("serf.dspy.lm.service_account.Credentials") as mock_cls,
+        patch("serf.dspy.lm.Request"),
+    ):
+        mock_cls.from_service_account_info.return_value = mock_creds
+        token = vertex_access_token()
+
+    assert token == "refreshed-token"
+    mock_cls.from_service_account_info.assert_called_once()
 
 
 def test_vertex_access_token_decodes_base64_service_account(
@@ -107,6 +121,7 @@ def test_create_lm_student_uses_vertex(
     mock_token: MagicMock, mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Student LM uses GPT OSS 120b via the Vertex OpenAI-compatible endpoint."""
+    monkeypatch.setenv("VERTEX_AI_TOKEN", "ya29.fake-access-token")
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0349392143")
     create_lm(role="student")
 

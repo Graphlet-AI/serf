@@ -129,8 +129,16 @@ def test_optimize_help() -> None:
     assert result.exit_code == 0
     assert "--signature" in result.output
     assert "--trainset" in result.output
+    assert "--dataset" in result.output
     assert "--student-model" in result.output
     assert "--teacher-model" in result.output
+
+
+def test_optimize_requires_dataset_or_trainset() -> None:
+    """Optimize without --dataset or --trainset fails."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["optimize"])
+    assert result.exit_code != 0
 
 
 def test_run_help() -> None:

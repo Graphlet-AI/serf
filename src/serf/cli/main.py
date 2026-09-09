@@ -726,9 +726,16 @@ def download(dataset: str, output_path: str | None) -> None:
     help="ER signature to optimize with GEPA",
 )
 @click.option(
+    "--dataset",
+    "-d",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    required=False,
+    help="Benchmark dataset to block fully, then sample train/val/holdout",
+)
+@click.option(
     "--trainset",
     type=click.Path(exists=True),
-    required=True,
+    required=False,
     help="JSONL file of labeled training examples",
 )
 @click.option(
@@ -757,44 +764,96 @@ def download(dataset: str, output_path: str | None) -> None:
     default=None,
     help="Teacher/reflection LM (from config.yml models.teacher)",
 )
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for train/val/holdout sampling",
+)
 def optimize(
     signature: str,
-    trainset: str,
+    dataset: str | None,
+    trainset: str | None,
     valset: str | None,
     output_path: str | None,
     student_model: str | None,
     teacher_model: str | None,
+    seed: int | None,
 ) -> None:
     """Optimize an ER signature with GEPA.
 
     Uses the student/task LM for rollouts and the teacher LM as GEPA's
     reflection model. Requires VERTEX_AI_TOKEN for GPT OSS 120b and
     GEMINI_API_KEY for Gemini 3.7 Flash.
+
+    With --dataset, blocks all records then samples train blocks, validation
+    records, and holdout records using sizes from config.yml.
     """
     import dspy
 
+    from serf.block.pipeline import SemanticBlockingPipeline
     from serf.config import config as serf_config
-    from serf.dspy.lm import get_train_sample_sizes
-    from serf.dspy.optimize import INPUT_FIELDS, SIGNATURES, load_jsonl_examples, optimize_module
+    from serf.dspy.optimize import (
+        INPUT_FIELDS,
+        SIGNATURES,
+        load_jsonl_examples,
+        optimize_module,
+        prepare_dataset_splits,
+    )
+    from serf.eval.benchmarks import BenchmarkDataset
+    from serf.eval.splits import get_all_split_sizes, get_split_sizes
+
+    if not dataset and not trainset:
+        raise click.UsageError("Provide --dataset or --trainset")
 
     setup_mlflow()
 
     student_model = student_model or serf_config.get("models.student")
     teacher_model = teacher_model or serf_config.get("models.teacher")
+    seed = seed if seed is not None else int(serf_config.get("optimize.seed", 42))
     click.echo("GEPA optimization")
     click.echo(f"  Signature: {signature}")
     click.echo(f"  Student:   {student_model}")
     click.echo(f"  Teacher:   {teacher_model}")
-    click.echo("  Train sample sizes (config.yml):")
-    for name, size in get_train_sample_sizes().items():
-        click.echo(f"    {name}: {size}")
+    click.echo("  Split sizes (block all, then sample):")
+    for name, sizes in get_all_split_sizes().items():
+        click.echo(
+            f"    {name}: {sizes.train_blocks} train blocks, "
+            f"{sizes.val_records} val records, "
+            f"{sizes.holdout_records} holdout records"
+        )
 
-    input_fields = INPUT_FIELDS[signature]
-    train_examples = load_jsonl_examples(trainset, input_fields)
-    val_examples = load_jsonl_examples(valset, input_fields) if valset else None
+    holdout_records: list[Any] = []
+    if dataset:
+        sizes = get_split_sizes(dataset)
+        benchmark_data = BenchmarkDataset.download(dataset, output_path)
+        left_entities, right_entities = benchmark_data.to_entities()
+        entities = left_entities + right_entities
+        click.echo(f"  Blocking all {len(entities)} records...")
+        blocker = SemanticBlockingPipeline(
+            target_block_size=int(serf_config.get("er.blocking.target_block_size", 30)),
+            max_block_size=int(serf_config.get("er.blocking.max_block_size", 100)),
+            auto_scale=False,
+        )
+        blocks, blocking_metrics = blocker.run(entities)
+        click.echo(f"  Created {blocking_metrics.total_blocks} blocks")
+        train_examples, val_examples, holdout_records = prepare_dataset_splits(
+            entities,
+            benchmark_data.ground_truth,
+            blocks,
+            sizes=sizes,
+            seed=seed,
+        )
+    else:
+        input_fields = INPUT_FIELDS[signature]
+        train_examples = load_jsonl_examples(str(trainset), input_fields)
+        val_examples = load_jsonl_examples(valset, input_fields) if valset else None
+
     click.echo(f"  Trainset:  {len(train_examples)} examples")
     if val_examples is not None:
         click.echo(f"  Valset:    {len(val_examples)} examples")
+    if holdout_records:
+        click.echo(f"  Holdout:   {len(holdout_records)} records")
 
     module = cast(dspy.Module, dspy.Predict(SIGNATURES[signature]))
     optimized = optimize_module(
@@ -806,9 +865,18 @@ def optimize(
     )
 
     if output_path:
-        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-        optimized.save(output_path)
-        click.echo(f"\nSaved optimized program to {output_path}")
+        os.makedirs(
+            output_path if dataset else (os.path.dirname(output_path) or "."), exist_ok=True
+        )
+        program_path = os.path.join(output_path, f"{dataset}_gepa.json") if dataset else output_path
+        optimized.save(program_path)
+        click.echo(f"\nSaved optimized program to {program_path}")
+        if holdout_records:
+            holdout_path = os.path.join(output_path, f"{dataset}_holdout.jsonl")
+            with open(holdout_path, "w", encoding="utf-8") as handle:
+                for entity in holdout_records:
+                    handle.write(json.dumps(entity.model_dump(mode="json")) + "\n")
+            click.echo(f"Saved holdout records to {holdout_path}")
 
 
 # ---------------------------------------------------------------------------

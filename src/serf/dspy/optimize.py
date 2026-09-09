@@ -13,9 +13,12 @@ from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 from serf.config import config
 from serf.dspy.lm import create_lm
 from serf.dspy.signatures import BlockMatch, EdgeResolve, EntityMerge
-from serf.dspy.types import BlockResolution
+from serf.dspy.types import BlockResolution, Entity, EntityBlock, MatchDecision
 from serf.eval.metrics import f1_score
+from serf.eval.splits import SplitSizes, chunk_records, sample_blocked_splits
 from serf.logs import get_logger
+from serf.match.few_shot import get_default_few_shot_examples
+from serf.match.matcher import SCHEMA_INFO
 
 logger = get_logger(__name__)
 
@@ -138,6 +141,129 @@ def load_jsonl_examples(path: str, input_fields: list[str]) -> list[dspy.Example
                 data["resolution"] = BlockResolution.model_validate(data["resolution"])
             examples.append(dspy.Example(**data).with_inputs(*input_fields))
     return examples
+
+
+def gold_resolution_for_block(
+    block: EntityBlock,
+    ground_truth: set[tuple[int, int]],
+) -> BlockResolution:
+    """Build a gold BlockResolution from ground-truth pairs inside a block.
+
+    Parameters
+    ----------
+    block : EntityBlock
+        Block of entities
+    ground_truth : set[tuple[int, int]]
+        True matching pairs
+
+    Returns
+    -------
+    BlockResolution
+        Gold matches fully contained in the block
+    """
+    ids = {entity.id for entity in block.entities}
+    matches = [
+        MatchDecision(
+            entity_a_id=left,
+            entity_b_id=right,
+            is_match=True,
+            confidence=1.0,
+            reasoning="ground truth",
+        )
+        for left, right in ground_truth
+        if left in ids and right in ids
+    ]
+    return BlockResolution(
+        block_key=block.block_key,
+        matches=matches,
+        resolved_entities=list(block.entities),
+        was_resolved=bool(matches),
+        original_count=block.block_size,
+        resolved_count=block.block_size,
+    )
+
+
+def blocks_to_examples(
+    blocks: list[EntityBlock],
+    ground_truth: set[tuple[int, int]],
+) -> list[dspy.Example]:
+    """Convert entity blocks into labeled DSPy examples.
+
+    Parameters
+    ----------
+    blocks : list[EntityBlock]
+        Blocks to convert
+    ground_truth : set[tuple[int, int]]
+        True matching pairs
+
+    Returns
+    -------
+    list[dspy.Example]
+        BlockMatch examples with gold resolutions
+    """
+    few_shot = get_default_few_shot_examples()
+    examples: list[dspy.Example] = []
+    for block in blocks:
+        records = json.dumps(
+            [entity.model_dump(mode="json") for entity in block.entities], indent=2
+        )
+        examples.append(
+            dspy.Example(
+                block_records=records,
+                schema_info=SCHEMA_INFO,
+                few_shot_examples=few_shot,
+                resolution=gold_resolution_for_block(block, ground_truth),
+            ).with_inputs("block_records", "schema_info", "few_shot_examples")
+        )
+    return examples
+
+
+def prepare_dataset_splits(
+    entities: list[Entity],
+    ground_truth: set[tuple[int, int]],
+    blocks: list[EntityBlock],
+    sizes: SplitSizes | None = None,
+    seed: int | None = None,
+) -> tuple[list[dspy.Example], list[dspy.Example], list[Entity]]:
+    """Sample train blocks, val records, and holdout from already-blocked data.
+
+    Parameters
+    ----------
+    entities : list[Entity]
+        Full entity list
+    ground_truth : set[tuple[int, int]]
+        True matching pairs
+    blocks : list[EntityBlock]
+        Semantic blocks over the full entity list
+    sizes : SplitSizes | None
+        Split sizes. Defaults to global benchmark config.
+    seed : int | None
+        RNG seed
+
+    Returns
+    -------
+    tuple[list[dspy.Example], list[dspy.Example], list[Entity]]
+        Train examples, val examples, holdout records
+    """
+    if sizes is None:
+        sizes = SplitSizes(
+            train_blocks=int(config.get("benchmarks.train_blocks", 1000)),
+            val_records=int(config.get("benchmarks.val_records", 500)),
+            holdout_records=int(config.get("benchmarks.holdout_records", 1000)),
+        )
+    splits = sample_blocked_splits(
+        entities,
+        blocks,
+        train_blocks=sizes.train_blocks,
+        val_records=sizes.val_records,
+        holdout_records=sizes.holdout_records,
+        seed=seed,
+    )
+    target_block_size = int(config.get("er.blocking.target_block_size", 30))
+    val_blocks = chunk_records(splits.val_records, target_block_size, prefix="val")
+    train_examples = blocks_to_examples(splits.train_blocks, ground_truth)
+    val_examples = blocks_to_examples(val_blocks, ground_truth)
+    return train_examples, val_examples, splits.holdout_records
 
 
 def optimize_module(

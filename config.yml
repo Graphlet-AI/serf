@@ -12,6 +12,7 @@ models:
   max_tokens: 8192
   vertex_ai:
     location: "us-central1"
+    token_refresh_margin_seconds: 300
 
 optimize:
   auto: "light"

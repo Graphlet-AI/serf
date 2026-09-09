@@ -2,13 +2,13 @@
 
 import asyncio
 import json
-import os
 from typing import cast
 from uuid import uuid4
 
 import dspy
 
 from serf.config import config
+from serf.dspy.lm import create_lm
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import BlockResolution, EntityBlock
 from serf.logs import get_logger
@@ -60,17 +60,14 @@ class EntityMatcher:
         self._adapter = dspy.XMLAdapter()
 
     def _ensure_lm(self) -> dspy.LM:
-        """Get or create the LM instance."""
+        """Get or create the student/task LM instance."""
         if self._lm is None:
-            api_key = os.environ.get("GEMINI_API_KEY")
-            if not api_key:
-                raise ValueError("GEMINI_API_KEY environment variable required")
             temperature = config.get("er.matching.temperature", 0.0)
-            self._lm = dspy.LM(
+            self._lm = create_lm(
                 self.model,
-                api_key=api_key,
+                role="student",
                 temperature=temperature,
-                max_tokens=8192,
+                max_tokens=config.get("models.max_tokens", 8192),
             )
         return self._lm
 

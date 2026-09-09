@@ -21,10 +21,12 @@ cd serf
 uv sync --extra dev
 ```
 
-You need a Gemini API key for the matching step:
+You need API credentials for matching and GEPA optimization:
 
 ```bash
-export GEMINI_API_KEY="your-key-here"
+export GEMINI_API_KEY="your-key-here"          # Gemini 3.7 Flash teacher / analyze
+export VERTEX_AI_TOKEN="your-vertex-token"     # GPT OSS 120b student (Vertex AI MaaS)
+export GOOGLE_CLOUD_PROJECT="your-gcp-project"
 ```
 
 ## The Two-Command Workflow
@@ -62,7 +64,7 @@ Dataset Profile (0.3s)
       target_block_size: 30
       max_block_size: 100
     matching:
-      model: gemini/gemini-3.5-flash-lite
+      model: openai/gpt-oss-120b-maas
     max_iterations: 5
     convergence_threshold: 0.01
 ```
@@ -89,7 +91,7 @@ Output:
 SERF Entity Resolution
   Input:  data/companies.csv
   Output: data/resolved/
-  Model:  gemini/gemini-3.5-flash-lite
+  Model:  openai/gpt-oss-120b-maas
 
   === Iteration 1 ===
   Entities: 4910
@@ -159,8 +161,10 @@ All settings live in `config.yml`:
 ```yaml
 models:
   embedding: "intfloat/multilingual-e5-base" # Embedding model for blocking
-  llm: "gemini/gemini-3.5-flash-lite" # LLM for matching
-  analyze_llm: "${models.llm}" # LLM for analyze (defaults to same)
+  student: "openai/gpt-oss-120b-maas" # Student/task LM for matching
+  teacher: "gemini/gemini-3.7-flash" # Teacher/reflection LM for GEPA
+  llm: "${models.student}" # LLM for matching
+  analyze_llm: "${models.teacher}" # LLM for analyze
   temperature: 0.0
 
 er:
@@ -176,7 +180,7 @@ Override any setting via CLI flags or an ER config YAML:
 
 ```bash
 # Override model
-serf run --input data.csv --output out/ --model gemini/gemini-2.5-flash
+serf run --input data.csv --output out/ --model openai/gpt-oss-120b-maas
 
 # Override block size
 serf run --input data.csv --output out/ --target-block-size 50
@@ -213,7 +217,7 @@ blocking:
 
 # Matching parameters
 matching:
-  model: gemini/gemini-3.5-flash-lite
+  model: openai/gpt-oss-120b-maas
 
 # Iteration control
 max_iterations: 5

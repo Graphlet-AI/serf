@@ -5,7 +5,7 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, cast
 
 import click
 import pandas as pd
@@ -183,7 +183,8 @@ def run(
     (DSPy BlockMatch). Runs iterative rounds until convergence.
     Writes resolved entities as Parquet and CSV.
 
-    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
+    for Gemini 3.7 Flash (teacher/analyze).
     """
     from serf.pipeline import ERConfig, run_pipeline
 
@@ -713,6 +714,104 @@ def download(dataset: str, output_path: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# optimize  (GEPA student/teacher prompt optimization)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--signature",
+    type=click.Choice(["block-match", "entity-merge", "edge-resolve"], case_sensitive=False),
+    default="block-match",
+    help="ER signature to optimize with GEPA",
+)
+@click.option(
+    "--trainset",
+    type=click.Path(exists=True),
+    required=True,
+    help="JSONL file of labeled training examples",
+)
+@click.option(
+    "--valset",
+    type=click.Path(exists=True),
+    required=False,
+    help="JSONL file of labeled validation examples",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Path to save the optimized DSPy program",
+)
+@click.option(
+    "--student-model",
+    type=str,
+    default=None,
+    help="Student/task LM (from config.yml models.student)",
+)
+@click.option(
+    "--teacher-model",
+    type=str,
+    default=None,
+    help="Teacher/reflection LM (from config.yml models.teacher)",
+)
+def optimize(
+    signature: str,
+    trainset: str,
+    valset: str | None,
+    output_path: str | None,
+    student_model: str | None,
+    teacher_model: str | None,
+) -> None:
+    """Optimize an ER signature with GEPA.
+
+    Uses the student/task LM for rollouts and the teacher LM as GEPA's
+    reflection model. Requires VERTEX_AI_TOKEN for GPT OSS 120b and
+    GEMINI_API_KEY for Gemini 3.7 Flash.
+    """
+    import dspy
+
+    from serf.config import config as serf_config
+    from serf.dspy.lm import get_train_sample_sizes
+    from serf.dspy.optimize import INPUT_FIELDS, SIGNATURES, load_jsonl_examples, optimize_module
+
+    setup_mlflow()
+
+    student_model = student_model or serf_config.get("models.student")
+    teacher_model = teacher_model or serf_config.get("models.teacher")
+    click.echo("GEPA optimization")
+    click.echo(f"  Signature: {signature}")
+    click.echo(f"  Student:   {student_model}")
+    click.echo(f"  Teacher:   {teacher_model}")
+    click.echo("  Train sample sizes (config.yml):")
+    for name, size in get_train_sample_sizes().items():
+        click.echo(f"    {name}: {size}")
+
+    input_fields = INPUT_FIELDS[signature]
+    train_examples = load_jsonl_examples(trainset, input_fields)
+    val_examples = load_jsonl_examples(valset, input_fields) if valset else None
+    click.echo(f"  Trainset:  {len(train_examples)} examples")
+    if val_examples is not None:
+        click.echo(f"  Valset:    {len(val_examples)} examples")
+
+    module = cast(dspy.Module, dspy.Predict(SIGNATURES[signature]))
+    optimized = optimize_module(
+        module,
+        trainset=train_examples,
+        valset=val_examples,
+        student_model=student_model,
+        teacher_model=teacher_model,
+    )
+
+    if output_path:
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        optimized.save(output_path)
+        click.echo(f"\nSaved optimized program to {output_path}")
+
+
+# ---------------------------------------------------------------------------
 # benchmark  (single dataset, LLM matching)
 # ---------------------------------------------------------------------------
 
@@ -782,7 +881,8 @@ def benchmark(
     """Run ER pipeline against a benchmark dataset and evaluate.
 
     Uses embeddings for blocking and LLM for matching.
-    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
+    for Gemini 3.7 Flash (teacher/analyze).
     """
     from serf.eval.benchmarks import BenchmarkDataset
 
@@ -921,7 +1021,8 @@ def benchmark_all(
 ) -> None:
     """Run LLM-based benchmarks on all available datasets.
 
-    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
+    for Gemini 3.7 Flash (teacher/analyze).
     """
     from serf.config import config as serf_config
     from serf.eval.benchmarks import BenchmarkDataset

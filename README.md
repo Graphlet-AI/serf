@@ -71,10 +71,12 @@ docker compose --profile test up
 docker compose run serf analyze --input data/input.csv --output data/er_config.yml
 ```
 
-Set your API key in a `.env` file or export it:
+Set your API keys in a `.env` file or export them:
 
 ```bash
 echo "GEMINI_API_KEY=your-key" > .env
+echo "VERTEX_AI_TOKEN=your-vertex-token" >> .env
+echo "GOOGLE_CLOUD_PROJECT=your-gcp-project" >> .env
 ```
 
 ### System Requirements
@@ -100,6 +102,9 @@ serf eval --input data/matches/
 # Benchmark against standard datasets
 serf download --dataset dblp-acm
 serf benchmark --dataset dblp-acm --output data/results/
+
+# Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.7 Flash teacher)
+serf optimize --signature block-match --trainset data/labeled/train.jsonl --valset data/labeled/val.jsonl
 ```
 
 ### Python API
@@ -114,7 +119,7 @@ pipeline = SemanticBlockingPipeline(target_block_size=50)
 blocks, metrics = pipeline.run(entities)
 
 # Match
-matcher = EntityMatcher(model="gemini/gemini-3.5-flash-lite")
+matcher = EntityMatcher(model="openai/gpt-oss-120b-maas")
 resolutions = await matcher.resolve_blocks(blocks)
 
 # Evaluate
@@ -127,7 +132,9 @@ metrics = evaluate_resolution(predicted_pairs, ground_truth_pairs)
 import dspy
 from serf.dspy.signatures import BlockMatch
 
-lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
+from serf.dspy.lm import create_lm
+
+lm = create_lm(role="student")  # openai/gpt-oss-120b-maas via VERTEX_AI_TOKEN
 dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
 
 matcher = dspy.ChainOfThought(BlockMatch)
@@ -136,7 +143,7 @@ result = matcher(block_records=block_json, schema_info=schema, few_shot_examples
 
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses Gemini 3.5 Flash-Lite via DSPy BlockMatch.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.7 Flash as the teacher/reflection LM for GEPA.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
@@ -167,7 +174,8 @@ All configuration is centralized in `config.yml`:
 
 ```python
 from serf.config import config
-model = config.get("models.llm")  # "gemini/gemini-3.5-flash-lite"
+model = config.get("models.llm")  # "openai/gpt-oss-120b-maas"
+teacher = config.get("models.teacher")  # "gemini/gemini-3.7-flash"
 block_size = config.get("er.blocking.target_block_size")  # 50
 ```
 

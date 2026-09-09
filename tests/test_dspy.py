@@ -6,15 +6,18 @@ from collections.abc import Generator
 import dspy
 import pytest
 
+from serf.dspy.lm import create_lm
+
+pytestmark = pytest.mark.skipif(
+    not os.environ.get("GEMINI_API_KEY"),
+    reason="GEMINI_API_KEY not set",
+)
+
 
 @pytest.fixture
 def lm() -> Generator[dspy.LM, None, None]:
-    """Get the XMLAdapter style language model."""
-    GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-    if not GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY environment variable is not set")
-
-    lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
+    """Get the XMLAdapter style language model using the teacher LM."""
+    lm = create_lm(role="teacher")
     dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
 
     yield lm

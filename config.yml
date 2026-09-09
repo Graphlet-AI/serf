@@ -4,9 +4,20 @@ logs:
 
 models:
   embedding: "intfloat/multilingual-e5-base"
-  llm: "gemini/gemini-3.5-flash-lite"
-  analyze_llm: "${models.llm}"
+  student: "openai/gpt-oss-120b-maas"
+  teacher: "gemini/gemini-3.7-flash"
+  llm: "${models.student}"
+  analyze_llm: "${models.teacher}"
   temperature: 0.0
+  max_tokens: 8192
+  vertex_ai:
+    location: "us-central1"
+
+optimize:
+  auto: "light"
+  num_threads: 4
+  log_dir: "data/gepa_logs"
+  seed: 42
 
 er:
   blocking:
@@ -48,24 +59,42 @@ mlflow:
 
 benchmarks:
   output_dir: "data/benchmarks"
+  train_blocks: 1000
+  val_records: 500
+  holdout_records: 1000
   datasets:
     walmart-amazon:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"
       domain: products
       difficulty: hard
+      train_blocks: 1000
+      val_records: 500
+      holdout_records: 1000
     abt-buy:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Textual/Abt-Buy/exp_data"
       domain: products
       difficulty: hard
+      train_blocks: 1000
+      val_records: 500
+      holdout_records: 1000
     amazon-google:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Amazon-Google/amazon_google_exp_data.zip"
       domain: products
       difficulty: hard
+      train_blocks: 1000
+      val_records: 500
+      holdout_records: 1000
     dblp-acm:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-ACM/dblp_acm_exp_data.zip"
       domain: bibliographic
       difficulty: easy
+      train_blocks: 1000
+      val_records: 500
+      holdout_records: 1000
     dblp-scholar:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-GoogleScholar/dblp_scholar_exp_data.zip"
       domain: bibliographic
       difficulty: medium
+      train_blocks: 1000
+      val_records: 500
+      holdout_records: 1000

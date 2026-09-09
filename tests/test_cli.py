@@ -21,6 +21,7 @@ def test_cli_help() -> None:
     assert "benchmark" in result.output
     assert "benchmark-all" in result.output
     assert "download" in result.output
+    assert "optimize" in result.output
 
 
 def test_cli_version() -> None:
@@ -119,6 +120,17 @@ def test_benchmark_unknown_dataset() -> None:
     result = runner.invoke(cli, ["benchmark", "--dataset", "nonexistent"])
     assert result.exit_code == 2
     assert "Invalid value for '--dataset'" in result.output
+
+
+def test_optimize_help() -> None:
+    """Test optimize command help."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["optimize", "--help"])
+    assert result.exit_code == 0
+    assert "--signature" in result.output
+    assert "--trainset" in result.output
+    assert "--student-model" in result.output
+    assert "--teacher-model" in result.output
 
 
 def test_run_help() -> None:

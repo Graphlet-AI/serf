@@ -33,12 +33,10 @@ import dspy
 
 
 # Get Gemini API key from environment variable
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is
+from serf.dspy.lm import create_lm
 
-# Setup the LLM with the XMLAdapter
-lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
+# Student/task LM (GPT OSS 120b via Vertex AI) and XMLAdapter
+lm = create_lm(role="student")
 dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
 
 

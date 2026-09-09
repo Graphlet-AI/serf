@@ -235,8 +235,13 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
     )
     token = vertex_access_token()
     logger.info(f"Using Vertex AI MaaS endpoint in {location} for {model}")
+    # LiteLLM treats the first "openai/" as a provider prefix and strips it.
+    # Vertex's OpenAI-compatible endpoint requires publisher/model in the body.
+    litellm_model = model
+    if model.startswith("openai/") and not model.startswith("openai/openai/"):
+        litellm_model = f"openai/{model}"
     return dspy.LM(
-        model,
+        litellm_model,
         api_base=api_base,
         api_key=token,
         temperature=temperature,

@@ -731,7 +731,7 @@ def download(dataset: str, output_path: str | None) -> None:
     "-d",
     type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
     required=False,
-    help="Benchmark dataset to block fully, then sample train/val/holdout",
+    help="Benchmark dataset to block fully, then partition into train/val/holdout",
 )
 @click.option(
     "--trainset",
@@ -787,8 +787,9 @@ def optimize(
     reflection model. Requires VERTEX_AI_TOKEN for GPT OSS 120b and
     GEMINI_API_KEY for Gemini 3.5 Flash-Lite.
 
-    With --dataset, blocks all records then samples train blocks, validation
-    records, and holdout records using sizes from config.yml.
+    With --dataset, blocks all records then partitions whole blocks into
+    disjoint train, validation, and holdout splits using sizes from config.yml.
+    Validation and holdout budgets are filled first so they are never starved.
     """
     import dspy
 
@@ -816,7 +817,7 @@ def optimize(
     click.echo(f"  Signature: {signature}")
     click.echo(f"  Student:   {student_model}")
     click.echo(f"  Teacher:   {teacher_model}")
-    click.echo("  Split sizes (block all, then sample):")
+    click.echo("  Split sizes (block all, then partition blocks; val and holdout first):")
     for name, sizes in get_all_split_sizes().items():
         click.echo(
             f"    {name}: {sizes.train_blocks} train blocks, "
@@ -824,7 +825,7 @@ def optimize(
             f"{sizes.holdout_records} holdout records"
         )
 
-    holdout_records: list[Any] = []
+    holdout_blocks: list[Any] = []
     if dataset:
         sizes = get_split_sizes(dataset)
         benchmark_data = BenchmarkDataset.download(dataset, output_path)
@@ -838,8 +839,7 @@ def optimize(
         )
         blocks, blocking_metrics = blocker.run(entities)
         click.echo(f"  Created {blocking_metrics.total_blocks} blocks")
-        train_examples, val_examples, holdout_records = prepare_dataset_splits(
-            entities,
+        train_examples, val_examples, holdout_blocks = prepare_dataset_splits(
             benchmark_data.ground_truth,
             blocks,
             sizes=sizes,
@@ -850,11 +850,12 @@ def optimize(
         train_examples = load_jsonl_examples(str(trainset), input_fields)
         val_examples = load_jsonl_examples(valset, input_fields) if valset else None
 
-    click.echo(f"  Trainset:  {len(train_examples)} examples")
+    click.echo(f"  Trainset:  {len(train_examples)} block examples")
     if val_examples is not None:
-        click.echo(f"  Valset:    {len(val_examples)} examples")
-    if holdout_records:
-        click.echo(f"  Holdout:   {len(holdout_records)} records")
+        click.echo(f"  Valset:    {len(val_examples)} block examples")
+    if holdout_blocks:
+        holdout_size = sum(block.block_size for block in holdout_blocks)
+        click.echo(f"  Holdout:   {len(holdout_blocks)} blocks ({holdout_size} records)")
 
     module = cast(dspy.Module, dspy.Predict(SIGNATURES[signature]))
     optimized = optimize_module(
@@ -872,12 +873,12 @@ def optimize(
         program_path = os.path.join(output_path, f"{dataset}_gepa.json") if dataset else output_path
         optimized.save(program_path)
         click.echo(f"\nSaved optimized program to {program_path}")
-        if holdout_records:
+        if holdout_blocks:
             holdout_path = os.path.join(output_path, f"{dataset}_holdout.jsonl")
             with open(holdout_path, "w", encoding="utf-8") as handle:
-                for entity in holdout_records:
-                    handle.write(json.dumps(entity.model_dump(mode="json")) + "\n")
-            click.echo(f"Saved holdout records to {holdout_path}")
+                for block in holdout_blocks:
+                    handle.write(json.dumps(block.model_dump(mode="json")) + "\n")
+            click.echo(f"Saved holdout blocks to {holdout_path}")
 
 
 # ---------------------------------------------------------------------------

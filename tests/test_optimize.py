@@ -102,7 +102,7 @@ def test_gold_resolution_keeps_pairs_inside_the_block() -> None:
 
 
 def test_prepare_dataset_splits_builds_disjoint_examples() -> None:
-    """prepare_dataset_splits turns blocked data into train/val examples plus holdout."""
+    """prepare_dataset_splits turns blocked data into train/val examples plus holdout blocks."""
     entities = [Entity(id=i, name=f"e{i}", description="", entity_type="entity") for i in range(30)]
     blocks = [
         EntityBlock(
@@ -113,13 +113,35 @@ def test_prepare_dataset_splits_builds_disjoint_examples() -> None:
         for i in range(10)
     ]
     train, val, holdout = prepare_dataset_splits(
-        entities,
         ground_truth={(0, 1), (3, 4)},
         blocks=blocks,
         sizes=SplitSizes(train_blocks=2, val_records=4, holdout_records=5),
         seed=3,
     )
     assert len(train) == 2
-    assert len(val) >= 1
-    assert len(holdout) == 5
+    assert len(val) == 2
+    assert len(holdout) == 2
     assert all(example.resolution is not None for example in train)
+    assert all(example.resolution is not None for example in val)
+
+
+def test_prepare_dataset_splits_val_examples_carry_gold_pairs() -> None:
+    """Val examples are real semantic blocks, so they can carry gold match pairs."""
+    entities = [Entity(id=i, name=f"e{i}", description="", entity_type="entity") for i in range(40)]
+    blocks = [
+        EntityBlock(
+            block_key=str(i),
+            block_size=4,
+            entities=entities[i * 4 : i * 4 + 4],
+        )
+        for i in range(10)
+    ]
+    ground_truth = {(i * 4, i * 4 + 1) for i in range(10)}
+    _train, val, _holdout = prepare_dataset_splits(
+        ground_truth=ground_truth,
+        blocks=blocks,
+        sizes=SplitSizes(train_blocks=5, val_records=8, holdout_records=8),
+        seed=3,
+    )
+    assert val
+    assert all(example.resolution.matches for example in val)

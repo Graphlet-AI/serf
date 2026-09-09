@@ -13,9 +13,9 @@ from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 from serf.config import config
 from serf.dspy.lm import create_lm
 from serf.dspy.signatures import BlockMatch, EdgeResolve, EntityMerge
-from serf.dspy.types import BlockResolution, Entity, EntityBlock, MatchDecision
+from serf.dspy.types import BlockResolution, EntityBlock, MatchDecision
 from serf.eval.metrics import f1_score
-from serf.eval.splits import SplitSizes, chunk_records, sample_blocked_splits
+from serf.eval.splits import SplitSizes, sample_blocked_splits
 from serf.logs import get_logger
 from serf.match.few_shot import get_default_few_shot_examples
 from serf.match.matcher import SCHEMA_INFO
@@ -219,18 +219,18 @@ def blocks_to_examples(
 
 
 def prepare_dataset_splits(
-    entities: list[Entity],
     ground_truth: set[tuple[int, int]],
     blocks: list[EntityBlock],
     sizes: SplitSizes | None = None,
     seed: int | None = None,
-) -> tuple[list[dspy.Example], list[dspy.Example], list[Entity]]:
-    """Sample train blocks, val records, and holdout from already-blocked data.
+) -> tuple[list[dspy.Example], list[dspy.Example], list[EntityBlock]]:
+    """Partition already-blocked data into train, val, and holdout splits.
+
+    Val examples are real semantic blocks, so they contain the duplicate pairs
+    GEPA needs to tell candidate programs apart.
 
     Parameters
     ----------
-    entities : list[Entity]
-        Full entity list
     ground_truth : set[tuple[int, int]]
         True matching pairs
     blocks : list[EntityBlock]
@@ -242,8 +242,8 @@ def prepare_dataset_splits(
 
     Returns
     -------
-    tuple[list[dspy.Example], list[dspy.Example], list[Entity]]
-        Train examples, val examples, holdout records
+    tuple[list[dspy.Example], list[dspy.Example], list[EntityBlock]]
+        Train examples, val examples, holdout blocks
     """
     if sizes is None:
         sizes = SplitSizes(
@@ -252,18 +252,15 @@ def prepare_dataset_splits(
             holdout_records=int(config.get("benchmarks.holdout_records", 1000)),
         )
     splits = sample_blocked_splits(
-        entities,
         blocks,
         train_blocks=sizes.train_blocks,
         val_records=sizes.val_records,
         holdout_records=sizes.holdout_records,
         seed=seed,
     )
-    target_block_size = int(config.get("er.blocking.target_block_size", 30))
-    val_blocks = chunk_records(splits.val_records, target_block_size, prefix="val")
     train_examples = blocks_to_examples(splits.train_blocks, ground_truth)
-    val_examples = blocks_to_examples(val_blocks, ground_truth)
-    return train_examples, val_examples, splits.holdout_records
+    val_examples = blocks_to_examples(splits.val_blocks, ground_truth)
+    return train_examples, val_examples, splits.holdout_blocks
 
 
 def optimize_module(

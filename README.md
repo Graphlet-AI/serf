@@ -105,7 +105,10 @@ serf download --dataset dblp-acm
 serf benchmark --dataset dblp-acm --output data/results/
 
 # Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
-# Blocks ALL records, then samples 1000 train blocks / 500 val records / 1000 holdout
+# Blocks ALL records, then partitions whole blocks into disjoint splits:
+# 500 val records and 1000 holdout records are reserved first, then up to
+# 1000 train blocks. Val and holdout are real semantic blocks, so they contain
+# duplicate pairs and are scoreable.
 serf optimize --dataset dblp-acm --signature block-match
 ```
 

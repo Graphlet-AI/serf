@@ -6,7 +6,7 @@ import random
 from dataclasses import dataclass
 
 from serf.config import config
-from serf.dspy.types import Entity, EntityBlock
+from serf.dspy.types import EntityBlock
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
@@ -28,11 +28,44 @@ class SplitSizes:
 
 @dataclass
 class BenchmarkSplits:
-    """Blocked train sample plus disjoint val and holdout records."""
+    """Disjoint train, val, and holdout partitions of the same semantic blocks."""
 
     train_blocks: list[EntityBlock]
-    val_records: list[Entity]
-    holdout_records: list[Entity]
+    val_blocks: list[EntityBlock]
+    holdout_blocks: list[EntityBlock]
+
+    @property
+    def train_record_count(self) -> int:
+        """Number of records in the train blocks.
+
+        Returns
+        -------
+        int
+            Total entities across train blocks
+        """
+        return sum(block.block_size for block in self.train_blocks)
+
+    @property
+    def val_record_count(self) -> int:
+        """Number of records in the val blocks.
+
+        Returns
+        -------
+        int
+            Total entities across val blocks
+        """
+        return sum(block.block_size for block in self.val_blocks)
+
+    @property
+    def holdout_record_count(self) -> int:
+        """Number of records in the holdout blocks.
+
+        Returns
+        -------
+        int
+            Total entities across holdout blocks
+        """
+        return sum(block.block_size for block in self.holdout_blocks)
 
 
 def get_split_sizes(dataset: str) -> SplitSizes:
@@ -68,7 +101,6 @@ def get_all_split_sizes() -> dict[str, SplitSizes]:
 
 
 def sample_blocked_splits(
-    entities: list[Entity],
     blocks: list[EntityBlock],
     *,
     train_blocks: int | None = None,
@@ -77,33 +109,33 @@ def sample_blocked_splits(
     seed: int | None = None,
     min_block_size: int | None = None,
 ) -> BenchmarkSplits:
-    """Block-all then sample: 1K train blocks, 500 val records, 1K holdout.
+    """Partition semantic blocks into disjoint train, val, and holdout splits.
 
-    Trains on a random sample of semantic blocks after blocking the full
-    dataset. Validation and holdout records are drawn from entities that
-    are not in the sampled train blocks, so the three sets are disjoint.
+    Val and holdout budgets are filled first so they are never starved when the
+    dataset produces far fewer blocks than ``train_blocks``. All three splits
+    hold real semantic blocks, so val and holdout contain true duplicate pairs
+    and are therefore scoreable. Blocks are assigned whole, so the splits are
+    disjoint by entity id.
 
     Parameters
     ----------
-    entities : list[Entity]
-        Full entity list that was blocked
     blocks : list[EntityBlock]
         Blocks from running semantic blocking on *all* entities
     train_blocks : int | None
-        Number of blocks to sample for GEPA training
+        Maximum number of blocks for GEPA training
     val_records : int | None
-        Number of leftover records for GEPA validation
+        Record budget for GEPA validation (whole blocks are added until met)
     holdout_records : int | None
-        Number of leftover records held out for final evaluation
+        Record budget held out for final evaluation
     seed : int | None
         RNG seed
     min_block_size : int | None
-        Skip blocks smaller than this when sampling train blocks
+        Skip blocks smaller than this
 
     Returns
     -------
     BenchmarkSplits
-        Disjoint train blocks, val records, and holdout records
+        Disjoint train, val, and holdout blocks
     """
     train_n = (
         train_blocks
@@ -130,61 +162,42 @@ def sample_blocked_splits(
     rng = random.Random(seed)
     candidates = [block for block in blocks if block.block_size >= min_size]
     rng.shuffle(candidates)
-    selected = candidates[: min(train_n, len(candidates))]
 
-    train_ids = {entity.id for block in selected for entity in block.entities}
-    remaining = [entity for entity in entities if entity.id not in train_ids]
-    rng.shuffle(remaining)
+    train: list[EntityBlock] = []
+    val: list[EntityBlock] = []
+    holdout: list[EntityBlock] = []
+    used_ids: set[int] = set()
+    val_count = 0
+    holdout_count = 0
 
-    n_val = min(val_n, len(remaining))
-    val = remaining[:n_val]
-    leftover = remaining[n_val:]
-    n_holdout = min(holdout_n, len(leftover))
-    holdout = leftover[:n_holdout]
+    for block in candidates:
+        block_ids = {entity.id for entity in block.entities}
+        if block_ids & used_ids:
+            continue
+        if val_count < val_n:
+            val.append(block)
+            val_count += block.block_size
+        elif holdout_count < holdout_n:
+            holdout.append(block)
+            holdout_count += block.block_size
+        elif len(train) < train_n:
+            train.append(block)
+        else:
+            break
+        used_ids |= block_ids
 
+    splits = BenchmarkSplits(train_blocks=train, val_blocks=val, holdout_blocks=holdout)
     logger.info(
-        f"Sampled splits: {len(selected)} train blocks "
-        f"({len(train_ids)} records), {len(val)} val records, "
-        f"{len(holdout)} holdout records"
+        f"Sampled splits from {len(candidates)} eligible blocks of {len(blocks)} total: "
+        f"train {len(splits.train_blocks)} blocks / {splits.train_record_count} records, "
+        f"val {len(splits.val_blocks)} blocks / {splits.val_record_count} records, "
+        f"holdout {len(splits.holdout_blocks)} blocks / {splits.holdout_record_count} records"
     )
-    return BenchmarkSplits(
-        train_blocks=selected,
-        val_records=val,
-        holdout_records=holdout,
-    )
-
-
-def chunk_records(records: list[Entity], block_size: int, prefix: str = "val") -> list[EntityBlock]:
-    """Pack records into fixed-size blocks for GEPA val examples.
-
-    Parameters
-    ----------
-    records : list[Entity]
-        Records to pack
-    block_size : int
-        Target entities per block
-    prefix : str
-        Block key prefix
-
-    Returns
-    -------
-    list[EntityBlock]
-        Chunks of ``block_size`` (last chunk may be smaller)
-    """
-    if block_size <= 0:
-        raise ValueError("block_size must be positive")
-    chunks: list[EntityBlock] = []
-    for start in range(0, len(records), block_size):
-        chunk = records[start : start + block_size]
-        chunks.append(
-            EntityBlock(
-                block_key=f"{prefix}_{start // block_size}",
-                block_key_type="sample",
-                block_size=len(chunk),
-                entities=chunk,
-            )
-        )
-    return chunks
+    if not splits.val_blocks:
+        logger.warning("Val split is empty: GEPA has no signal to select candidate programs")
+    if not splits.train_blocks:
+        logger.warning("Train split is empty: val and holdout budgets consumed every block")
+    return splits
 
 
 def _dataset_int(dataset: str, key: str, default: int) -> int:

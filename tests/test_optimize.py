@@ -120,47 +120,62 @@ def test_gold_resolution_keeps_pairs_inside_the_block() -> None:
     assert pairs == {(0, 1)}
 
 
-def test_prepare_dataset_splits_builds_disjoint_examples() -> None:
-    """prepare_dataset_splits turns blocked data into train/val examples plus holdout blocks."""
-    entities = [Entity(id=i, name=f"e{i}", description="", entity_type="entity") for i in range(30)]
-    blocks = [
-        EntityBlock(
-            block_key=str(i),
-            block_size=3,
-            entities=entities[i * 3 : i * 3 + 3],
-        )
-        for i in range(10)
-    ]
+def _entities(count: int) -> list[Entity]:
+    """Build ``count`` minimal entities."""
+    return [Entity(id=i, name=f"e{i}", description="", entity_type="entity") for i in range(count)]
+
+
+def _fake_blocker(block_size: int = 4) -> MagicMock:
+    """Blocking pipeline stub that packs each split into fixed-size blocks."""
+
+    def run(records: list[Entity]) -> tuple[list[EntityBlock], MagicMock]:
+        chunks = [records[i : i + block_size] for i in range(0, len(records), block_size)]
+        blocks = [
+            EntityBlock(block_key=f"b{i}", block_size=len(chunk), entities=chunk)
+            for i, chunk in enumerate(chunks)
+        ]
+        return blocks, MagicMock()
+
+    blocker = MagicMock()
+    blocker.run.side_effect = run
+    return blocker
+
+
+@patch("serf.dspy.optimize.SemanticBlockingPipeline")
+def test_prepare_dataset_splits_blocks_each_split_separately(mock_blocker_cls: MagicMock) -> None:
+    """Records are sampled first, then blocked within each disjoint split."""
+    blocker = _fake_blocker()
+    mock_blocker_cls.return_value = blocker
     train, val, holdout = prepare_dataset_splits(
+        _entities(40),
         ground_truth={(0, 1), (3, 4)},
-        blocks=blocks,
-        sizes=SplitSizes(train_blocks=2, val_records=4, holdout_records=5),
+        sizes=SplitSizes(train_records=16, val_records=8, holdout_records=8),
         seed=3,
     )
-    assert len(train) == 2
+    assert len(train) == 4
     assert len(val) == 2
     assert len(holdout) == 2
     assert all(example.resolution is not None for example in train)
     assert all(example.resolution is not None for example in val)
 
+    blocked = [call.args[0] for call in blocker.run.call_args_list]
+    assert len(blocked) == 3
+    id_sets = [{entity.id for entity in records} for records in blocked]
+    assert id_sets[0].isdisjoint(id_sets[1])
+    assert id_sets[0].isdisjoint(id_sets[2])
+    assert id_sets[1].isdisjoint(id_sets[2])
 
-def test_prepare_dataset_splits_val_examples_carry_gold_pairs() -> None:
-    """Val examples are real semantic blocks, so they can carry gold match pairs."""
-    entities = [Entity(id=i, name=f"e{i}", description="", entity_type="entity") for i in range(40)]
-    blocks = [
-        EntityBlock(
-            block_key=str(i),
-            block_size=4,
-            entities=entities[i * 4 : i * 4 + 4],
-        )
-        for i in range(10)
-    ]
-    ground_truth = {(i * 4, i * 4 + 1) for i in range(10)}
+
+@patch("serf.dspy.optimize.SemanticBlockingPipeline")
+def test_prepare_dataset_splits_val_examples_carry_gold_pairs(mock_blocker_cls: MagicMock) -> None:
+    """Match-group sampling keeps gold pairs inside the val blocks."""
+    mock_blocker_cls.return_value = _fake_blocker()
+    ground_truth = {(i, i + 20) for i in range(20)}
     _train, val, _holdout = prepare_dataset_splits(
+        _entities(40),
         ground_truth=ground_truth,
-        blocks=blocks,
-        sizes=SplitSizes(train_blocks=5, val_records=8, holdout_records=8),
+        sizes=SplitSizes(train_records=16, val_records=8, holdout_records=8),
         seed=3,
     )
     assert val
-    assert all(example.resolution.matches for example in val)
+    assert sum(len(example.resolution.matches) for example in val) > 0

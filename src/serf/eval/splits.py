@@ -1,4 +1,4 @@
-"""Train/val/holdout splits for GEPA from fully blocked benchmark data."""
+"""Random train/val/holdout record splits for GEPA over benchmark data."""
 
 from __future__ import annotations
 
@@ -6,70 +6,37 @@ import random
 from dataclasses import dataclass
 
 from serf.config import config
-from serf.dspy.types import EntityBlock
+from serf.dspy.types import Entity
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
 
-_DEFAULT_TRAIN_BLOCKS = 1000
-_DEFAULT_VAL_RECORDS = 500
+_DEFAULT_TRAIN_RECORDS = 2000
+_DEFAULT_VAL_RECORDS = 1000
 _DEFAULT_HOLDOUT_RECORDS = 1000
 _DEFAULT_SEED = 42
 
 
 @dataclass(frozen=True)
 class SplitSizes:
-    """Configured sample sizes for one benchmark dataset."""
+    """Configured record budgets for one benchmark dataset."""
 
-    train_blocks: int
+    train_records: int
     val_records: int
     holdout_records: int
 
 
 @dataclass
 class BenchmarkSplits:
-    """Disjoint train, val, and holdout partitions of the same semantic blocks."""
+    """Disjoint train, val, and holdout records sampled from one dataset."""
 
-    train_blocks: list[EntityBlock]
-    val_blocks: list[EntityBlock]
-    holdout_blocks: list[EntityBlock]
-
-    @property
-    def train_record_count(self) -> int:
-        """Number of records in the train blocks.
-
-        Returns
-        -------
-        int
-            Total entities across train blocks
-        """
-        return sum(block.block_size for block in self.train_blocks)
-
-    @property
-    def val_record_count(self) -> int:
-        """Number of records in the val blocks.
-
-        Returns
-        -------
-        int
-            Total entities across val blocks
-        """
-        return sum(block.block_size for block in self.val_blocks)
-
-    @property
-    def holdout_record_count(self) -> int:
-        """Number of records in the holdout blocks.
-
-        Returns
-        -------
-        int
-            Total entities across holdout blocks
-        """
-        return sum(block.block_size for block in self.holdout_blocks)
+    train_records: list[Entity]
+    val_records: list[Entity]
+    holdout_records: list[Entity]
 
 
 def get_split_sizes(dataset: str) -> SplitSizes:
-    """Return train/val/holdout sizes for a benchmark dataset.
+    """Return train/val/holdout record budgets for a benchmark dataset.
 
     Parameters
     ----------
@@ -79,10 +46,10 @@ def get_split_sizes(dataset: str) -> SplitSizes:
     Returns
     -------
     SplitSizes
-        Configured block and record counts
+        Configured record counts
     """
     return SplitSizes(
-        train_blocks=_dataset_int(dataset, "train_blocks", _DEFAULT_TRAIN_BLOCKS),
+        train_records=_dataset_int(dataset, "train_records", _DEFAULT_TRAIN_RECORDS),
         val_records=_dataset_int(dataset, "val_records", _DEFAULT_VAL_RECORDS),
         holdout_records=_dataset_int(dataset, "holdout_records", _DEFAULT_HOLDOUT_RECORDS),
     )
@@ -100,47 +67,115 @@ def get_all_split_sizes() -> dict[str, SplitSizes]:
     return {name: get_split_sizes(name) for name in datasets}
 
 
-def sample_blocked_splits(
-    blocks: list[EntityBlock],
-    *,
-    train_blocks: int | None = None,
-    val_records: int | None = None,
-    holdout_records: int | None = None,
-    seed: int | None = None,
-    min_block_size: int | None = None,
-) -> BenchmarkSplits:
-    """Partition semantic blocks into disjoint train, val, and holdout splits.
+def match_groups(
+    entities: list[Entity],
+    ground_truth: set[tuple[int, int]],
+) -> dict[int, list[Entity]]:
+    """Group records into connected components of the ground-truth pair graph.
 
-    Val and holdout budgets are filled first so they are never starved when the
-    dataset produces far fewer blocks than ``train_blocks``. All three splits
-    hold real semantic blocks, so val and holdout contain true duplicate pairs
-    and are therefore scoreable. Blocks are assigned whole, so the splits are
-    disjoint by entity id.
+    A record and everything transitively matched to it share one group, so a
+    group can be sampled as a unit and its gold pairs always survive.
 
     Parameters
     ----------
-    blocks : list[EntityBlock]
-        Blocks from running semantic blocking on *all* entities
-    train_blocks : int | None
-        Maximum number of blocks for GEPA training
+    entities : list[Entity]
+        Records to group
+    ground_truth : set[tuple[int, int]]
+        True matching pairs; ids outside ``entities`` are ignored
+
+    Returns
+    -------
+    dict[int, list[Entity]]
+        Entity id mapped to its group, sorted by id and shared by group members
+    """
+    by_id = {entity.id: entity for entity in entities}
+    parent = {entity_id: entity_id for entity_id in by_id}
+
+    def find(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for left, right in ground_truth:
+        if left not in parent or right not in parent:
+            continue
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    members: dict[int, list[Entity]] = {}
+    for entity_id in by_id:
+        members.setdefault(find(entity_id), []).append(by_id[entity_id])
+
+    groups: dict[int, list[Entity]] = {}
+    for group in members.values():
+        group.sort(key=lambda entity: entity.id)
+        for entity in group:
+            groups[entity.id] = group
+    return groups
+
+
+def count_gold_pairs(records: list[Entity], ground_truth: set[tuple[int, int]]) -> int:
+    """Count ground-truth pairs with both records inside a split.
+
+    Parameters
+    ----------
+    records : list[Entity]
+        Records in one split
+    ground_truth : set[tuple[int, int]]
+        True matching pairs
+
+    Returns
+    -------
+    int
+        Pairs fully contained in ``records``
+    """
+    ids = {record.id for record in records}
+    return sum(1 for left, right in ground_truth if left in ids and right in ids)
+
+
+def sample_random_splits(
+    entities: list[Entity],
+    ground_truth: set[tuple[int, int]],
+    *,
+    train_records: int | None = None,
+    val_records: int | None = None,
+    holdout_records: int | None = None,
+    seed: int | None = None,
+) -> BenchmarkSplits:
+    """Randomly sample disjoint train, val, and holdout records by match group.
+
+    Records are drawn in random order; drawing a record also pulls in every
+    record transitively matched to it, so gold pairs are never split across two
+    splits and never lost to independent uniform sampling. Val is filled first,
+    then holdout, then train, so val is never starved. When the dataset is
+    smaller than the requested budgets, all three are scaled down proportionally.
+
+    Parameters
+    ----------
+    entities : list[Entity]
+        Full entity list
+    ground_truth : set[tuple[int, int]]
+        True matching pairs, used to keep match groups whole
+    train_records : int | None
+        Record budget for GEPA training
     val_records : int | None
-        Record budget for GEPA validation (whole blocks are added until met)
+        Record budget for GEPA validation
     holdout_records : int | None
         Record budget held out for final evaluation
     seed : int | None
         RNG seed
-    min_block_size : int | None
-        Skip blocks smaller than this
 
     Returns
     -------
     BenchmarkSplits
-        Disjoint train, val, and holdout blocks
+        Disjoint train, val, and holdout records
     """
     train_n = (
-        train_blocks
-        if train_blocks is not None
-        else int(config.get("benchmarks.train_blocks", _DEFAULT_TRAIN_BLOCKS))
+        train_records
+        if train_records is not None
+        else int(config.get("benchmarks.train_records", _DEFAULT_TRAIN_RECORDS))
     )
     val_n = (
         val_records
@@ -153,51 +188,67 @@ def sample_blocked_splits(
         else int(config.get("benchmarks.holdout_records", _DEFAULT_HOLDOUT_RECORDS))
     )
     seed = seed if seed is not None else int(config.get("optimize.seed", _DEFAULT_SEED))
-    min_size = (
-        min_block_size
-        if min_block_size is not None
-        else int(config.get("er.blocking.min_block_size", 2))
-    )
 
-    rng = random.Random(seed)
-    candidates = [block for block in blocks if block.block_size >= min_size]
-    rng.shuffle(candidates)
+    val_n, holdout_n, train_n = _scaled_budgets(len(entities), val_n, holdout_n, train_n)
+    groups = match_groups(entities, ground_truth)
 
-    train: list[EntityBlock] = []
-    val: list[EntityBlock] = []
-    holdout: list[EntityBlock] = []
-    used_ids: set[int] = set()
-    val_count = 0
-    holdout_count = 0
+    order = list(entities)
+    random.Random(seed).shuffle(order)
 
-    for block in candidates:
-        block_ids = {entity.id for entity in block.entities}
-        if block_ids & used_ids:
+    buckets: list[list[Entity]] = [[], [], []]
+    budgets = [val_n, holdout_n, train_n]
+    assigned: set[int] = set()
+    current = 0
+    for entity in order:
+        if entity.id in assigned:
             continue
-        if val_count < val_n:
-            val.append(block)
-            val_count += block.block_size
-        elif holdout_count < holdout_n:
-            holdout.append(block)
-            holdout_count += block.block_size
-        elif len(train) < train_n:
-            train.append(block)
-        else:
+        while current < len(buckets) and len(buckets[current]) >= budgets[current]:
+            current += 1
+        if current >= len(buckets):
             break
-        used_ids |= block_ids
+        group = groups[entity.id]
+        buckets[current].extend(group)
+        assigned.update(member.id for member in group)
 
-    splits = BenchmarkSplits(train_blocks=train, val_blocks=val, holdout_blocks=holdout)
+    val, holdout, train = buckets
+    splits = BenchmarkSplits(train_records=train, val_records=val, holdout_records=holdout)
     logger.info(
-        f"Sampled splits from {len(candidates)} eligible blocks of {len(blocks)} total: "
-        f"train {len(splits.train_blocks)} blocks / {splits.train_record_count} records, "
-        f"val {len(splits.val_blocks)} blocks / {splits.val_record_count} records, "
-        f"holdout {len(splits.holdout_blocks)} blocks / {splits.holdout_record_count} records"
+        f"Random match-group splits over {len(entities)} records "
+        f"(budgets train={train_n} val={val_n} holdout={holdout_n}): "
+        f"train {len(train)} records / {count_gold_pairs(train, ground_truth)} gold pairs, "
+        f"val {len(val)} records / {count_gold_pairs(val, ground_truth)} gold pairs, "
+        f"holdout {len(holdout)} records / {count_gold_pairs(holdout, ground_truth)} gold pairs"
     )
-    if not splits.val_blocks:
-        logger.warning("Val split is empty: GEPA has no signal to select candidate programs")
-    if not splits.train_blocks:
-        logger.warning("Train split is empty: val and holdout budgets consumed every block")
+    for name, records in (("train", train), ("val", val), ("holdout", holdout)):
+        if ground_truth and not count_gold_pairs(records, ground_truth):
+            logger.warning(f"Split {name} contains no gold pairs and cannot be scored")
     return splits
+
+
+def _scaled_budgets(total: int, *budgets: int) -> tuple[int, ...]:
+    """Scale record budgets down proportionally when the dataset is too small.
+
+    Parameters
+    ----------
+    total : int
+        Records available
+    *budgets : int
+        Requested record budgets in fill order
+
+    Returns
+    -------
+    tuple[int, ...]
+        Budgets that fit within ``total``, keeping their relative ratio
+    """
+    requested = sum(budgets)
+    if requested <= total or requested == 0:
+        return budgets
+    scale = total / requested
+    scaled = tuple(int(budget * scale) for budget in budgets)
+    logger.warning(
+        f"Dataset has {total} records but {requested} were requested; scaling budgets to {scaled}"
+    )
+    return scaled
 
 
 def _dataset_int(dataset: str, key: str, default: int) -> int:
@@ -208,7 +259,7 @@ def _dataset_int(dataset: str, key: str, default: int) -> int:
     dataset : str
         Dataset name
     key : str
-        Config key (``train_blocks``, ``val_records``, ``holdout_records``)
+        Config key (``train_records``, ``val_records``, ``holdout_records``)
     default : int
         Fallback if neither dataset nor global key is set
 

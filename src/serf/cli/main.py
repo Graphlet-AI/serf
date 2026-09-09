@@ -787,13 +787,12 @@ def optimize(
     reflection model. Requires VERTEX_AI_TOKEN for GPT OSS 120b and
     GEMINI_API_KEY for Gemini 3.5 Flash-Lite.
 
-    With --dataset, blocks all records then partitions whole blocks into
-    disjoint train, validation, and holdout splits using sizes from config.yml.
-    Validation and holdout budgets are filled first so they are never starved.
+    With --dataset, randomly samples disjoint train, validation, and holdout
+    records using the budgets in config.yml, keeping ground-truth match groups
+    whole, then blocks within each split to build the BlockMatch examples.
     """
     import dspy
 
-    from serf.block.pipeline import SemanticBlockingPipeline
     from serf.config import config as serf_config
     from serf.dspy.optimize import (
         INPUT_FIELDS,
@@ -817,10 +816,10 @@ def optimize(
     click.echo(f"  Signature: {signature}")
     click.echo(f"  Student:   {student_model}")
     click.echo(f"  Teacher:   {teacher_model}")
-    click.echo("  Split sizes (block all, then partition blocks; val and holdout first):")
+    click.echo("  Split sizes (random match-group sampling; val and holdout first):")
     for name, sizes in get_all_split_sizes().items():
         click.echo(
-            f"    {name}: {sizes.train_blocks} train blocks, "
+            f"    {name}: {sizes.train_records} train records, "
             f"{sizes.val_records} val records, "
             f"{sizes.holdout_records} holdout records"
         )
@@ -831,17 +830,10 @@ def optimize(
         benchmark_data = BenchmarkDataset.download(dataset, output_path)
         left_entities, right_entities = benchmark_data.to_entities()
         entities = left_entities + right_entities
-        click.echo(f"  Blocking all {len(entities)} records...")
-        blocker = SemanticBlockingPipeline(
-            target_block_size=int(serf_config.get("er.blocking.target_block_size", 30)),
-            max_block_size=int(serf_config.get("er.blocking.max_block_size", 100)),
-            auto_scale=False,
-        )
-        blocks, blocking_metrics = blocker.run(entities)
-        click.echo(f"  Created {blocking_metrics.total_blocks} blocks")
+        click.echo(f"  Sampling splits from {len(entities)} records, then blocking each split...")
         train_examples, val_examples, holdout_blocks = prepare_dataset_splits(
+            entities,
             benchmark_data.ground_truth,
-            blocks,
             sizes=sizes,
             seed=seed,
         )

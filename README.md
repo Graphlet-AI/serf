@@ -103,7 +103,7 @@ serf eval --input data/matches/
 serf download --dataset dblp-acm
 serf benchmark --dataset dblp-acm --output data/results/
 
-# Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.7 Flash teacher)
+# Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
 # Blocks ALL records, then samples 1000 train blocks / 500 val records / 1000 holdout
 serf optimize --dataset dblp-acm --signature block-match
 ```
@@ -144,7 +144,7 @@ result = matcher(block_records=block_json, schema_info=schema, few_shot_examples
 
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.7 Flash as the teacher/reflection LM for GEPA.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.5 Flash-Lite as the teacher/reflection LM for GEPA.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
@@ -176,7 +176,7 @@ All configuration is centralized in `config.yml`:
 ```python
 from serf.config import config
 model = config.get("models.llm")  # "openai/gpt-oss-120b-maas"
-teacher = config.get("models.teacher")  # "gemini/gemini-3.7-flash"
+teacher = config.get("models.teacher")  # "gemini/gemini-3.5-flash-lite"
 block_size = config.get("er.blocking.target_block_size")  # 50
 ```
 

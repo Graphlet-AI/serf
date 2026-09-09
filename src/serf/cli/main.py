@@ -184,7 +184,7 @@ def run(
     Writes resolved entities as Parquet and CSV.
 
     Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.7 Flash (teacher/analyze).
+    for Gemini 3.5 Flash-Lite (teacher/analyze).
     """
     from serf.pipeline import ERConfig, run_pipeline
 
@@ -784,7 +784,7 @@ def optimize(
 
     Uses the student/task LM for rollouts and the teacher LM as GEPA's
     reflection model. Requires VERTEX_AI_TOKEN for GPT OSS 120b and
-    GEMINI_API_KEY for Gemini 3.7 Flash.
+    GEMINI_API_KEY for Gemini 3.5 Flash-Lite.
 
     With --dataset, blocks all records then samples train blocks, validation
     records, and holdout records using sizes from config.yml.
@@ -950,7 +950,7 @@ def benchmark(
 
     Uses embeddings for blocking and LLM for matching.
     Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.7 Flash (teacher/analyze).
+    for Gemini 3.5 Flash-Lite (teacher/analyze).
     """
     from serf.eval.benchmarks import BenchmarkDataset
 
@@ -1090,7 +1090,7 @@ def benchmark_all(
     """Run LLM-based benchmarks on all available datasets.
 
     Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.7 Flash (teacher/analyze).
+    for Gemini 3.5 Flash-Lite (teacher/analyze).
     """
     from serf.config import config as serf_config
     from serf.eval.benchmarks import BenchmarkDataset

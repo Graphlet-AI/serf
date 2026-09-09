@@ -5,7 +5,7 @@ logs:
 models:
   embedding: "intfloat/multilingual-e5-base"
   student: "openai/gpt-oss-120b-maas"
-  teacher: "gemini/gemini-3.7-flash"
+  teacher: "gemini/gemini-3.5-flash-lite"
   llm: "${models.student}"
   analyze_llm: "${models.teacher}"
   temperature: 0.0

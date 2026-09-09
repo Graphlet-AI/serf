@@ -24,7 +24,7 @@ uv sync --extra dev
 You need API credentials for matching and GEPA optimization:
 
 ```bash
-export GEMINI_API_KEY="your-key-here"          # Gemini 3.7 Flash teacher / analyze
+export GEMINI_API_KEY="your-key-here"          # Gemini 3.5 Flash-Lite teacher / analyze
 export VERTEX_AI_TOKEN="your-vertex-token"     # GPT OSS 120b student (Vertex AI MaaS)
 export GOOGLE_CLOUD_PROJECT="your-gcp-project"
 ```
@@ -162,7 +162,7 @@ All settings live in `config.yml`:
 models:
   embedding: "intfloat/multilingual-e5-base" # Embedding model for blocking
   student: "openai/gpt-oss-120b-maas" # Student/task LM for matching
-  teacher: "gemini/gemini-3.7-flash" # Teacher/reflection LM for GEPA
+  teacher: "gemini/gemini-3.5-flash-lite" # Teacher/reflection LM for GEPA
   llm: "${models.student}" # LLM for matching
   analyze_llm: "${models.teacher}" # LLM for analyze
   temperature: 0.0

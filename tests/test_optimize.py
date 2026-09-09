@@ -54,7 +54,7 @@ def test_er_metric_missed_and_extra_pairs() -> None:
 def test_optimize_module_uses_student_lm_and_teacher_reflection(
     mock_create_lm: MagicMock, mock_gepa_cls: MagicMock
 ) -> None:
-    """GEPA compiles the student module with Gemini 3.7 Flash as reflection_lm."""
+    """GEPA compiles the student module with Gemini 3.5 Flash-Lite as reflection_lm."""
     student_lm = MagicMock(name="student_lm")
     teacher_lm = MagicMock(name="teacher_lm")
 

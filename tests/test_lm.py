@@ -21,9 +21,9 @@ def test_config_student_is_gpt_oss_120b() -> None:
     assert config.get("models.llm") == config.get("models.student")
 
 
-def test_config_teacher_is_gemini_37_flash() -> None:
-    """Teacher/reflection LM is Gemini 3.7 Flash."""
-    assert config.get("models.teacher") == "gemini/gemini-3.7-flash"
+def test_config_teacher_is_gemini_35_flash_lite() -> None:
+    """Teacher/reflection LM is Gemini 3.5 Flash-Lite."""
+    assert config.get("models.teacher") == "gemini/gemini-3.5-flash-lite"
     assert config.get("models.analyze_llm") == config.get("models.teacher")
 
 
@@ -31,7 +31,6 @@ def test_is_vertex_maas_model() -> None:
     """GPT OSS MaaS models route through Vertex; Gemini does not."""
     assert is_vertex_maas_model("openai/gpt-oss-120b-maas") is True
     assert is_vertex_maas_model("gpt-oss-120b-maas") is True
-    assert is_vertex_maas_model("gemini/gemini-3.7-flash") is False
     assert is_vertex_maas_model("gemini/gemini-3.5-flash-lite") is False
 
 
@@ -138,13 +137,13 @@ def test_create_lm_student_uses_vertex(
 
 @patch("serf.dspy.lm.dspy.LM")
 def test_create_lm_teacher_uses_gemini(mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Teacher LM uses Gemini 3.7 Flash with GEMINI_API_KEY."""
+    """Teacher LM uses Gemini 3.5 Flash-Lite with GEMINI_API_KEY."""
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
     create_lm(role="teacher", temperature=1.0)
 
     model = mock_lm.call_args.args[0]
     kwargs = mock_lm.call_args.kwargs
-    assert model == "gemini/gemini-3.7-flash"
+    assert model == "gemini/gemini-3.5-flash-lite"
     assert kwargs["api_key"] == "gemini-key"
     assert kwargs["temperature"] == 1.0
     assert "api_base" not in kwargs
@@ -155,5 +154,5 @@ def test_create_lm_gemini_requires_key(mock_lm: MagicMock, monkeypatch: pytest.M
     """Gemini models fail fast without GEMINI_API_KEY."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
-        create_lm(model="gemini/gemini-3.7-flash")
+        create_lm(model="gemini/gemini-3.5-flash-lite")
     mock_lm.assert_not_called()

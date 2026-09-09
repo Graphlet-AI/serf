@@ -255,7 +255,7 @@ def _create_gemini_lm(model: str, *, temperature: float, max_tokens: int) -> dsp
     Parameters
     ----------
     model : str
-        Gemini model identifier (e.g. ``gemini/gemini-3.7-flash``)
+        Gemini model identifier (e.g. ``gemini/gemini-3.5-flash-lite``)
     temperature : float
         Sampling temperature
     max_tokens : int

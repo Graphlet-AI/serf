@@ -40,4 +40,4 @@
 - Actual splits after blocking all 4910 DBLP-ACM records (82 blocks, min_block_size 2): **81 train blocks (4909 records), 1 val record, 0 holdout**. Train blocks covered almost the whole table, so val/holdout were capped to leftovers.
 - GEPA budget: `auto=light`, about **384 metric calls** (~4.68 train+val evals).
 - Early metrics: Iteration 0 base program full valset score **0.0** over 1/1 examples (val set is a single leftover record).
-- Status: **in progress** (started 2026-09-09T10:20:06Z). Student `openai/gpt-oss-120b-maas` rollouts and teacher `gemini-3.5-flash-lite` reflection calls are live. Left running in tmux session `gepa-dblp-acm`. Logs: `/opt/cursor/artifacts/gepa_dblp_acm_first.log` and `data/gepa_logs/`.
+- Status: **finished 2026-09-09T11:25:52Z with a no-op result.** All 9 candidate programs scored 0.0 on the valset, so GEPA kept the unoptimized program. 215 rollouts also failed with an expired Vertex token. No optimized-vs-baseline comparison exists; the F1 **0.6299** above is still the only measured DBLP-ACM number. Full write-up: `experiments/gepa-dblp-acm-first-run.md`.

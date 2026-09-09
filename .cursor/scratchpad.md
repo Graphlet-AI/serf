@@ -59,6 +59,10 @@ Recall 0.4748 / F1 0.6299.
 
 - The v2 run is deliberately left running; do not kill tmux session `gepa-dblp-acm-v2`.
   Log: `/opt/cursor/artifacts/gepa_dblp_acm_v2.log`, output: `data/gepa_logs/dblp-acm-v2`.
+- Two of the seven DBLP-ACM val blocks (the 100-record ones) still fail with
+  `Adapter JSONAdapter failed to parse the LM response` and score 0, which caps the achievable
+  valset score. Worth investigating separately: either cap `er.blocking.max_block_size` for
+  optimization or make the adapter fallback more forgiving.
 - A val block that happens to contain no gold pairs still scores 0.0 under `er_metric`, because
   `f1_score` returns 0.0 for an empty gold set. One of the seven DBLP-ACM val blocks is in that
   position. It is a constant drag on the average rather than a blocker, but if future runs look

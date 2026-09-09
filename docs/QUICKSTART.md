@@ -148,11 +148,13 @@ serf benchmark-all
 
 Available datasets:
 
-| Dataset        | Domain        | Difficulty |
-| -------------- | ------------- | ---------- |
-| `dblp-acm`     | Bibliographic | Easy       |
-| `dblp-scholar` | Bibliographic | Medium     |
-| `abt-buy`      | Products      | Hard       |
+| Dataset          | Domain        | Difficulty |
+| ---------------- | ------------- | ---------- |
+| `dblp-acm`       | Bibliographic | Easy       |
+| `dblp-scholar`   | Bibliographic | Medium     |
+| `abt-buy`        | Products      | Hard       |
+| `walmart-amazon` | Products      | Hard       |
+| `amazon-google`  | Products      | Hard       |
 
 ## Configuration
 

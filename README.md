@@ -100,6 +100,7 @@ serf match --input data/blocks/ --output data/matches/ --iteration 1
 serf eval --input data/matches/
 
 # Benchmark against standard datasets
+# (walmart-amazon, abt-buy, amazon-google, dblp-acm, dblp-scholar)
 serf download --dataset dblp-acm
 serf benchmark --dataset dblp-acm --output data/results/
 

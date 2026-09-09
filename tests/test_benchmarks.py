@@ -1,15 +1,21 @@
 """Tests for benchmark dataset loading and evaluation."""
 
+import io
 import os
 import tempfile
+import urllib.request
+import zipfile
+from unittest.mock import patch
 
 import pandas as pd
 
 from serf.dspy.types import Entity
 from serf.eval.benchmarks import (
+    DATASET_REGISTRY,
     RIGHT_ID_OFFSET,
     BenchmarkDataset,
     _detect_name_column,
+    _find_zip_member,
     _get_text_columns,
 )
 
@@ -17,9 +23,13 @@ from serf.eval.benchmarks import (
 def test_available_datasets_returns_expected_names() -> None:
     """Test that available datasets includes expected benchmark names."""
     names = BenchmarkDataset.available_datasets()
-    assert "dblp-acm" in names
-    assert "dblp-scholar" in names
-    assert "abt-buy" in names
+    assert set(names) == {
+        "dblp-acm",
+        "dblp-scholar",
+        "abt-buy",
+        "walmart-amazon",
+        "amazon-google",
+    }
 
 
 def test_benchmark_dataset_creation_with_mock_data() -> None:
@@ -137,7 +147,7 @@ def test_load_from_deepmatcher_format() -> None:
         ds = BenchmarkDataset.load("test", tmpdir)
         assert len(ds.table_a) == 2
         assert len(ds.table_b) == 2
-        assert len(ds.ground_truth) == 1  # Only label=1 pairs
+        assert ds.ground_truth == {(0, RIGHT_ID_OFFSET)}
 
 
 def test_load_raises_when_directory_missing() -> None:
@@ -154,3 +164,60 @@ def test_download_raises_for_unknown_dataset() -> None:
 
     with pytest.raises(ValueError):
         BenchmarkDataset.download("nonexistent-dataset")
+
+
+def test_find_zip_member_nested_exp_data() -> None:
+    """DeepMatcher zips nest CSVs under exp_data/."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("exp_data/tableA.csv", "id\n1\n")
+        zf.writestr("__MACOSX/tableA.csv", "skip\n")
+        assert _find_zip_member(zf, "tableA.csv") == "exp_data/tableA.csv"
+        assert _find_zip_member(zf, "missing.csv") is None
+
+
+class _FakeUrlResponse:
+    """Minimal urlopen context manager returning zip bytes."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+    def __enter__(self) -> "_FakeUrlResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _deepmatcher_zip_bytes() -> bytes:
+    """Build a nested DeepMatcher exp_data zip."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("exp_data/tableA.csv", "id,title\n10,Widget\n20,Gadget\n")
+        zf.writestr("exp_data/tableB.csv", "id,title\n30,Widget\n40,Other\n")
+        zf.writestr("exp_data/train.csv", "ltable_id,rtable_id,label\n10,30,1\n20,40,0\n")
+        zf.writestr("exp_data/valid.csv", "ltable_id,rtable_id,label\n")
+        zf.writestr("exp_data/test.csv", "ltable_id,rtable_id,label\n")
+    return buf.getvalue()
+
+
+def test_download_deepmatcher_nested_zip() -> None:
+    """Download loads DeepMatcher tableA/tableB and labeled matches from a zip."""
+    data = _deepmatcher_zip_bytes()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch.object(urllib.request, "urlopen", return_value=_FakeUrlResponse(data)):
+            ds = BenchmarkDataset.download("walmart-amazon", tmpdir)
+        assert len(ds.table_a) == 2
+        assert len(ds.table_b) == 2
+        assert ds.ground_truth == {(0, RIGHT_ID_OFFSET)}
+        assert str(ds.table_a.iloc[0]["title"]) == "Widget"
+
+
+def test_download_amazon_google_uses_deepmatcher_registry() -> None:
+    """amazon-google is registered as DeepMatcher (no Leipzig mapping_name)."""
+    assert "mapping_name" not in DATASET_REGISTRY["amazon-google"]
+    assert "mapping_name" not in DATASET_REGISTRY["walmart-amazon"]
+    assert "mapping_name" in DATASET_REGISTRY["dblp-acm"]

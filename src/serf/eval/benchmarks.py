@@ -1,5 +1,6 @@
 """Benchmark datasets for entity resolution evaluation."""
 
+import io
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -43,6 +44,27 @@ DATASET_REGISTRY: dict[str, dict[str, str]] = {
         "mapping_name": "abt_buy_perfectMapping.csv",
         "mapping_col_a": "idAbt",
         "mapping_col_b": "idBuy",
+        "domain": "products",
+        "difficulty": "hard",
+    },
+    # DeepMatcher exp_data zips: tableA.csv, tableB.csv, train/valid/test.csv
+    "walmart-amazon": {
+        "url": (
+            "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/"
+            "Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"
+        ),
+        "table_a_name": "tableA.csv",
+        "table_b_name": "tableB.csv",
+        "domain": "products",
+        "difficulty": "hard",
+    },
+    "amazon-google": {
+        "url": (
+            "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/"
+            "Structured/Amazon-Google/amazon_google_exp_data.zip"
+        ),
+        "table_a_name": "tableA.csv",
+        "table_b_name": "tableB.csv",
         "domain": "products",
         "difficulty": "hard",
     },
@@ -93,8 +115,6 @@ def _load_csv_from_zip(zf: zipfile.ZipFile, name: str) -> pd.DataFrame:
     pd.DataFrame
         Loaded DataFrame
     """
-    import io
-
     with zf.open(name) as f:
         raw = f.read()
     for encoding in ("utf-8", "latin-1"):
@@ -109,32 +129,98 @@ def _load_csv_from_zip(zf: zipfile.ZipFile, name: str) -> pd.DataFrame:
     return df
 
 
-def _build_ground_truth_deepmatcher(csv_dir: Path) -> set[tuple[int, int]]:
-    """Build ground truth from DeepMatcher train/valid/test label files.
+def _find_zip_member(zf: zipfile.ZipFile, basename: str) -> str | None:
+    """Find a zip member by basename, ignoring directory prefixes.
 
     Parameters
     ----------
-    csv_dir : Path
-        Directory containing train.csv, valid.csv, test.csv
+    zf : zipfile.ZipFile
+        Open zip file
+    basename : str
+        File name to match (e.g. ``tableA.csv``)
+
+    Returns
+    -------
+    str | None
+        Zip member path, or None if not found
+    """
+    matches: list[str] = []
+    for name in zf.namelist():
+        if name.endswith("/"):
+            continue
+        parts = name.replace("\\", "/").split("/")
+        if parts[-1] == basename and "__MACOSX" not in parts:
+            matches.append(name)
+    if not matches:
+        return None
+    return min(matches, key=lambda n: n.count("/"))
+
+
+def _row_id_map(df: pd.DataFrame) -> dict[str, int]:
+    """Map source ``id`` values to zero-based row indices.
+
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Table with an ``id`` column
+
+    Returns
+    -------
+    dict[str, int]
+        Stringified source id to row index
+    """
+    return {str(row["id"]): i for i, (_idx, row) in enumerate(df.iterrows())}
+
+
+def _build_ground_truth_deepmatcher(
+    source: Path | zipfile.ZipFile,
+    table_a: pd.DataFrame,
+    table_b: pd.DataFrame,
+) -> set[tuple[int, int]]:
+    """Build ground truth from DeepMatcher train/valid/test label files.
+
+    Label files use source ``ltable_id`` / ``rtable_id`` values. Pairs are
+    remapped to left row index and right row index + RIGHT_ID_OFFSET so they
+    match ``BenchmarkDataset.to_entities``.
+
+    Parameters
+    ----------
+    source : Path | zipfile.ZipFile
+        Directory or zip containing train.csv, valid.csv, test.csv
+    table_a : pd.DataFrame
+        Left entity table
+    table_b : pd.DataFrame
+        Right entity table
 
     Returns
     -------
     set[tuple[int, int]]
-        Set of (ltable_id, rtable_id) match pairs
+        Set of (left_row_id, right_row_id + offset) match pairs
     """
+    a_id_to_int = _row_id_map(table_a)
+    b_id_to_int = _row_id_map(table_b)
     pairs: set[tuple[int, int]] = set()
     for fname in ("train.csv", "valid.csv", "test.csv"):
-        path = csv_dir / fname
-        if not path.exists():
-            continue
-        df = _load_csv(path)
+        if isinstance(source, zipfile.ZipFile):
+            member = _find_zip_member(source, fname)
+            if member is None:
+                continue
+            df = _load_csv_from_zip(source, member)
+        else:
+            path = source / fname
+            if not path.exists():
+                continue
+            df = _load_csv(path)
         if "ltable_id" not in df.columns or "rtable_id" not in df.columns:
             continue
         if "label" not in df.columns:
             continue
         matches = df[df["label"] == 1]
         for _, row in matches.iterrows():
-            pairs.add((int(row["ltable_id"]), int(row["rtable_id"])))
+            a_key = str(row["ltable_id"])
+            b_key = str(row["rtable_id"])
+            if a_key in a_id_to_int and b_key in b_id_to_int:
+                pairs.add((a_id_to_int[a_key], b_id_to_int[b_key] + RIGHT_ID_OFFSET))
     return pairs
 
 
@@ -313,32 +399,29 @@ class BenchmarkDataset:
         else:
             logger.info("Using cached %s", zip_path)
 
-        # Load from zip (Leipzig format)
         with zipfile.ZipFile(zip_path, "r") as zf:
-            table_a = _load_csv_from_zip(zf, info["table_a_name"])
-            table_b = _load_csv_from_zip(zf, info["table_b_name"])
-            mapping_df = _load_csv_from_zip(zf, info["mapping_name"])
-
-        # Build ground truth from perfect mapping
-        col_a = info["mapping_col_a"]
-        col_b = info["mapping_col_b"]
-        ground_truth: set[tuple[int, int]] = set()
-
-        # Build ID lookup maps (IDs can be strings like "conf/sigmod/...")
-        a_id_to_int: dict[str, int] = {
-            str(row["id"]): i for i, (_idx, row) in enumerate(table_a.iterrows())
-        }
-        b_id_to_int: dict[str, int] = {
-            str(row["id"]): i for i, (_idx, row) in enumerate(table_b.iterrows())
-        }
-
-        for _, row in mapping_df.iterrows():
-            a_key = str(row[col_a])
-            b_key = str(row[col_b])
-            if a_key in a_id_to_int and b_key in b_id_to_int:
-                a_int: int = a_id_to_int[a_key]
-                b_int: int = b_id_to_int[b_key] + RIGHT_ID_OFFSET
-                ground_truth.add((a_int, b_int))
+            if "mapping_name" in info:
+                table_a = _load_csv_from_zip(zf, info["table_a_name"])
+                table_b = _load_csv_from_zip(zf, info["table_b_name"])
+                mapping_df = _load_csv_from_zip(zf, info["mapping_name"])
+                col_a = info["mapping_col_a"]
+                col_b = info["mapping_col_b"]
+                a_id_to_int = _row_id_map(table_a)
+                b_id_to_int = _row_id_map(table_b)
+                ground_truth: set[tuple[int, int]] = set()
+                for _, row in mapping_df.iterrows():
+                    a_key = str(row[col_a])
+                    b_key = str(row[col_b])
+                    if a_key in a_id_to_int and b_key in b_id_to_int:
+                        ground_truth.add((a_id_to_int[a_key], b_id_to_int[b_key] + RIGHT_ID_OFFSET))
+            else:
+                table_a_member = _find_zip_member(zf, info["table_a_name"])
+                table_b_member = _find_zip_member(zf, info["table_b_name"])
+                if table_a_member is None or table_b_member is None:
+                    raise FileNotFoundError(f"tableA/tableB CSV not found in {zip_path}")
+                table_a = _load_csv_from_zip(zf, table_a_member)
+                table_b = _load_csv_from_zip(zf, table_b_member)
+                ground_truth = _build_ground_truth_deepmatcher(zf, table_a, table_b)
 
         metadata = {
             k: v
@@ -404,7 +487,7 @@ class BenchmarkDataset:
         if table_a_path.exists() and table_b_path.exists():
             table_a = _load_csv(table_a_path)
             table_b = _load_csv(table_b_path)
-            ground_truth = _build_ground_truth_deepmatcher(root)
+            ground_truth = _build_ground_truth_deepmatcher(root, table_a, table_b)
             metadata = DATASET_REGISTRY.get(name, {}).copy()
             metadata.pop("url", None)
             return cls(

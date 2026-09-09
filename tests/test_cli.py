@@ -1,8 +1,10 @@
 """Tests for the SERF CLI."""
 
+from unittest.mock import MagicMock, patch
+
 from click.testing import CliRunner
 
-from serf.cli.main import cli
+from serf.cli.main import BENCHMARK_DATASETS, cli
 
 
 def test_cli_help() -> None:
@@ -78,6 +80,8 @@ def test_benchmark_help() -> None:
     assert "--dataset" in result.output
     assert "--model" in result.output
     assert "--max-right-entities" in result.output
+    assert "walmart-amazon" in result.output
+    assert "amazon-google" in result.output
 
 
 def test_benchmark_all_help() -> None:
@@ -95,6 +99,8 @@ def test_download_help() -> None:
     result = runner.invoke(cli, ["download", "--help"])
     assert result.exit_code == 0
     assert "--dataset" in result.output
+    assert "walmart-amazon" in result.output
+    assert "amazon-google" in result.output
 
 
 def test_resolve_help() -> None:
@@ -132,6 +138,8 @@ def test_optimize_help() -> None:
     assert "--dataset" in result.output
     assert "--student-model" in result.output
     assert "--teacher-model" in result.output
+    assert "walmart-amazon" in result.output
+    assert "amazon-google" in result.output
 
 
 def test_optimize_requires_dataset_or_trainset() -> None:
@@ -139,6 +147,35 @@ def test_optimize_requires_dataset_or_trainset() -> None:
     runner = CliRunner()
     result = runner.invoke(cli, ["optimize"])
     assert result.exit_code != 0
+
+
+def test_benchmark_datasets_include_deepmatcher() -> None:
+    """CLI dataset choices include Walmart-Amazon and Amazon-Google."""
+    assert "walmart-amazon" in BENCHMARK_DATASETS
+    assert "amazon-google" in BENCHMARK_DATASETS
+    assert "abt-buy" in BENCHMARK_DATASETS
+
+
+def test_download_accepts_new_datasets() -> None:
+    """download --dataset accepts the DeepMatcher product datasets."""
+    runner = CliRunner()
+    mock_ds = MagicMock()
+    mock_ds.table_a = [0, 1]
+    mock_ds.table_b = [0]
+    mock_ds.ground_truth = set()
+    with patch("serf.eval.benchmarks.BenchmarkDataset.download", return_value=mock_ds):
+        for name in ("walmart-amazon", "amazon-google"):
+            result = runner.invoke(cli, ["download", "--dataset", name])
+            assert result.exit_code == 0, result.output
+            assert "Left table" in result.output
+
+
+def test_optimize_unknown_dataset() -> None:
+    """optimize rejects dataset names that are not registered."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["optimize", "--dataset", "nonexistent"])
+    assert result.exit_code == 2
+    assert "Invalid value for '--dataset'" in result.output
 
 
 def test_run_help() -> None:

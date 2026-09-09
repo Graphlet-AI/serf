@@ -10,13 +10,14 @@ from typing import Any, cast
 import click
 import pandas as pd
 
+from serf.eval.benchmarks import DATASET_REGISTRY
 from serf.logs import get_logger, setup_logging
 from serf.tracking import setup_mlflow
 
 logger = get_logger(__name__)
 
 # Available benchmark dataset names for CLI help
-BENCHMARK_DATASETS = ["dblp-acm", "dblp-scholar", "abt-buy"]
+BENCHMARK_DATASETS = list(DATASET_REGISTRY.keys())
 
 
 @click.group(context_settings={"show_default": True})

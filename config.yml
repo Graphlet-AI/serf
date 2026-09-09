@@ -55,7 +55,7 @@ mlflow:
   port: 5001
   autolog:
     log_traces: true
-    log_traces_from_compile: false
+    log_traces_from_compile: true
     log_traces_from_eval: true
 
 benchmarks:

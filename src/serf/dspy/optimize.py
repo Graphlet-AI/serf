@@ -313,7 +313,8 @@ def optimize_module(
 
     logger.info(
         f"GEPA optimize: student={student_name} teacher={teacher_name} "
-        f"auto={auto_budget} train={len(trainset)}"
+        f"auto={auto_budget} train={len(trainset)} val={len(valset) if valset else 0} "
+        f"log_dir={log_dir}"
     )
     metric: GEPAFeedbackMetric = er_metric
     optimizer = dspy.GEPA(

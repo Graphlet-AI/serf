@@ -858,12 +858,14 @@ def optimize(
         click.echo(f"  Holdout:   {len(holdout_blocks)} blocks ({holdout_size} records)")
 
     module = cast(dspy.Module, dspy.Predict(SIGNATURES[signature]))
+    # GEPA resumes from any state it finds in log_dir, so each run keeps its own.
     optimized = optimize_module(
         module,
         trainset=train_examples,
         valset=val_examples,
         student_model=student_model,
         teacher_model=teacher_model,
+        log_dir=output_path if dataset and output_path else None,
     )
 
     if output_path:

@@ -92,6 +92,25 @@ def test_optimize_module_uses_student_lm_and_teacher_reflection(
     assert result is optimizer.compile.return_value
 
 
+@patch("serf.dspy.optimize.dspy.GEPA")
+@patch("serf.dspy.optimize.create_lm")
+def test_optimize_module_forwards_log_dir(
+    mock_create_lm: MagicMock, mock_gepa_cls: MagicMock
+) -> None:
+    """GEPA state goes to the caller's log_dir so runs do not resume each other."""
+    mock_create_lm.return_value = MagicMock()
+    optimizer = MagicMock()
+    mock_gepa_cls.return_value = optimizer
+
+    module = cast(dspy.Module, dspy.Predict("block_records -> resolution"))
+    trainset = [
+        dspy.Example(block_records="[]", resolution=_resolution([])).with_inputs("block_records")
+    ]
+    optimize_module(module, trainset=trainset, log_dir="data/gepa_logs/dblp-acm-v2")
+
+    assert mock_gepa_cls.call_args.kwargs["log_dir"] == "data/gepa_logs/dblp-acm-v2"
+
+
 def test_gold_resolution_keeps_pairs_inside_the_block() -> None:
     """Gold labels only include ground-truth pairs fully inside the block."""
     entities = [Entity(id=i, name=f"e{i}", description="", entity_type="entity") for i in range(4)]

@@ -15,7 +15,6 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from numpy.typing import NDArray
 
 from serf.logs import get_logger
 
@@ -26,7 +25,6 @@ EMBED_SCRIPT = """
 import json
 import sys
 import numpy as np
-
 def main():
     args = json.loads(sys.argv[1])
     texts_file = args["texts_file"]
@@ -57,7 +55,6 @@ import json
 import math
 import sys
 import numpy as np
-
 def main():
     args = json.loads(sys.argv[1])
     embeddings_file = args["embeddings_file"]
@@ -110,7 +107,7 @@ if __name__ == "__main__":
 def embed_in_subprocess(
     texts: list[str],
     model_name: str,
-) -> NDArray[np.float32]:
+) -> np.ndarray:
     """Compute embeddings in an isolated subprocess.
 
     Avoids PyTorch MPS / FAISS memory conflicts on macOS by running
@@ -125,7 +122,7 @@ def embed_in_subprocess(
 
     Returns
     -------
-    NDArray[np.float32]
+    np.ndarray
         Embeddings matrix (n, dim)
     """
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -154,13 +151,13 @@ def embed_in_subprocess(
             logger.error(f"Embedding subprocess failed:\n{result.stderr}")
             raise RuntimeError(f"Embedding subprocess failed: {result.stderr[:500]}")
 
-        embeddings: NDArray[np.float32] = np.load(output_file)
+        embeddings: np.ndarray = np.load(output_file)
         logger.info(f"Embeddings computed: shape={embeddings.shape}")
         return embeddings
 
 
 def cluster_in_subprocess(
-    embeddings: NDArray[np.float32],
+    embeddings: np.ndarray,
     ids: list[str],
     target_block_size: int = 30,
 ) -> dict[str, list[str]]:
@@ -170,7 +167,7 @@ def cluster_in_subprocess(
 
     Parameters
     ----------
-    embeddings : NDArray[np.float32]
+    embeddings : np.ndarray
         Embedding matrix (n, dim)
     ids : list[str]
         Entity IDs corresponding to embedding rows

@@ -67,6 +67,14 @@ predictions found for any module` warnings that follow from truncated XML output
   accepted 8192 / 16384 / 32768 / 65536 and rejected 131072, which fails only because input and
   output share the model's 131072 token context.
 
+## Root cause 3: GEPA resumed the first run's state (found while re-running)
+
+`optimize_module` defaulted `log_dir` to `optimize.log_dir` (`data/gepa_logs`), which is shared by
+every run, and GEPA resumes from any state it finds there. The first re-run therefore started at
+iteration 93 with the previous run's candidate programs and its 1-example valset coverage instead of
+a fresh iteration 0. The `serf optimize` CLI now points `log_dir` at the run's own output directory,
+and the first run's state files were moved to `data/gepa_logs/first-run-state/`.
+
 ## Splits after the fix (DBLP-ACM, seed 42)
 
 | Split | Blocks | Records | Gold pairs in split |
@@ -81,4 +89,7 @@ discriminate between candidate programs. The three splits are disjoint by entity
 ## Follow-on
 
 - Re-run: `uv run serf optimize --dataset dblp-acm --signature block-match --output data/gepa_logs/dblp-acm-v2`
-  (tmux session `gepa-dblp-acm-v2`, log `/opt/cursor/artifacts/gepa_dblp_acm_v2.log`).
+  (tmux session `gepa-dblp-acm-v2`, log `/opt/cursor/artifacts/gepa_dblp_acm_v2.log`, state and
+  program in `data/gepa_logs/dblp-acm-v2/`).
+- Started 2026-09-09T21:02:15Z. **Iteration 0 base program full valset score: 0.4109 over 7 / 7
+  examples** - the valset now discriminates, which is exactly what the first run could not do.

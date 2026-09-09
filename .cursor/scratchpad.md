@@ -51,7 +51,8 @@ Recall 0.4748 / F1 0.6299.
 - [x] Live smoke: refresh path exercised, DBLP-ACM splits are 59 / 7 / 15 blocks
 - [x] Commits pushed to `cursor/gpt-oss-student-gepa-66f9`
 - [x] Failed first run recorded in `experiments/gepa-dblp-acm-first-run.md`
-- [x] Fresh run started in tmux session `gepa-dblp-acm-v2`
+- [x] Per-run GEPA `log_dir` so runs stop resuming each other's state
+- [x] Fresh run started in tmux session `gepa-dblp-acm-v2`; iteration 0 valset score 0.4109 over 7/7
 - [ ] GEPA v2 run finishes and produces an optimized program to compare against F1 0.6299
 
 ## Executor's Feedback or Assistance Requests
@@ -79,6 +80,13 @@ Recall 0.4748 / F1 0.6299.
   (`credentials.expired` plus a safety margin) instead of minting one token at construction time.
   DSPy 3.3.1 makes this easy: `LM.forward`/`aforward` merge `self.kwargs` per call, and `api_key` is
   excluded from the cache key, so mutating `self.kwargs["api_key"]` is safe.
+- **Optimizer state directories must be per run.** GEPA silently resumes from whatever state lives
+  in `log_dir`. Because `optimize.log_dir` was the shared `data/gepa_logs`, the first re-run started
+  at iteration 93 with the previous run's candidates and its stale 1-example valset coverage. Point
+  `log_dir` at the run's own output directory and check the first log lines say `Iteration 0`.
+- **Long background runs need their own process group.** The first v2 attempt died at exit 143
+  (SIGTERM) three minutes in, with no OOM pressure recorded. Launching the command with
+  `setsid nohup ... &` inside the tmux pane kept it alive.
 - **Measure endpoint limits, do not guess them.** The Vertex `gpt-oss-120b-maas` endpoint accepted
   `max_tokens` up to 65536 and rejected 131072 only because input and output share a 131072 token
   context, so 8192 was needlessly truncating the student's reasoning plus XML output.

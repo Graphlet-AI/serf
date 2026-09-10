@@ -18,10 +18,14 @@ from serf.logs import get_logger
 
 logger = get_logger(__name__)
 
-# DSPy imports litellm lazily on first use, and that lazy import is not thread safe:
-# concurrent matcher threads see a partially initialized module and lose the block with
-# "partially initialized module 'litellm' has no attribute 'completion'". Importing it
-# here materializes the module in the main thread before any worker thread runs.
+# litellm must be fully executed before any worker thread touches it. DSPy defers its
+# import (dspy.utils.lazy_import.require), and require() hands back whatever sys.modules
+# already holds. MLflow's tracing hook runs a plain "import litellm" from inside a traced
+# call, so while one matcher thread is part-way through that import another thread's
+# require() returns the half-built module and dies on "partially initialized module
+# 'litellm' has no attribute 'completion'", losing the whole block. Importing it at module
+# scope executes it once, single-threaded. The attribute read forces DSPy's lazy proxy to
+# materialize in case something registered it before this module was loaded.
 _ = litellm.completion
 
 _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"

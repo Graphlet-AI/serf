@@ -6,6 +6,7 @@ from typing import cast
 from uuid import uuid4
 
 import dspy
+from tqdm import tqdm
 
 from serf.config import config
 from serf.dspy.lm import create_lm
@@ -77,6 +78,20 @@ class EntityMatcher:
         if self._predictor is None:
             self._predictor = cast(dspy.Predict, dspy.Predict(BlockMatch))
         return self._predictor
+
+    def warm_up(self) -> None:
+        """Build the LM and the predictor once, on the calling thread.
+
+        ``resolve_block`` runs inside a thread pool, so leaving the LM and the
+        predictor to be created on first use makes every worker thread build its
+        own, mint its own Vertex access token, and take DSPy's first litellm
+        touch concurrently. That last one is what loses whole blocks to
+        ``partially initialized module 'litellm'``. Doing the work here keeps it
+        single-threaded and lets a bad configuration fail the run outright
+        instead of degrading every block into error recovery.
+        """
+        self._ensure_lm()
+        _ = self.predictor
 
     def resolve_block(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:
         """Process a single block through the LLM.
@@ -202,11 +217,10 @@ class EntityMatcher:
         list[BlockResolution]
             Resolutions for each block
         """
-        from tqdm import tqdm
-
         if limit is not None:
             blocks = blocks[:limit]
 
+        self.warm_up()
         total = len(blocks)
         logger.info(f"Processing {total} blocks with {self.max_concurrent} concurrent LLM calls")
 

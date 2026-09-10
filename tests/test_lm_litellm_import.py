@@ -1,9 +1,13 @@
 """Tests that litellm is fully imported before matcher threads use it.
 
-DSPy imports litellm on first use. When several matcher threads make their first
-LLM call at the same time, they can observe a half-executed litellm module and
-lose the block to ``partially initialized module 'litellm' has no attribute
-'completion'``. Importing litellm when ``serf.dspy.lm`` loads removes the race.
+DSPy defers importing litellm and resolves it through
+``dspy.utils.lazy_import.require``, which returns whatever ``sys.modules`` already
+holds. MLflow's tracing hook runs a plain ``import litellm`` from inside a traced
+call, so while one matcher thread is part-way through that import another thread's
+``require`` hands back the half-built module and the block dies on ``partially
+initialized module 'litellm' has no attribute 'completion'``. Importing litellm
+when ``serf.dspy.lm`` loads executes it once, single-threaded, and leaves nothing
+for the worker threads to race over.
 """
 
 import sys
@@ -20,6 +24,9 @@ def test_litellm_is_materialized_when_the_lm_factory_is_imported() -> None:
 
     assert isinstance(module, ModuleType)
     assert callable(module.completion)
+    # A spec still marked initializing is the state that produces the
+    # "partially initialized module" AttributeError in another thread.
+    assert not getattr(module.__spec__, "_initializing", False)
 
 
 def test_concurrent_first_use_sees_the_completion_attribute() -> None:

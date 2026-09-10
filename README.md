@@ -180,6 +180,24 @@ Performance on standard ER benchmarks from the [Leipzig Database Group](https://
 
 Blocking uses name-only embeddings for tighter semantic clusters. All matching decisions are made by the LLM — no embedding similarity thresholds.
 
+### Generic vs Per-Dataset Signatures
+
+Measured on 1,000-record samples per dataset drawn by ground-truth match group (seed 42), one ER
+iteration, identical blocking in both arms. These are sample runs, so they are not comparable to the
+full-table row above. Full protocol and cost in
+[experiments/per-dataset-signature-baseline.md](experiments/per-dataset-signature-baseline.md).
+
+| Dataset            | F1 `generic` | F1 `per-dataset` | Delta      |
+| ------------------ | ------------ | ---------------- | ---------- |
+| **DBLP-ACM**       | 0.9077       | **0.9742**       | +0.0666    |
+| **DBLP-Scholar**   | 0.7491       | **0.8713**       | +0.1222    |
+| **Abt-Buy**        | 0.7574       | **0.8402**       | +0.0827    |
+| **Amazon-Google**  | 0.5000       | **0.6654**       | +0.1654    |
+| **Walmart-Amazon** | 0.7634       | **0.8905**       | +0.1272    |
+
+The typed signatures also improved precision on all five datasets and used less than half the tokens,
+because their output is the list of matched pairs rather than an echo of every entity in the block.
+
 ## Project Structure
 
 ```

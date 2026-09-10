@@ -451,7 +451,24 @@ def discover_runs() -> list[dict[str, Any]]:
                 "saved": saved,
             }
         )
-    return sorted(runs, key=lambda run: run["start"])
+    # Result files get copied between output directories, and a copy carries a fresh mtime
+    # that would invent a second wall-clock window for a run that only happened once. Keep
+    # the earliest copy of any identical result so traces are attributed to the real run.
+    unique: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for run in sorted(runs, key=lambda run: run["start"]):
+        saved = run["saved"]
+        key = (
+            saved["dataset"],
+            run["signature_mode"],
+            run["sample_records"],
+            run["seed"],
+            run["max_iterations"],
+            saved["elapsed_seconds"],
+            saved["predicted_pairs"],
+            saved["true_positives"],
+        )
+        unique.setdefault(key, run)
+    return sorted(unique.values(), key=lambda run: run["start"])
 
 
 def sampled_ids(dataset: BenchmarkDataset, count: int, seed: int) -> set[int]:

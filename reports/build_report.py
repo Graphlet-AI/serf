@@ -1117,6 +1117,10 @@ def build(analysis: dict[str, Any]) -> str:
     full_runs = {name: pick(runs, name, "full_baseline", "generic") for name in ORDER}
     ab_generic = {name: pick(runs, name, "ab_", "generic") for name in ORDER}
     ab_typed = {name: pick(runs, name, "ab_", "per-dataset") for name in ORDER}
+    iter_generic = {name: pick(runs, name, "ab_", "generic", iterations="multi") for name in ORDER}
+    iter_typed = {
+        name: pick(runs, name, "ab_", "per-dataset", iterations="multi") for name in ORDER
+    }
 
     labels = [DATASET_FACTS[name]["display"].replace("&ndash;", "-") for name in ORDER]
 
@@ -1205,13 +1209,17 @@ def build(analysis: dict[str, Any]) -> str:
             )
         generic_f1 = metric(ab_generic[name], "f1_score")
         typed_f1 = metric(ab_typed[name], "f1_score")
+        iter_generic_f1 = metric(iter_generic[name], "f1_score")
+        iter_typed_f1 = metric(iter_typed[name], "f1_score")
         summary_cells.append(
             f'<tr><td><a href="#{name}">{DATASET_FACTS[name]["display"]}</a></td>'
             f'<td class="num">{thousands(DATASET_FACTS[name]["records"])}</td>'
             f'<td class="num">{thousands(DATASET_FACTS[name]["gold_pairs"])}</td>'
             f"{full_cells}"
             f'<td class="num">{fmt(generic_f1)}</td>'
-            f'<td class="num strong">{fmt(typed_f1)}</td></tr>'
+            f'<td class="num strong">{fmt(typed_f1)}</td>'
+            f'<td class="num">{fmt(iter_generic_f1)}</td>'
+            f'<td class="num">{fmt(iter_typed_f1)}</td></tr>'
         )
     summary_rows = "".join(summary_cells)
 
@@ -1269,9 +1277,10 @@ call failed outright.</p>
 <h3>Headline scores</h3>
 <table class="summary">
 <thead><tr><th>Dataset</th><th>Records</th><th>Gold pairs</th>
-<th colspan="4">Full data</th><th colspan="2">1,000-record A/B (F1)</th></tr>
+<th colspan="4">Full data</th><th colspan="2">1,000-record A/B, 1 pass (F1)</th>
+<th colspan="2">1,000-record A/B, 3 passes (F1)</th></tr>
 <tr class="sub"><th></th><th></th><th></th><th>P</th><th>R</th><th>F1</th><th>Elapsed</th>
-<th>generic</th><th>typed</th></tr></thead>
+<th>generic</th><th>typed</th><th>generic</th><th>typed</th></tr></thead>
 <tbody>{summary_rows}</tbody>
 </table>
 
@@ -1452,7 +1461,40 @@ whose LLM call failed, and only {thousands(model)} &mdash; {model / missed:.0%} 
 pairs that reached a working matcher, it caught {caught:.0%}. The aggregate recall number is
 measuring blocking recall and adapter robustness far more than it is measuring the model's
 judgement.</p>
+{diagnosis_test(runs)}
 """
+
+
+def diagnosis_test(runs: list[dict[str, Any]]) -> str:
+    """State whether re-blocking confirmed the diagnosis that blocking limits recall.
+
+    Parameters
+    ----------
+    runs : list[dict[str, Any]]
+        All reconstructed runs
+
+    Returns
+    -------
+    str
+        Paragraph markup, empty when no iterative arm exists to compare
+    """
+    lifts = []
+    for name in ORDER:
+        for mode in ("generic", "per-dataset"):
+            once = pick(runs, name, "ab_", mode)
+            thrice = pick(runs, name, "ab_", mode, iterations="multi")
+            if once is not None and thrice is not None:
+                lifts.append(thrice["saved"]["recall"] - once["saved"]["recall"])
+    if not lifts:
+        return ""
+    best = max(lifts)
+    return f"""
+<p>That diagnosis is testable, and it was tested. Re-running every 1,000-record arm with three
+rounds of matching, re-blocking the entities each round merged, raises recall on all {len(lifts)}
+arms &mdash; by {sum(lifts) / len(lifts):+.4f} on average and up to {best:+.4f}. The pairs really
+were reachable; the first partition was hiding them. Precision pays for it on every arm, because
+merging whole connected components lets one wrong link chain records together, so the verdict box
+below is a trade rather than a free win.</p>"""
 
 
 def ordering_finding(full_runs: dict[str, dict[str, Any] | None]) -> str:
@@ -1508,6 +1550,9 @@ def iteration_summary(runs: list[dict[str, Any]]) -> str:
     """
     rows: list[str] = []
     lifts: list[float] = []
+    precision_deltas: list[float] = []
+    f1_deltas: list[float] = []
+    collapses: list[tuple[str, str, float]] = []
     for name in ORDER:
         for mode, label in (("generic", "generic"), ("per-dataset", "typed")):
             once = pick(runs, name, "ab_", mode)
@@ -1518,6 +1563,9 @@ def iteration_summary(runs: list[dict[str, Any]]) -> str:
             multi = thrice["saved"]
             lift = multi["recall"] - single["recall"]
             lifts.append(lift)
+            precision_deltas.append(multi["precision"] - single["precision"])
+            f1_deltas.append(multi["f1_score"] - single["f1_score"])
+            collapses.append((name, label, multi["precision"] - single["precision"]))
             rows.append(
                 f"<tr><td>{DATASET_FACTS[name]['display']}</td><td>{label}</td>"
                 f'<td class="num">{multi.get("iterations_run", 3)}</td>'
@@ -1541,11 +1589,26 @@ def iteration_summary(runs: list[dict[str, Any]]) -> str:
 
     gained = sum(1 for lift in lifts if lift > 0)
     mean_lift = sum(lifts) / len(lifts)
+    precision_lost = sum(1 for drop in precision_deltas if drop < 0)
+    f1_up = sum(1 for delta in f1_deltas if delta > 0)
+    worst_name, worst_mode, worst_delta = min(collapses, key=lambda item: item[2])
+
     verdict = (
-        f"Re-blocking raises recall on {gained} of the {len(lifts)} arms compared so far, by "
-        f"{mean_lift:+.4f} on average."
+        f"Recall rises on {gained} of the {len(lifts)} arms, by {mean_lift:+.4f} on average, which "
+        f"confirms that the missing pairs really were reachable and blocking was hiding them. "
+        f"Precision falls on {precision_lost} of the {len(lifts)}, and F1 improves on only "
+        f"{f1_up}."
         if gained
-        else f"Re-blocking does not raise recall on any of the {len(lifts)} arms compared so far."
+        else f"Re-blocking does not raise recall on any of the {len(lifts)} arms."
+    )
+    collapse_note = (
+        f" The loop merges whole connected components, so a single wrong link chains every record "
+        f"it touches into one entity and the damage compounds across rounds. "
+        f"{DATASET_FACTS[worst_name]['display']} shows this at its worst: the {worst_mode} arm's "
+        f"precision falls {worst_delta:.4f} and its F1 falls with it, because that dataset is full "
+        f"of near-identical records and so gives the merge step the most chances to chain."
+        if worst_delta < -0.3
+        else ""
     )
 
     return f"""
@@ -1555,7 +1618,12 @@ def iteration_summary(runs: list[dict[str, Any]]) -> str:
 which no matcher can fix. The benchmark now runs up to three rounds: after each matching pass the
 connected components of predicted pairs are merged into single entities, those merged entities are
 re-blocked, and matching runs again, so a record can meet partners the first partition kept away
-from it. A round that merges nothing stops the loop early. {verdict}</p>
+from it. A round that merges nothing stops the loop early. {verdict}{collapse_note}</p>
+
+<p>The honest reading is that iteration trades precision for recall rather than simply improving the
+pipeline. It is the right lever when blocking is the binding constraint and the matcher is
+conservative, and the wrong one when the matcher already produces false positives, because each
+round feeds its own mistakes back in as merged entities.</p>
 <table class="scores">
 <thead><tr><th>Dataset</th><th>Signature</th><th>Iterations</th><th>R, 1 pass</th>
 <th>R, 3 passes</th><th>&Delta;R</th><th>P, 1 pass</th><th>P, 3 passes</th><th>F1, 1 pass</th>

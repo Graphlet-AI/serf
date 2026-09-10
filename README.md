@@ -104,6 +104,11 @@ serf eval --input data/matches/
 serf download --dataset dblp-acm
 serf benchmark --dataset dblp-acm --output data/results/
 
+# Match with the typed signature written for one dataset instead of the shared
+# BlockMatch signature, on a 1000-record sample drawn by ground-truth match group
+serf benchmark --dataset dblp-acm --signature-mode per-dataset \
+  --sample-records 1000 --seed 42 --output data/results/
+
 # Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
 # Randomly samples 2000 train / 1000 val / 1000 holdout records, keeping
 # ground-truth match groups whole so gold pairs survive, then blocks within
@@ -145,6 +150,21 @@ matcher = dspy.ChainOfThought(BlockMatch)
 result = matcher(block_records=block_json, schema_info=schema, few_shot_examples=examples)
 ```
 
+### Per-Dataset Typed Signatures
+
+`BlockMatch` describes one anonymous `Entity` type and is shared by every dataset.
+Each benchmark match task also has its own signature with two typed side models,
+one per source, whose field descriptions come from the entity resolution
+literature for that task. Select them with `--signature-mode per-dataset`.
+
+```python
+from serf.dspy.dataset_signatures import get_dataset_spec
+from serf.match.dataset_matcher import DatasetMatcher
+
+spec = get_dataset_spec("walmart-amazon")  # WalmartProduct / AmazonElectronicsProduct
+resolutions = await DatasetMatcher("walmart-amazon").resolve_blocks(blocks)
+```
+
 ## Benchmark Results
 
 Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.5 Flash-Lite as the teacher/reflection LM for GEPA.
@@ -160,7 +180,7 @@ Blocking uses name-only embeddings for tighter semantic clusters. All matching d
 ```
 src/serf/
 ├── cli/             # Click CLI commands
-├── dspy/            # DSPy types, signatures, agents
+├── dspy/            # DSPy types, signatures, per-dataset schemas, agents
 ├── block/           # Semantic blocking (embeddings, FAISS, normalization)
 ├── match/           # UUID mapping, LLM matching, few-shot examples
 ├── merge/           # Field-level entity merging

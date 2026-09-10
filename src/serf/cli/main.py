@@ -10,6 +10,7 @@ from typing import Any, cast
 import click
 import pandas as pd
 
+from serf.dspy.dataset_signatures import SIGNATURE_MODE_GENERIC, SIGNATURE_MODES
 from serf.eval.benchmarks import DATASET_REGISTRY
 from serf.logs import get_logger, setup_logging
 from serf.tracking import setup_mlflow
@@ -932,6 +933,24 @@ def optimize(
     default=1,
     help="Maximum ER iterations (re-block and re-match resolved entities)",
 )
+@click.option(
+    "--signature-mode",
+    type=click.Choice(list(SIGNATURE_MODES), case_sensitive=False),
+    default=SIGNATURE_MODE_GENERIC,
+    help="Matching contract: the shared BlockMatch signature or this dataset's typed signature",
+)
+@click.option(
+    "--sample-records",
+    type=int,
+    default=None,
+    help="Sample this many records, keeping ground-truth match groups whole",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for record sampling (from config.yml optimize.seed)",
+)
 def benchmark(
     dataset: str,
     output_path: str | None,
@@ -941,12 +960,20 @@ def benchmark(
     limit: int | None,
     concurrency: int,
     max_iterations: int,
+    signature_mode: str,
+    sample_records: int | None,
+    seed: int | None,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
 
     Uses embeddings for blocking and LLM for matching.
     Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
     for Gemini 3.5 Flash-Lite (teacher/analyze).
+
+    With --signature-mode per-dataset the block is matched with the typed DSPy
+    signature written for this dataset instead of the shared BlockMatch one.
+    With --sample-records the dataset is sampled by ground-truth match group, so
+    gold pairs survive, and metrics are scored against the surviving pairs.
     """
     from serf.eval.benchmarks import BenchmarkDataset
 
@@ -957,6 +984,7 @@ def benchmark(
     model = model or serf_config.get("models.llm")
     click.echo(f"Running benchmark: {dataset}")
     click.echo(f"  Model: {model}")
+    click.echo(f"  Signature mode: {signature_mode}")
     start = time.time()
 
     benchmark_data = BenchmarkDataset.download(dataset, output_path)
@@ -979,6 +1007,24 @@ def benchmark(
     click.echo(f"  Left table: {len(left_entities)} entities")
     click.echo(f"  Right table: {len(right_entities)} entities")
     click.echo(f"  Ground truth pairs: {len(benchmark_data.ground_truth)}")
+
+    if sample_records:
+        from serf.eval.sample import sample_records as sample_benchmark_records
+
+        seed = seed if seed is not None else int(serf_config.get("optimize.seed", 42))
+        record_sample = sample_benchmark_records(
+            all_entities,
+            benchmark_data.ground_truth,
+            sample_records,
+            seed=seed,
+        )
+        all_entities = record_sample.records
+        benchmark_data.ground_truth = record_sample.ground_truth
+        click.echo(
+            f"  Sampled {len(all_entities)} of {record_sample.total} records "
+            f"(seed {seed}) with {record_sample.gold_pairs} gold pairs retained"
+        )
+
     click.echo(f"  Total entities: {len(all_entities)}")
 
     # Auto-scale block size for limited test runs
@@ -997,7 +1043,13 @@ def benchmark(
         prev_count = len(current_entities)
 
         pairs, resolved = _benchmark_llm_matching(
-            current_entities, effective_block_size, model, limit, concurrency
+            current_entities,
+            effective_block_size,
+            model,
+            limit,
+            concurrency,
+            dataset=dataset,
+            signature_mode=signature_mode,
         )
         all_predicted_pairs.update(pairs)
         iterations_run = iteration
@@ -1035,12 +1087,17 @@ def benchmark(
 
     if output_path:
         os.makedirs(output_path, exist_ok=True)
-        results_file = os.path.join(output_path, f"{dataset}_results.json")
+        suffix = "" if signature_mode == SIGNATURE_MODE_GENERIC else f"_{signature_mode}"
+        results_file = os.path.join(output_path, f"{dataset}{suffix}_results.json")
         with open(results_file, "w") as f:
             json.dump(
                 {
                     "dataset": dataset,
                     "model": model,
+                    "signature_mode": signature_mode,
+                    "sample_records": sample_records,
+                    "seed": seed,
+                    "records": len(all_entities),
                     "elapsed_seconds": elapsed,
                     "predicted_pairs": len(predicted_pairs),
                     "true_pairs": len(benchmark_data.ground_truth),
@@ -1164,6 +1221,8 @@ def _benchmark_llm_matching(
     model: str | None = None,
     limit: int | None = None,
     concurrency: int = 20,
+    dataset: str | None = None,
+    signature_mode: str = SIGNATURE_MODE_GENERIC,
 ) -> tuple[set[tuple[int, int]], list[Any]]:
     """Run LLM-based matching for benchmarks.
 
@@ -1182,16 +1241,19 @@ def _benchmark_llm_matching(
         Max blocks to process (for testing)
     concurrency : int
         Number of concurrent LLM requests
+    dataset : str | None
+        Benchmark dataset name, required for per-dataset signatures
+    signature_mode : str
+        ``generic`` for the shared BlockMatch signature, ``per-dataset`` for the
+        typed signature written for this dataset
 
     Returns
     -------
     tuple[set[tuple[int, int]], list[Entity]]
         Predicted match pairs and resolved entities for next iteration
     """
-    import asyncio
-
     from serf.block.pipeline import SemanticBlockingPipeline
-    from serf.match.matcher import EntityMatcher
+    from serf.match.run import match_blocks
 
     max_block = min(100, target_block_size * 3)
     click.echo(f"\n  Blocking (target={target_block_size}, max={max_block})...")
@@ -1202,27 +1264,21 @@ def _benchmark_llm_matching(
     click.echo(f"    {blocking_metrics.total_blocks} blocks created")
 
     click.echo(f"  Matching with LLM ({model}, concurrency={concurrency}, limit={limit})...")
-    matcher = EntityMatcher(model=model, max_concurrent=concurrency)
-    resolutions = asyncio.run(matcher.resolve_blocks(blocks, limit=limit))
+    outcome = match_blocks(
+        blocks,
+        signature_mode=signature_mode,
+        dataset=dataset,
+        model=model,
+        concurrency=concurrency,
+        limit=limit,
+    )
+    if outcome.single_source_blocks:
+        click.echo(f"    {outcome.single_source_blocks} single-source blocks skipped")
+    if outcome.dropped_candidates:
+        click.echo(f"    {outcome.dropped_candidates} candidates dropped for unknown record ids")
 
-    predicted_pairs: set[tuple[int, int]] = set()
-    resolved_entities: list[Any] = []
-    for r in resolutions:
-        # Extract from explicit match decisions
-        for m in r.matches:
-            if m.is_match:
-                a, b = m.entity_a_id, m.entity_b_id
-                predicted_pairs.add((min(a, b), max(a, b)))
-        # Also extract from merged entities' source_ids
-        # (LLM may merge entities without explicit MatchDecision objects)
-        for e in r.resolved_entities:
-            if e.source_ids:
-                for sid in e.source_ids:
-                    predicted_pairs.add((min(e.id, sid), max(e.id, sid)))
-        resolved_entities.extend(r.resolved_entities)
-
-    click.echo(f"    Predicted {len(predicted_pairs)} match pairs")
-    return predicted_pairs, resolved_entities
+    click.echo(f"    Predicted {len(outcome.predicted_pairs)} match pairs")
+    return outcome.predicted_pairs, outcome.resolved_entities
 
 
 if __name__ == "__main__":

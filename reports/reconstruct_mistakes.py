@@ -31,13 +31,16 @@ import sys
 from typing import Any
 
 from serf.eval.benchmarks import RIGHT_ID_OFFSET, BenchmarkDataset
+from serf.eval.sample import sample_records
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
 
 DATASETS = ["dblp-acm", "dblp-scholar", "abt-buy", "amazon-google", "walmart-amazon"]
 
-BENCHMARK_ROOT = "data/benchmarks"
+# Benchmark results live under the repo, plus any pinned source snapshot used to keep
+# an A/B's code fixed while the working tree moves on.
+BENCHMARK_ROOTS = ["data/benchmarks", "/tmp/serf-ab/data/benchmarks"]
 ARCHIVE_ROOT = "data/benchmarks/full_baseline"
 
 # How many worked examples to keep per error category. Cross-source false positives
@@ -50,6 +53,23 @@ EXAMPLE_BUDGET: dict[str, int] = {
     "false_negatives_failed_block": 2,
     "false_negatives_blocking_miss": 3,
 }
+
+# Counts the reconstruction reports, kept in one place so runs that cannot be
+# reconstructed still emit the same shape.
+RECONSTRUCTED_KEYS = (
+    "predicted",
+    "true_positives",
+    "false_positives",
+    "fp_cross_source",
+    "fp_same_source",
+    "gold",
+    "false_negatives",
+    "fn_co_blocked",
+    "fn_not_co_blocked",
+    "fn_failed_block",
+    "fn_model_error",
+    "gold_co_blocked",
+)
 
 # Typed per-dataset signatures name their two record fields after the sources,
 # so the pair of field names in a trace's inputs identifies the dataset.
@@ -408,7 +428,12 @@ def discover_runs() -> list[dict[str, Any]]:
         Run descriptors sorted by start time
     """
     runs: list[dict[str, Any]] = []
-    for path in sorted(pathlib.Path(BENCHMARK_ROOT).glob("*/*_results.json")):
+    paths: list[pathlib.Path] = []
+    for root in BENCHMARK_ROOTS:
+        root_path = pathlib.Path(root)
+        if root_path.is_dir():
+            paths.extend(sorted(root_path.glob("*/*_results.json")))
+    for path in paths:
         saved = json.loads(path.read_text(encoding="utf-8"))
         end = path.stat().st_mtime
         runs.append(
@@ -418,12 +443,106 @@ def discover_runs() -> list[dict[str, Any]]:
                 "dataset": saved["dataset"],
                 "signature_mode": saved.get("signature_mode", "generic"),
                 "sample_records": saved.get("sample_records"),
+                "seed": saved.get("seed") or 42,
+                "max_iterations": int(saved.get("max_iterations") or 1),
+                "iterations_run": int(saved.get("iterations_run") or 1),
                 "start": end - float(saved["elapsed_seconds"]),
                 "end": end,
                 "saved": saved,
             }
         )
     return sorted(runs, key=lambda run: run["start"])
+
+
+def sampled_ids(dataset: BenchmarkDataset, count: int, seed: int) -> set[int]:
+    """Recompute the exact record sample a run drew, so traces can be attributed to it.
+
+    ``serf.eval.sample.sample_records`` is seeded, so replaying it reproduces the run's
+    sample without re-running anything.
+
+    Parameters
+    ----------
+    dataset : BenchmarkDataset
+        Loaded dataset
+    count : int
+        Record budget the run asked for
+    seed : int
+        RNG seed the run used
+
+    Returns
+    -------
+    set[int]
+        Global entity ids in the sample
+    """
+    left, right = dataset.to_entities()
+    sample = sample_records(left + right, dataset.ground_truth, count, seed=seed)
+    return {entity.id for entity in sample.records}
+
+
+def assign_traces(
+    runs: list[dict[str, Any]],
+    traces: list[dict[str, Any]],
+    datasets: dict[str, BenchmarkDataset],
+) -> dict[str, list[dict[str, Any]]]:
+    """Attribute every trace to exactly one run.
+
+    Runs overlap in time whenever a full-table run and a sampled A/B arm are in flight
+    together, so a time window alone is not enough. Three criteria pin each trace down:
+    the dataset it references, whether its input shape matches the run's signature mode,
+    and, for sampled runs, whether every record in the block belongs to that run's
+    replayed sample. When several runs still qualify the narrowest one wins.
+
+    Parameters
+    ----------
+    runs : list[dict[str, Any]]
+        Run descriptors from ``discover_runs``
+    traces : list[dict[str, Any]]
+        Parsed traces
+    datasets : dict[str, BenchmarkDataset]
+        Loaded datasets
+
+    Returns
+    -------
+    dict[str, list[dict[str, Any]]]
+        Traces per run path
+    """
+    scopes: dict[str, set[int] | None] = {}
+    sizes: dict[str, int] = {}
+    cache: dict[tuple[str, int, int], set[int]] = {}
+    for run in runs:
+        dataset = datasets[run["dataset"]]
+        if run["sample_records"]:
+            key = (run["dataset"], int(run["sample_records"]), int(run["seed"]))
+            if key not in cache:
+                cache[key] = sampled_ids(dataset, key[1], key[2])
+            scopes[run["path"]] = cache[key]
+            sizes[run["path"]] = len(cache[key])
+        else:
+            scopes[run["path"]] = None
+            sizes[run["path"]] = len(dataset.table_a) + len(dataset.table_b)
+
+    assigned: dict[str, list[dict[str, Any]]] = {run["path"]: [] for run in runs}
+    for run in runs:
+        run["scope"] = scopes[run["path"]]
+    for trace in traces:
+        candidates = []
+        for run in runs:
+            if run["dataset"] != trace["dataset"]:
+                continue
+            if not run["start"] - 5 <= trace["time"] <= run["end"] + 5:
+                continue
+            wanted = "typed" if run["signature_mode"] != "generic" else "generic"
+            if trace["kind"] != wanted:
+                continue
+            scope = scopes[run["path"]]
+            if scope is not None and not set(trace["block_ids"]) <= scope:
+                continue
+            candidates.append(run)
+        if not candidates:
+            continue
+        best = min(candidates, key=lambda run: (sizes[run["path"]], run["start"]))
+        assigned[best["path"]].append(trace)
+    return assigned
 
 
 def side_of(entity_id: int) -> str:
@@ -497,7 +616,7 @@ def analyse_run(
     run : dict[str, Any]
         Run descriptor from ``discover_runs``
     traces : list[dict[str, Any]]
-        All parsed traces
+        Traces attributed to this run by ``assign_traces``
     datasets : dict[str, BenchmarkDataset]
         Loaded datasets
     records : dict[str, dict[int, dict[str, str]]]
@@ -511,30 +630,55 @@ def analyse_run(
         Reconstruction summary, verification status and example mistakes
     """
     dataset = run["dataset"]
-    selected = [
-        trace
-        for trace in traces
-        if trace["dataset"] == dataset and run["start"] - 5 <= trace["time"] <= run["end"] + 5
-    ]
+    selected = traces
+    # A run with more than one ER iteration re-blocks the entities the previous round
+    # merged, so its later traces describe merged entities rather than source records and
+    # its pair set is expanded through those merges. Neither is recoverable from a trace
+    # in isolation, so such runs contribute scores and token usage but no decomposition.
+    reliable = run["iterations_run"] <= 1
 
     predicted: set[tuple[int, int]] = set()
     reasons: dict[tuple[int, int], str] = {}
     blocks: list[tuple[list[int], bool]] = []
-    seen_ids: set[int] = set()
     tokens_in = 0
     tokens_out = 0
     for trace in selected:
         predicted |= trace["pairs"]
         reasons.update(trace["reasons"])
         blocks.append((trace["block_ids"], trace["state"] == "ERROR"))
-        seen_ids.update(trace["block_ids"])
         if trace["tokens"]:
             tokens_in += int(trace["tokens"].get("input_tokens") or 0)
             tokens_out += int(trace["tokens"].get("output_tokens") or 0)
 
+    if not reliable:
+        return {
+            "path": run["path"],
+            "group": run["group"],
+            "dataset": dataset,
+            "signature_mode": run["signature_mode"],
+            "sample_records": run["sample_records"],
+            "max_iterations": run["max_iterations"],
+            "iterations_run": run["iterations_run"],
+            "start": run["start"],
+            "end": run["end"],
+            "saved": run["saved"],
+            "traces": len(selected),
+            "error_traces": sum(1 for t in selected if t["state"] == "ERROR"),
+            "block_sizes": sorted(len(b) for b, _e in blocks),
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "reconstructed": {key: 0 for key in RECONSTRUCTED_KEYS},
+            "reconstruction_reliable": False,
+            "verified": False,
+            "examples": {key: [] for key in EXAMPLE_BUDGET},
+        }
+
     gold = set(datasets[dataset].ground_truth)
-    if run["sample_records"]:
-        gold = {p for p in gold if p[0] in seen_ids and p[1] in seen_ids}
+    scope = run.get("scope")
+    if scope is not None:
+        # Restrict gold with the run's replayed sample rather than with the ids seen in
+        # traces, so pairs inside blocks that were skipped or lost still count as missed.
+        gold = {pair for pair in gold if pair[0] in scope and pair[1] in scope}
 
     co_blocked: set[tuple[int, int]] = set()
     co_blocked_ok: set[tuple[int, int]] = set()
@@ -566,6 +710,7 @@ def analyse_run(
         len(predicted) == saved["predicted_pairs"]
         and len(true_positives) == saved["true_positives"]
         and len(false_positives) == saved["false_positives"]
+        and len(gold) == saved["true_pairs"]
     )
 
     row_values = records[dataset]
@@ -587,6 +732,8 @@ def analyse_run(
         "dataset": dataset,
         "signature_mode": run["signature_mode"],
         "sample_records": run["sample_records"],
+        "max_iterations": run["max_iterations"],
+        "iterations_run": run["iterations_run"],
         "start": run["start"],
         "end": run["end"],
         "saved": saved,
@@ -609,6 +756,7 @@ def analyse_run(
             "fn_model_error": len(fn_model_error),
             "gold_co_blocked": len(co_blocked),
         },
+        "reconstruction_reliable": True,
         "verified": verified,
         "examples": {
             key: examples(pairs, key, label, blocked)
@@ -638,13 +786,21 @@ def main() -> None:
     traces = load_traces(traces_path, id_maps)
     logger.info(f"Parsed {len(traces)} traces from {traces_path}")
 
-    analyses = [analyse_run(run, traces, datasets, records) for run in discover_runs()]
+    runs = discover_runs()
+    assigned = assign_traces(runs, traces, datasets)
+    analyses = [analyse_run(run, assigned[run["path"]], datasets, records) for run in runs]
     for analysis in analyses:
         recon = analysis["reconstructed"]
         saved = analysis["saved"]
-        status = "OK " if analysis["verified"] else "MISMATCH"
+        if not analysis["reconstruction_reliable"]:
+            status = "ITER    "
+        elif analysis["verified"]:
+            status = "OK      "
+        else:
+            status = "MISMATCH"
         logger.info(
             f"{status} {analysis['dataset']:15s} {analysis['signature_mode']:12s} "
+            f"it={analysis['iterations_run']} "
             f"sample={analysis['sample_records']} traces={analysis['traces']} "
             f"pred={recon['predicted']}/{saved['predicted_pairs']} "
             f"tp={recon['true_positives']}/{saved['true_positives']} "

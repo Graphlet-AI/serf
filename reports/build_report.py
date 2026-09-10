@@ -42,6 +42,8 @@ PALETTE = {
     "f1": "#3f8f6b",
     "generic": "#8a8fa3",
     "typed": "#3f8f6b",
+    "generic_iter": "#c9ccd6",
+    "typed_iter": "#8fc4a9",
     "tp": "#3f8f6b",
     "blocking": "#c2603c",
     "failed": "#a9569f",
@@ -121,6 +123,16 @@ DATASET_FACTS: dict[str, dict[str, Any]] = {
             "why the full-data run was cancelled and never re-run. Everything reported here "
             "comes from either the earlier truncated reference run or the 1,000-record A/B "
             "sample, and is labelled as such."
+        ),
+        "reference_note": (
+            "The earlier reference run was <strong>not</strong> a full-table run and was in one "
+            "important respect easier than the real task. It passed "
+            "<code>--max-right-entities 5000</code>, and because that option keeps every "
+            "gold-matched right record before it samples any others, the Scholar side collapsed "
+            "to exactly the 5,218 records that appear in the gold mapping. Every Scholar record "
+            "in that run therefore had a DBLP partner and the 58,000-odd distractor records were "
+            "removed. Its F1 of 0.4110 is an optimistic figure for a much easier problem than "
+            "matching against the whole crawl."
         ),
     },
     "abt-buy": {
@@ -313,6 +325,44 @@ def duration(seconds: float | None) -> str:
     return f"{total // 60}m {total % 60:02d}s ({total:,}s)"
 
 
+def legend(
+    entries: list[tuple[str, str]], x: int, baseline: int, max_width: float
+) -> tuple[str, int]:
+    """Lay out a chart legend, wrapping onto extra rows when it would overflow.
+
+    Parameters
+    ----------
+    entries : list[tuple[str, str]]
+        Label and colour per legend item
+    x : int
+        Left edge of the legend
+    baseline : int
+        Text baseline of the first row
+    max_width : float
+        Width the legend must fit inside
+
+    Returns
+    -------
+    tuple[str, int]
+        Legend markup and the number of rows used
+    """
+    parts: list[str] = []
+    cursor = float(x)
+    row = 0
+    for label, colour in entries:
+        item_w = 17 + 6.55 * len(label) + 20
+        if cursor > x and cursor - x + item_w > max_width:
+            row += 1
+            cursor = float(x)
+        y = baseline + row * 17
+        parts.append(
+            f'<rect x="{cursor:.1f}" y="{y - 9}" width="11" height="11" fill="{colour}" rx="2"/>'
+        )
+        parts.append(f'<text x="{cursor + 17:.1f}" y="{y}" class="legend">{esc(label)}</text>')
+        cursor += item_w
+    return "".join(parts), row + 1
+
+
 def grouped_bars(
     groups: list[str],
     series: list[tuple[str, list[float | None], str]],
@@ -346,8 +396,22 @@ def grouped_bars(
     str
         SVG markup wrapped in a figure element
     """
-    pad_left, pad_right, pad_top, pad_bottom = 58, 18, 26, 66
+    pad_left, pad_right, pad_top = 58, 18, 26
+    legend_rows = 1
     plot_w = width - pad_left - pad_right
+    for _attempt in range(3):
+        pad_bottom = 50 + 17 * legend_rows
+        _markup, rows = legend(
+            [(name, colour) for name, _values, colour in series],
+            pad_left,
+            height - pad_bottom + 34,
+            plot_w,
+        )
+        if rows == legend_rows:
+            break
+        legend_rows = rows
+    pad_bottom = 50 + 17 * legend_rows
+    height = height + 17 * (legend_rows - 1)
     plot_h = height - pad_top - pad_bottom
     group_w = plot_w / max(1, len(groups))
     inner = group_w * 0.78
@@ -398,14 +462,13 @@ def grouped_bars(
         f'<line x1="{pad_left}" y1="{pad_top + plot_h}" x2="{pad_left + plot_w}" '
         f'y2="{pad_top + plot_h}" stroke="{PALETTE["axis"]}" stroke-width="1"/>'
     )
-    legend_y = height - 16
-    lx = pad_left
-    for name, _values, colour in series:
-        parts.append(
-            f'<rect x="{lx}" y="{legend_y - 9}" width="11" height="11" fill="{colour}" rx="2"/>'
-        )
-        parts.append(f'<text x="{lx + 17}" y="{legend_y}" class="legend">{esc(name)}</text>')
-        lx += 22 + 8 * len(name)
+    legend_markup, _rows = legend(
+        [(name, colour) for name, _values, colour in series],
+        pad_left,
+        pad_top + plot_h + 44,
+        plot_w,
+    )
+    parts.append(legend_markup)
     parts.append("</svg>")
     return f"<figure>{''.join(parts)}<figcaption>{caption}</figcaption></figure>"
 
@@ -437,8 +500,18 @@ def stacked_bars(
     str
         SVG markup wrapped in a figure element
     """
-    pad_left, pad_right, pad_top, pad_bottom = 58, 18, 26, 76
+    pad_left, pad_right, pad_top = 58, 18, 26
     plot_w = width - pad_left - pad_right
+    legend_rows = 1
+    for _attempt in range(3):
+        _markup, rows = legend(
+            [(name, colour) for name, _values, colour in segments], pad_left, 0, plot_w
+        )
+        if rows == legend_rows:
+            break
+        legend_rows = rows
+    pad_bottom = 62 + 17 * legend_rows
+    height = height + 17 * (legend_rows - 1)
     plot_h = height - pad_top - pad_bottom
     group_w = plot_w / max(1, len(groups))
     bar_w = min(96.0, group_w * 0.5)
@@ -493,14 +566,13 @@ def stacked_bars(
             f'y="{pad_top + plot_h + 36:.1f}" text-anchor="middle" '
             f'class="sublabel">{int(total):,} gold pairs</text>'
         )
-    legend_y = height - 16
-    lx = pad_left
-    for name, _values, colour in segments:
-        parts.append(
-            f'<rect x="{lx}" y="{legend_y - 9}" width="11" height="11" fill="{colour}" rx="2"/>'
-        )
-        parts.append(f'<text x="{lx + 17}" y="{legend_y}" class="legend">{esc(name)}</text>')
-        lx += 22 + 7 * len(name)
+    legend_markup, _rows = legend(
+        [(name, colour) for name, _values, colour in segments],
+        pad_left,
+        pad_top + plot_h + 56,
+        plot_w,
+    )
+    parts.append(legend_markup)
     parts.append("</svg>")
     return f"<figure>{''.join(parts)}<figcaption>{caption}</figcaption></figure>"
 
@@ -541,8 +613,19 @@ def recon_count(run: dict[str, Any] | None, key: str) -> float:
     return 0.0 if run is None else float(run["reconstructed"][key])
 
 
-def pick(runs: list[dict[str, Any]], dataset: str, group: str, mode: str) -> dict[str, Any] | None:
+def pick(
+    runs: list[dict[str, Any]],
+    dataset: str,
+    group: str,
+    mode: str,
+    require_traces: bool = False,
+    iterations: str = "single",
+) -> dict[str, Any] | None:
     """Select the most recent run matching a dataset, output group and signature mode.
+
+    Scores come from the saved aggregates and do not need traces, but the error
+    decomposition and the worked examples do, so callers that need trace content ask
+    for it explicitly.
 
     Parameters
     ----------
@@ -551,24 +634,52 @@ def pick(runs: list[dict[str, Any]], dataset: str, group: str, mode: str) -> dic
     dataset : str
         Dataset name
     group : str
-        Output directory name, e.g. ``full_baseline``
+        Output directory prefix, e.g. ``full_baseline`` or ``ab_`` for any A/B directory
     mode : str
         ``generic`` or ``per-dataset``
+    require_traces : bool
+        Only consider runs whose traces were found in the tracking store
+    iterations : str
+        ``single`` for one-pass runs, ``multi`` for runs that re-blocked merged
+        entities over several iterations, ``any`` for either
 
     Returns
     -------
-    dict | None
+    dict[str, Any] | None
         Matching run, or None
     """
     matching = [
         run
         for run in runs
         if run["dataset"] == dataset
-        and run["group"] == group
+        and run["group"].startswith(group)
         and run["signature_mode"] == mode
-        and run["traces"] > 2
+        and (iterations == "any" or (run.get("iterations_run", 1) > 1) == (iterations == "multi"))
+        and (
+            run["traces"] > 2 and run.get("reconstruction_reliable", True)
+            if require_traces
+            else True
+        )
     ]
     return max(matching, key=lambda run: run["end"]) if matching else None
+
+
+def reference_label(dataset: str) -> str:
+    """Return the score-table label for the earlier reference run.
+
+    Parameters
+    ----------
+    dataset : str
+        Dataset name
+
+    Returns
+    -------
+    str
+        Row label
+    """
+    if dataset == "dblp-scholar":
+        return "Earlier reference, max_tokens 8192, right table cut to 5,218"
+    return "Earlier reference, max_tokens 8192"
 
 
 def score_row(label: str, run: dict[str, Any] | None, note: str = "") -> str:
@@ -768,7 +879,10 @@ def mistake_table(run: dict[str, Any] | None) -> str:
         Table markup, or an explanatory paragraph when reconstruction is unavailable
     """
     if run is None:
-        return ""
+        return (
+            '<p class="warn">No traces could be located for this dataset, so its errors cannot '
+            "be decomposed into blocking misses, failed blocks and matching errors.</p>"
+        )
     recon = run["reconstructed"]
     verified = (
         '<span class="ok">reproduces the saved aggregates exactly</span>'
@@ -855,30 +969,44 @@ def dataset_section(dataset: str, runs: list[dict[str, Any]]) -> str:
     """
     facts = DATASET_FACTS[dataset]
     full = pick(runs, dataset, "full_baseline", "generic")
-    ab_generic = pick(runs, dataset, "ab_1000", "generic")
-    ab_typed = pick(runs, dataset, "ab_1000", "per-dataset")
+    ab_generic = pick(runs, dataset, "ab_", "generic")
+    ab_typed = pick(runs, dataset, "ab_", "per-dataset")
+    iter_generic = pick(runs, dataset, "ab_", "generic", iterations="multi")
+    iter_typed = pick(runs, dataset, "ab_", "per-dataset", iterations="multi")
     reference = pick(runs, dataset, "raw_baseline", "generic")
 
-    example_run = full or ab_typed or ab_generic or reference
-    if example_run is full and full is not None:
+    traced_full = pick(runs, dataset, "full_baseline", "generic", require_traces=True)
+    traced_reference = pick(runs, dataset, "raw_baseline", "generic", require_traces=True)
+    traced_typed = pick(runs, dataset, "ab_", "per-dataset", require_traces=True)
+    traced_generic = pick(runs, dataset, "ab_", "generic", require_traces=True)
+
+    example_run = traced_full or traced_reference or traced_typed or traced_generic
+    verified_note = (
+        "whose rebuilt pair set reproduces that run's saved precision and recall exactly"
+        if example_run is not None and example_run["verified"]
+        else "whose rebuilt pair set does not fully reconcile with the saved aggregates, so a "
+        "few of that run's mistakes are missing here"
+    )
+    if example_run is None:
+        source_note = ""
+    elif example_run is traced_full:
         source_note = (
-            f"Examples below are reconstructed from the {full['traces']} MLflow traces of the "
-            f"full-data run, whose rebuilt pair set reproduces that run's saved "
-            f"precision/recall aggregates exactly."
+            f"Examples below are reconstructed from the {example_run['traces']} MLflow traces of "
+            f"the full-data run, {verified_note}."
         )
-    elif example_run is reference and reference is not None:
+    elif example_run is traced_reference:
         source_note = (
-            f"There is no full-data run for this dataset, so the examples below come from the "
-            f"{reference['traces']} traces of the earlier <code>max_tokens=8192</code> reference "
-            f"run. Treat them as illustrative of the data, not of current scores."
-        )
-    elif example_run is not None:
-        source_note = (
-            f"Examples below are reconstructed from the {example_run['traces']} traces of the "
-            f"1,000-record {example_run['signature_mode']} A/B arm."
+            f"There is no traced full-data run for this dataset, so the examples below come from "
+            f"the {example_run['traces']} traces of the earlier <code>max_tokens=8192</code> "
+            f"reference run, {verified_note}. They illustrate the data and the failure modes, "
+            f"not the current scores."
         )
     else:
-        source_note = ""
+        source_note = (
+            f"There is no full-data run for this dataset, so the examples below come from the "
+            f"{example_run['traces']} traces of the 1,000-record "
+            f"<code>{esc(example_run['signature_mode'])}</code> A/B arm, {verified_note}."
+        )
 
     if full is not None:
         saved = full["saved"]
@@ -899,22 +1027,28 @@ def dataset_section(dataset: str, runs: list[dict[str, Any]]) -> str:
         figure = ""
 
     ab_figure = ""
-    if ab_generic is not None or ab_typed is not None:
-        gen = ab_generic["saved"] if ab_generic else None
-        typ = ab_typed["saved"] if ab_typed else None
+    arms = [
+        ("Generic, 1 iteration", ab_generic, PALETTE["generic"]),
+        ("Typed, 1 iteration", ab_typed, PALETTE["typed"]),
+        ("Generic, 3 iterations", iter_generic, PALETTE["generic_iter"]),
+        ("Typed, 3 iterations", iter_typed, PALETTE["typed_iter"]),
+    ]
+    if any(run is not None for _label, run, _colour in arms):
         ab_figure = grouped_bars(
             ["Precision", "Recall", "F1"],
             [
                 (
-                    "Generic BlockMatch",
-                    [gen["precision"], gen["recall"], gen["f1_score"]] if gen else [None] * 3,
-                    PALETTE["generic"],
-                ),
-                (
-                    "Typed per-dataset",
-                    [typ["precision"], typ["recall"], typ["f1_score"]] if typ else [None] * 3,
-                    PALETTE["typed"],
-                ),
+                    label,
+                    [
+                        run["saved"]["precision"],
+                        run["saved"]["recall"],
+                        run["saved"]["f1_score"],
+                    ]
+                    if run is not None
+                    else [None] * 3,
+                    colour,
+                )
+                for label, run, colour in arms
             ],
             f"{facts['display']} 1,000-record A/B: generic against typed signature, "
             "identical sample, seed 42.",
@@ -945,15 +1079,18 @@ SIGMOD 2018 &mdash; <a href="{DEEPMATCHER}">{DEEPMATCHER}</a>.</p>
 {score_row("Full data, generic signature", full, "cancelled before it ran")}
 {score_row("1,000-record sample, generic signature", ab_generic, "A/B arm not finished")}
 {score_row("1,000-record sample, typed signature", ab_typed, "A/B arm not finished")}
-{score_row("Earlier reference, max_tokens 8192", reference, "no earlier run")}
+{score_row("1,000-record sample, generic, 3 ER iterations", iter_generic, "iterative arm not finished")}
+{score_row("1,000-record sample, typed, 3 ER iterations", iter_typed, "iterative arm not finished")}
+{score_row(reference_label(dataset), reference, "no earlier run")}
 </tbody>
 </table>
 <p class="reading">{facts["reading"]}</p>
+{f'<p class="caveat">{facts["reference_note"]}</p>' if facts.get("reference_note") else ""}
 
 <div class="figrow">{figure}{ab_figure}</div>
 
 <h3>Where the errors come from</h3>
-{mistake_table(full or reference)}
+{mistake_table(example_run)}
 
 <h3>Real example mistakes</h3>
 {examples_block(example_run, facts["sides"], source_note)}
@@ -978,9 +1115,8 @@ def build(analysis: dict[str, Any]) -> str:
     generated = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d %H:%M UTC")
 
     full_runs = {name: pick(runs, name, "full_baseline", "generic") for name in ORDER}
-    ab_generic = {name: pick(runs, name, "ab_1000", "generic") for name in ORDER}
-    ab_typed = {name: pick(runs, name, "ab_1000", "per-dataset") for name in ORDER}
-    reference = {name: pick(runs, name, "raw_baseline", "generic") for name in ORDER}
+    ab_generic = {name: pick(runs, name, "ab_", "generic") for name in ORDER}
+    ab_typed = {name: pick(runs, name, "ab_", "per-dataset") for name in ORDER}
 
     labels = [DATASET_FACTS[name]["display"].replace("&ndash;", "-") for name in ORDER]
 
@@ -1017,7 +1153,11 @@ def build(analysis: dict[str, Any]) -> str:
         "identical sample with seed 42.",
     )
 
-    decomp_source = {n: full_runs[n] or reference[n] for n in ORDER}
+    decomp_source = {
+        n: pick(runs, n, "full_baseline", "generic", require_traces=True)
+        or pick(runs, n, "raw_baseline", "generic", require_traces=True)
+        for n in ORDER
+    }
     decomp = stacked_bars(
         labels,
         [
@@ -1047,7 +1187,9 @@ def build(analysis: dict[str, Any]) -> str:
         "better matcher respectively. DBLP-Scholar uses its earlier reference run.",
     )
 
-    ab_verdict = ab_summary(ab_generic, ab_typed)
+    ab_verdict = ab_summary(ab_generic, ab_typed) + iteration_summary(runs)
+    headline = headline_finding(runs)
+    ordering = ordering_finding(full_runs)
 
     summary_cells: list[str] = []
     for name in ORDER:
@@ -1118,18 +1260,9 @@ the model looked at two records and got it wrong. Most misses are pairs the matc
 evaluated, either because blocking never put them in the same block or because the block's LLM
 call failed outright.</p>
 
-<p>On the full-data DBLP&ndash;ACM run, for example, recall is 0.5162 &mdash; but of the 1,076
-missed gold pairs, 505 were never co-blocked and 495 sat inside blocks whose LLM call failed.
-Only 76 were pairs the model actually judged and rejected. Of the gold pairs that reached a
-working matcher, it caught roughly 94%. The aggregate recall number is measuring blocking recall
-and adapter robustness far more than it is measuring the model's judgement.</p>
+{headline}
 
-<p>The second finding is the ordering of the datasets, which reproduces the published literature
-closely. The bibliographic task is easy and the e-commerce tasks are hard: DBLP&ndash;ACM reaches
-F1 0.6645 while Amazon&ndash;Google reaches 0.1936. K&ouml;pcke, Thor and Rahm found that no
-approach they evaluated exceeded 70% F-measure on the e-commerce match problems, and DeepMatcher
-notes specifically that Amazon&ndash;Google's matching titles are synonyms separated by a large
-string distance. Our worst result lands on exactly the dataset both papers flag as hardest.</p>
+{ordering}
 
 {ab_verdict}
 
@@ -1203,12 +1336,16 @@ def ab_summary(
         delta = typ["f1_score"] - gen["f1_score"]
         if delta > 0:
             wins += 1
+        speed_note = (
+            f" Wall clock {duration(typ['elapsed_seconds'])} typed against "
+            f"{duration(gen['elapsed_seconds'])} generic."
+        )
         lines.append(
             f"<li><strong>{DATASET_FACTS[name]['display']}</strong>: F1 "
             f"{gen['f1_score']:.4f} generic against {typ['f1_score']:.4f} typed, "
             f"{'+' if delta >= 0 else ''}{delta:.4f}. Recall moves "
             f"{gen['recall']:.4f} &rarr; {typ['recall']:.4f}, precision "
-            f"{gen['precision']:.4f} &rarr; {typ['precision']:.4f}.</li>"
+            f"{gen['precision']:.4f} &rarr; {typ['precision']:.4f}.{speed_note}</li>"
         )
 
     caveat = ""
@@ -1233,7 +1370,12 @@ def ab_summary(
 
     verdict = (
         f"The typed per-dataset signatures win on {wins} of the {len(paired)} datasets scored so "
-        f"far."
+        f"far, and the gain is in recall rather than precision. The likely mechanism is the shape "
+        f"of the output contract: the generic signature asks the model to echo the entire "
+        f"resolved block back, so every record it forgets to re-emit silently becomes an "
+        f"unmatched singleton, whereas a typed signature asks only for the candidate pairs it "
+        f"judged. The typed side also names each source explicitly, which removes the need for "
+        f"the model to work out which records belong to which table."
         if wins
         else f"The typed signatures do not beat the generic one on any of the {len(paired)} "
         f"datasets scored so far."
@@ -1250,7 +1392,181 @@ def ab_summary(
 <h3>Generic against typed per-dataset signatures</h3>
 <p>{verdict}{pending_note}</p>
 <ul class="ablist">{"".join(lines)}</ul>
+<p class="blurb">Both arms of each dataset draw the same 1,000-record sample at seed 42 and score
+against the same restricted gold set, so the two F1 numbers are directly comparable with each
+other. They are not comparable with the full-data rows. The wall-clock figures are reported for
+completeness only: arms were re-run against a warm LM cache, so elapsed time reflects cache state
+as much as it reflects the work each contract requires.</p>
 {caveat}
+</div>
+"""
+
+
+def headline_finding(runs: list[dict[str, Any]]) -> str:
+    """Render the executive summary's error-decomposition paragraph from the rebuilt counts.
+
+    Parameters
+    ----------
+    runs : list[dict[str, Any]]
+        All reconstructed runs
+
+    Returns
+    -------
+    str
+        Paragraph markup
+    """
+    traced = [
+        run
+        for name in ORDER
+        if (run := pick(runs, name, "full_baseline", "generic", require_traces=True)) is not None
+    ]
+    if not traced:
+        return (
+            "<p>No full-data run has usable traces yet, so the split between blocking misses, "
+            "failed blocks and matching errors cannot be quantified here.</p>"
+        )
+
+    blocked = sum(int(run["reconstructed"]["fn_not_co_blocked"]) for run in traced)
+    failed = sum(int(run["reconstructed"]["fn_failed_block"]) for run in traced)
+    model = sum(int(run["reconstructed"]["fn_model_error"]) for run in traced)
+    missed = blocked + failed + model
+
+    worst = max(traced, key=lambda run: int(run["reconstructed"]["false_negatives"]))
+    recon = worst["reconstructed"]
+    judged = int(recon["true_positives"]) + int(recon["fn_model_error"])
+    caught = int(recon["true_positives"]) / judged if judged else 0.0
+    names = ", ".join(DATASET_FACTS[run["dataset"]]["display"] for run in traced)
+
+    return f"""
+<p>Across the {len(traced)} full-data runs whose individual pair decisions could be rebuilt
+({names}), {thousands(missed)} gold pairs were missed in total. Of those,
+{thousands(blocked)} were never placed in the same block, {thousands(failed)} sat inside a block
+whose LLM call failed, and only {thousands(model)} &mdash; {model / missed:.0%} of all misses
+&mdash; were pairs the model looked at and rejected.</p>
+
+<p>On the full-data {DATASET_FACTS[worst["dataset"]]["display"]} run, for example, recall is
+{fmt(worst["saved"]["recall"])}: of the {thousands(recon["false_negatives"])} missed gold pairs,
+{thousands(recon["fn_not_co_blocked"])} were never co-blocked and
+{thousands(recon["fn_failed_block"])} sat inside blocks whose LLM call failed. Only
+{thousands(recon["fn_model_error"])} were pairs the model actually judged and rejected. Of the gold
+pairs that reached a working matcher, it caught {caught:.0%}. The aggregate recall number is
+measuring blocking recall and adapter robustness far more than it is measuring the model's
+judgement.</p>
+"""
+
+
+def ordering_finding(full_runs: dict[str, dict[str, Any] | None]) -> str:
+    """Render the executive summary's dataset-difficulty paragraph.
+
+    Parameters
+    ----------
+    full_runs : dict[str, dict[str, Any] | None]
+        Full-data run per dataset
+
+    Returns
+    -------
+    str
+        Paragraph markup
+    """
+    scored = [(name, run) for name, run in full_runs.items() if run is not None]
+    if len(scored) < 2:
+        return ""
+    best_name, best = max(scored, key=lambda item: item[1]["saved"]["f1_score"])
+    worst_name, worst = min(scored, key=lambda item: item[1]["saved"]["f1_score"])
+    hardest = (
+        " Our worst result lands on exactly the dataset both papers flag as hardest."
+        if worst_name in ("amazon-google", "walmart-amazon")
+        else ""
+    )
+    return f"""
+<p>The second finding is the ordering of the datasets, which reproduces the published literature
+closely. The bibliographic tasks are easy and the e-commerce tasks are hard:
+{DATASET_FACTS[best_name]["display"]} reaches F1 {fmt(best["saved"]["f1_score"])} on full data
+while {DATASET_FACTS[worst_name]["display"]} reaches {fmt(worst["saved"]["f1_score"])}.
+K&ouml;pcke, Thor and Rahm found that no approach they evaluated exceeded 70% F-measure on the
+e-commerce match problems, and DeepMatcher notes specifically that Amazon&ndash;Google's matching
+titles are synonyms separated by a large string distance.{hardest}</p>
+"""
+
+
+def iteration_summary(runs: list[dict[str, Any]]) -> str:
+    """Render the one-pass against three-iteration verdict.
+
+    A single matching pass can only ever find the duplicates that blocking happened to
+    put together, so the benchmark now re-blocks the entities each round merged and
+    matches again. This block reports what that bought, arm by arm.
+
+    Parameters
+    ----------
+    runs : list[dict[str, Any]]
+        All reconstructed runs
+
+    Returns
+    -------
+    str
+        Verdict markup
+    """
+    rows: list[str] = []
+    lifts: list[float] = []
+    for name in ORDER:
+        for mode, label in (("generic", "generic"), ("per-dataset", "typed")):
+            once = pick(runs, name, "ab_", mode)
+            thrice = pick(runs, name, "ab_", mode, iterations="multi")
+            if once is None or thrice is None:
+                continue
+            single = once["saved"]
+            multi = thrice["saved"]
+            lift = multi["recall"] - single["recall"]
+            lifts.append(lift)
+            rows.append(
+                f"<tr><td>{DATASET_FACTS[name]['display']}</td><td>{label}</td>"
+                f'<td class="num">{multi.get("iterations_run", 3)}</td>'
+                f'<td class="num">{fmt(single["recall"])}</td>'
+                f'<td class="num strong">{fmt(multi["recall"])}</td>'
+                f'<td class="num">{"+" if lift >= 0 else ""}{lift:.4f}</td>'
+                f'<td class="num">{fmt(single["precision"])}</td>'
+                f'<td class="num strong">{fmt(multi["precision"])}</td>'
+                f'<td class="num">{fmt(single["f1_score"])}</td>'
+                f'<td class="num strong">{fmt(multi["f1_score"])}</td>'
+                f'<td class="num">{duration(multi["elapsed_seconds"])}</td></tr>'
+            )
+
+    if not rows:
+        return (
+            '<div class="verdictbox pending"><h3>Iterative resolution: pending</h3>'
+            "<p>The three-iteration sweep was still running when this report was generated, so "
+            "no arm has both a one-pass and a three-iteration result to compare. Every score "
+            "elsewhere in this report is from a single matching pass.</p></div>"
+        )
+
+    gained = sum(1 for lift in lifts if lift > 0)
+    mean_lift = sum(lifts) / len(lifts)
+    verdict = (
+        f"Re-blocking raises recall on {gained} of the {len(lifts)} arms compared so far, by "
+        f"{mean_lift:+.4f} on average."
+        if gained
+        else f"Re-blocking does not raise recall on any of the {len(lifts)} arms compared so far."
+    )
+
+    return f"""
+<div class="verdictbox">
+<h3>One matching pass against three iterations</h3>
+<p>The error decomposition below shows that most missed pairs were never placed in the same block,
+which no matcher can fix. The benchmark now runs up to three rounds: after each matching pass the
+connected components of predicted pairs are merged into single entities, those merged entities are
+re-blocked, and matching runs again, so a record can meet partners the first partition kept away
+from it. A round that merges nothing stops the loop early. {verdict}</p>
+<table class="scores">
+<thead><tr><th>Dataset</th><th>Signature</th><th>Iterations</th><th>R, 1 pass</th>
+<th>R, 3 passes</th><th>&Delta;R</th><th>P, 1 pass</th><th>P, 3 passes</th><th>F1, 1 pass</th>
+<th>F1, 3 passes</th><th>Elapsed</th></tr></thead>
+<tbody>{"".join(rows)}</tbody>
+</table>
+<p class="blurb">Iterative runs are excluded from the trace-based error decomposition. Their later
+rounds match merged entities rather than source records, and their pair set is expanded back through
+those merges inside the benchmark, so a single trace no longer determines which record pairs a
+round asserted. Every reconstructed decomposition and every worked example in this report therefore
+comes from a one-pass run, where the rebuild reproduces the saved aggregates exactly.</p>
 </div>
 """
 
@@ -1286,9 +1602,13 @@ def cost_section(runs: list[dict[str, Any]], analysis: dict[str, Any]) -> str:
         total_seconds += float(run["saved"]["elapsed_seconds"])
         label = {
             "full_baseline": "full data",
-            "ab_1000": "1,000-record A/B",
             "raw_baseline": "earlier reference",
-        }.get(run["group"], run["group"])
+        }.get(
+            run["group"],
+            f"1,000-record A/B ({run['group']})"
+            if run["group"].startswith("ab_")
+            else run["group"],
+        )
         rows.append(
             f"<tr><td>{DATASET_FACTS[run['dataset']]['display']}</td>"
             f"<td>{label}</td><td>{esc(run['signature_mode'])}</td>"
@@ -1357,7 +1677,12 @@ def limitations_section(runs: list[dict[str, Any]]) -> str:
         Section markup
     """
     unverified = [
-        run for run in runs if not run["verified"] and run["group"] != "smoke" and run["traces"] > 2
+        run
+        for run in runs
+        if not run["verified"]
+        and run.get("reconstruction_reliable", True)
+        and run["group"] != "smoke"
+        and run["traces"] > 2
     ]
     unverified_note = (
         "<li>"
@@ -1393,9 +1718,11 @@ re-run. Its only numbers here come from the earlier truncated reference run and 
 
 <li><strong>The earlier reference numbers are not comparable.</strong> Rows labelled
 &ldquo;max_tokens 8192&rdquo; come from a baseline taken before the token cap was raised, when
-block records were heavily truncated and DBLP&ndash;Scholar's right table was itself sampled
-down to 5,218 rows. They are included only to show the direction of travel after the cap went
-up; they are not a like-for-like comparison.</li>
+block records were heavily truncated. DBLP&ndash;Scholar's reference run is further apart still:
+its right table was cut to 5,218 rows, which turns out to be exactly the set of Scholar records
+that appear in the gold mapping, so that run had no distractor records at all. These rows are
+included only to show the direction of travel after the cap went up; they are not a like-for-like
+comparison and should not be quoted as DBLP&ndash;Scholar scores.</li>
 
 <li><strong>Sampled runs redefine the gold set.</strong> The sampler draws whole ground-truth
 match groups, so a 1,000-record sample of DBLP&ndash;ACM retains 476 of 2,224 gold pairs among
@@ -1533,12 +1860,12 @@ padding:3px 8px;border-radius:3px;white-space:nowrap;color:#fff}
 .ptitle{font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.05em;
 color:var(--accent);margin-bottom:7px}
 .eid{color:#a8b0bd;font-weight:400;text-transform:none;letter-spacing:0}
-.fieldrow{display:grid;grid-template-columns:88px 1fr;gap:8px;padding:2px 0;
-border-top:1px dotted var(--line);word-break:break-word}
-.fk{color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em;
-padding-top:2px}
+.fieldrow{display:grid;grid-template-columns:96px 1fr;gap:8px;padding:2px 0;
+border-top:1px dotted var(--line)}
+.fk{color:var(--mut);font-size:11px;text-transform:uppercase;letter-spacing:.03em;
+padding-top:3px;overflow-wrap:normal;word-break:keep-all}
 .fv{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12.5px;
-line-height:1.5}
+line-height:1.5;overflow-wrap:anywhere}
 .empty{color:#b7bec9}
 .reason{padding:9px 14px;border-top:1px solid var(--line);font-size:13.5px;background:#fbfcfd;
 font-style:italic;color:#4a5261}

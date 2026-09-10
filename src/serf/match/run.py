@@ -17,6 +17,7 @@ from serf.dspy.types import BlockResolution, Entity, EntityBlock
 from serf.logs import get_logger
 from serf.match.dataset_matcher import DatasetMatcher
 from serf.match.matcher import EntityMatcher
+from serf.merge.merger import EntityMerger
 
 logger = get_logger(__name__)
 
@@ -145,6 +146,98 @@ def match_blocks(
             f"blocks skipped, {matcher.unknown_record_ids} candidates dropped for unknown ids"
         )
     return outcome
+
+
+def entity_members(entities: list[Entity]) -> dict[int, set[int]]:
+    """Map each entity id to the original record ids it stands for.
+
+    An entity merged in an earlier iteration keeps the records it absorbed in
+    ``source_ids``, so a later match against that entity is really a match
+    against every one of them.
+
+    Parameters
+    ----------
+    entities : list[Entity]
+        Entities handed to the current iteration
+
+    Returns
+    -------
+    dict[int, set[int]]
+        Entity id to the set of record ids it covers, including its own
+    """
+    return {e.id: {e.id, *(e.source_ids or [])} for e in entities}
+
+
+def expand_pairs(pairs: set[tuple[int, int]], members: dict[int, set[int]]) -> set[tuple[int, int]]:
+    """Expand pairs of merged entities into pairs of original records.
+
+    Matching two entities that each already stand for several records asserts a
+    match between every record on one side and every record on the other, which
+    is what the benchmark ground truth is expressed over.
+
+    Parameters
+    ----------
+    pairs : set[tuple[int, int]]
+        Pairs over current entity ids
+    members : dict[int, set[int]]
+        Entity id to the record ids it covers
+
+    Returns
+    -------
+    set[tuple[int, int]]
+        Pairs over original record ids, smaller id first
+    """
+    expanded: set[tuple[int, int]] = set()
+    for left, right in pairs:
+        for left_member in members.get(left, {left}):
+            for right_member in members.get(right, {right}):
+                if left_member != right_member:
+                    expanded.add((min(left_member, right_member), max(left_member, right_member)))
+    return expanded
+
+
+def merge_matched_entities(entities: list[Entity], pairs: set[tuple[int, int]]) -> list[Entity]:
+    """Collapse every connected component of matched entities into one entity.
+
+    The result is what the next iteration re-blocks: a record that was matched is
+    now carried by its merged entity, whose name and attributes are the fullest of
+    the group, so it can land in a different block and meet records the first
+    round of blocking kept away from it.
+
+    Parameters
+    ----------
+    entities : list[Entity]
+        Entities handed to the current iteration
+    pairs : set[tuple[int, int]]
+        Pairs the matcher predicted over those entities
+
+    Returns
+    -------
+    list[Entity]
+        One entity per connected component, sorted by id
+    """
+    parent = {e.id: e.id for e in entities}
+
+    def find(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for left, right in pairs:
+        if left not in parent or right not in parent:
+            continue
+        left_root, right_root = find(left), find(right)
+        if left_root != right_root:
+            parent[max(left_root, right_root)] = min(left_root, right_root)
+
+    components: dict[int, list[Entity]] = {}
+    for entity in entities:
+        components.setdefault(find(entity.id), []).append(entity)
+
+    merger = EntityMerger()
+    merged = [merger.merge_entities(group) for group in components.values()]
+    return sorted(merged, key=lambda e: e.id)
 
 
 def collect_pairs(resolutions: list[BlockResolution]) -> MatchOutcome:

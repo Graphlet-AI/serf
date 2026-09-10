@@ -104,6 +104,11 @@ serf eval --input data/matches/
 serf download --dataset dblp-acm
 serf benchmark --dataset dblp-acm --output data/results/
 
+# Each run does er.max_iterations rounds (3 by default): every round re-blocks
+# the entities merged by the previous one, so records the first round of
+# blocking kept apart get another chance to meet. Override per run:
+serf benchmark --dataset dblp-acm --max-iterations 1 --output data/results/
+
 # Match with the typed signature written for one dataset instead of the shared
 # BlockMatch signature, on a 1000-record sample drawn by ground-truth match group
 serf benchmark --dataset dblp-acm --signature-mode per-dataset \

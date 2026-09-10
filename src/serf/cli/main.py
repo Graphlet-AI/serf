@@ -10,9 +10,11 @@ from typing import Any, cast
 import click
 import pandas as pd
 
+from serf.config import config as serf_config
 from serf.dspy.dataset_signatures import SIGNATURE_MODE_GENERIC, SIGNATURE_MODES
 from serf.eval.benchmarks import DATASET_REGISTRY
 from serf.logs import get_logger, setup_logging
+from serf.match.run import entity_members, expand_pairs, merge_matched_entities
 from serf.tracking import setup_mlflow
 
 logger = get_logger(__name__)
@@ -58,8 +60,6 @@ def mlflow(host: str | None, port: int | None, backend_store_uri: str | None) ->
     Runs `mlflow server` with a SQLite backend for tracing DSPy operations.
     The UI will be available at http://<host>:<port>.
     """
-    from serf.config import config as serf_config
-
     host = host or serf_config.get("mlflow.host", "127.0.0.1")
     port = port or serf_config.get("mlflow.port", 5000)
     backend_store_uri = backend_store_uri or serf_config.get(
@@ -794,7 +794,6 @@ def optimize(
     """
     import dspy
 
-    from serf.config import config as serf_config
     from serf.dspy.optimize import (
         INPUT_FIELDS,
         SIGNATURES,
@@ -930,8 +929,8 @@ def optimize(
 @click.option(
     "--max-iterations",
     type=int,
-    default=1,
-    help="Maximum ER iterations (re-block and re-match resolved entities)",
+    default=serf_config.get("er.max_iterations", 3),
+    help="Maximum ER iterations (re-block and re-match merged entities)",
 )
 @click.option(
     "--signature-mode",
@@ -978,8 +977,6 @@ def benchmark(
     from serf.eval.benchmarks import BenchmarkDataset
 
     setup_mlflow()
-
-    from serf.config import config as serf_config
 
     model = model or serf_config.get("models.llm")
     click.echo(f"Running benchmark: {dataset}")
@@ -1042,7 +1039,7 @@ def benchmark(
             click.echo(f"\n  === Iteration {iteration}/{max_iterations} ===")
         prev_count = len(current_entities)
 
-        pairs, resolved = _benchmark_llm_matching(
+        pairs, _resolved = _benchmark_llm_matching(
             current_entities,
             effective_block_size,
             model,
@@ -1050,22 +1047,24 @@ def benchmark(
             concurrency,
             dataset=dataset,
             signature_mode=signature_mode,
+            iteration=iteration,
         )
-        all_predicted_pairs.update(pairs)
+        all_predicted_pairs.update(expand_pairs(pairs, entity_members(current_entities)))
         iterations_run = iteration
 
+        merged = merge_matched_entities(current_entities, pairs)
         if max_iterations > 1:
-            reduction_pct = (prev_count - len(resolved)) / prev_count * 100 if prev_count > 0 else 0
+            reduction_pct = (prev_count - len(merged)) / prev_count * 100 if prev_count > 0 else 0
             click.echo(
-                f"    Entities: {prev_count} -> {len(resolved)} ({reduction_pct:.1f}% reduction)"
+                f"    Entities: {prev_count} -> {len(merged)} ({reduction_pct:.1f}% reduction)"
             )
 
-        if len(resolved) >= prev_count or iteration == max_iterations:
-            if len(resolved) >= prev_count and max_iterations > 1 and iteration < max_iterations:
-                click.echo("    Converged (no reduction), stopping early")
+        if len(merged) >= prev_count or iteration == max_iterations:
+            if len(merged) >= prev_count and max_iterations > 1 and iteration < max_iterations:
+                click.echo("    Converged (no merges), stopping early")
             break
 
-        current_entities = resolved
+        current_entities = merged
 
     predicted_pairs = all_predicted_pairs
     metrics = benchmark_data.evaluate(predicted_pairs)
@@ -1145,7 +1144,6 @@ def benchmark_all(
     Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
     for Gemini 3.5 Flash-Lite (teacher/analyze).
     """
-    from serf.config import config as serf_config
     from serf.eval.benchmarks import BenchmarkDataset
 
     setup_mlflow()
@@ -1223,6 +1221,7 @@ def _benchmark_llm_matching(
     concurrency: int = 20,
     dataset: str | None = None,
     signature_mode: str = SIGNATURE_MODE_GENERIC,
+    iteration: int = 1,
 ) -> tuple[set[tuple[int, int]], list[Any]]:
     """Run LLM-based matching for benchmarks.
 
@@ -1246,6 +1245,9 @@ def _benchmark_llm_matching(
     signature_mode : str
         ``generic`` for the shared BlockMatch signature, ``per-dataset`` for the
         typed signature written for this dataset
+    iteration : int
+        Current ER iteration, which tightens the target block size when
+        ``er.blocking.auto_scale_by_iteration`` is on
 
     Returns
     -------
@@ -1255,13 +1257,26 @@ def _benchmark_llm_matching(
     from serf.block.pipeline import SemanticBlockingPipeline
     from serf.match.run import match_blocks
 
-    max_block = min(100, target_block_size * 3)
-    click.echo(f"\n  Blocking (target={target_block_size}, max={max_block})...")
+    max_block = min(
+        serf_config.get("er.blocking.max_block_size", 100),
+        target_block_size * 3,
+    )
+    auto_scale = bool(serf_config.get("er.blocking.auto_scale_by_iteration", True))
     pipeline = SemanticBlockingPipeline(
-        target_block_size=target_block_size, max_block_size=max_block
+        target_block_size=target_block_size,
+        max_block_size=max_block,
+        iteration=iteration,
+        auto_scale=auto_scale,
+    )
+    click.echo(
+        f"\n  Blocking (target={target_block_size}, max={max_block}, "
+        f"iteration={iteration}, auto_scale={auto_scale})..."
     )
     blocks, blocking_metrics = pipeline.run(all_entities)
-    click.echo(f"    {blocking_metrics.total_blocks} blocks created")
+    click.echo(
+        f"    {blocking_metrics.total_blocks} blocks created "
+        f"(avg {blocking_metrics.avg_block_size:.1f}, max {blocking_metrics.max_block_size})"
+    )
 
     click.echo(f"  Matching with LLM ({model}, concurrency={concurrency}, limit={limit})...")
     outcome = match_blocks(

@@ -21,6 +21,11 @@ optimize:
   seed: 42
 
 er:
+  # One matching pass can only pair records that blocking already put together,
+  # so a run needs several rounds: each one re-blocks the entities merged by the
+  # previous round and gives separated records another chance to meet.
+  max_iterations: 3
+
   blocking:
     method: semantic
     target_block_size: 30

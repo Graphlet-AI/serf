@@ -126,3 +126,32 @@ Recall 0.4748 / F1 0.6299.
   key technology and `README.md` phase 1 says "Qwen3 sentence embeddings" (though its stack table
   correctly says multilingual-e5-base). Not changed - it needs a decision, and swapping the
   embedding model would invalidate every blocking number recorded so far.
+
+- **Typed per-dataset signatures beat the generic one on all five datasets.** On identical
+  1,000-record match-group samples (seed 42, one iteration, same blocking) the per-dataset
+  signatures scored mean **+0.1128 F1** over `BlockMatch`: dblp-acm +0.0666, dblp-scholar +0.1222,
+  abt-buy +0.0827, amazon-google +0.1654, walmart-amazon +0.1272. Precision improved on all five,
+  reaching 1.0000 on dblp-scholar and abt-buy, because splitting the block into one typed input
+  field per source makes a same-source pair inexpressible; the generic arm merges two Amazon
+  listings with each other. They are also cheaper: 2.5x fewer dollars on dblp-scholar and 6.4x on
+  walmart-amazon, since the typed output is a list of matched pairs rather than an echo of every
+  entity in the block. Full write-up in `experiments/per-dataset-signature-baseline.md`.
+- **gpt-oss-120b sometimes wraps its answer in a harmony envelope.** `{"final": "{...}"}` defeats
+  XMLAdapter, then defeats the JSONAdapter retry, and the block is lost even though the payload
+  inside is a complete answer - one dropped dblp-acm block held 28 well-formed matches. It cost the
+  generic arm 12 blocks across the five datasets and the typed arm 1; long outputs trip it more
+  often, which is part of why the echo-the-whole-block contract loses. Unwrapping the envelope in a
+  custom adapter is the cheapest recall win available.
+- **Quote the blocking ceiling before blaming the matcher.** Co-blocked gold pairs cap recall at
+  0.9538 / 0.9094 / 0.8563 / 0.5594 / 0.8667 for dblp-acm / dblp-scholar / abt-buy / amazon-google /
+  walmart-amazon at target 30. amazon-google's 0.5217 recall is 93% of everything blocking made
+  reachable, so its low score is a blocking problem; on dblp-acm the typed arm hit 454 of 454
+  reachable pairs, so there is nothing left there for a prompt to win.
+- **Pin the code when an experiment spans arms.** Concurrent work on this branch changed
+  `serf benchmark` between arms twice (a three-iteration default, then transitive pair expansion),
+  which silently redefines the metric mid-A/B. Extracting the commit with
+  `git archive <sha> | tar -x -C /tmp/serf-ab` and running that copy made the ten runs comparable.
+- **Never name a shell variable `TMUX`.** tmux reads `TMUX` from the environment as its socket path,
+  so `TMUX="tmux -f ..."` in a driver script launched from inside a pane makes every child tmux call
+  fail with `error creating tmux -f ... (No such file or directory)`. Sessions then vanish in
+  seconds and the runs look like instant failures with empty logs.

@@ -435,6 +435,10 @@ def discover_runs() -> list[dict[str, Any]]:
             paths.extend(sorted(root_path.glob("*/*_results.json")))
     for path in paths:
         saved = json.loads(path.read_text(encoding="utf-8"))
+        # Other commands write *_results.json into the same tree; only a benchmark result
+        # names its dataset and records how long the run took.
+        if saved.get("dataset") not in DATASETS or "elapsed_seconds" not in saved:
+            continue
         end = path.stat().st_mtime
         runs.append(
             {
@@ -584,6 +588,7 @@ def render_pair(
     reason: str,
     co_blocked: bool | None,
     label: str,
+    category: str,
 ) -> dict[str, Any]:
     """Build a serialisable example from a pair and its two source records.
 
@@ -599,6 +604,8 @@ def render_pair(
         Whether both records shared a block, or None when not applicable
     label : str
         ``false_positive`` or ``false_negative``
+    category : str
+        Error category key, so the report can caption the card precisely
 
     Returns
     -------
@@ -608,6 +615,7 @@ def render_pair(
     left_id, right_id = pair
     return {
         "label": label,
+        "category": category,
         "left_id": left_id,
         "right_id": right_id,
         "left_side": side_of(left_id),
@@ -739,7 +747,7 @@ def analyse_run(
         # Prefer pairs the model explained, so the report can quote its reasoning.
         ordered = sorted(pairs, key=lambda p: (0 if reasons.get(p) else 1, p))
         return [
-            render_pair(pair, row_values, reasons.get(pair, ""), blocked, label)
+            render_pair(pair, row_values, reasons.get(pair, ""), blocked, label, category)
             for pair in ordered[: budget[category]]
         ]
 

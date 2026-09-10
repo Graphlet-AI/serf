@@ -26,6 +26,7 @@ OUTPUT_COST_PER_MTOK = 0.36
 
 STUDENT_MODEL = "openai/gpt-oss-120b-maas"
 TEACHER_MODEL = "gemini/gemini-3.5-flash-lite"
+EMBEDDING_MODEL = "intfloat/multilingual-e5-base"
 MAX_TOKENS = 65536
 TARGET_BLOCK_SIZE = 30
 MAX_BLOCK_SIZE = 100
@@ -754,6 +755,12 @@ def example_card(example: dict[str, Any], sides: list[Any]) -> str:
             "block, so the matcher was never given the chance to compare them. This is a "
             "recall loss caused by blocking, not by the model."
         )
+    elif example.get("category") == "false_negatives_failed_block":
+        verdict = (
+            "<strong>Pipeline failure.</strong> Blocking did put these two records together, but "
+            "the only block holding both of them failed its LLM call, so the model never returned "
+            "a decision about this pair. Neither blocking nor the model's judgement is at fault."
+        )
     else:
         verdict = (
             "<strong>Matching error.</strong> Both records were in the same block and the "
@@ -1188,7 +1195,9 @@ def build(analysis: dict[str, Any]) -> str:
         ],
         "What happened to every gold pair, reconstructed from MLflow traces. The three miss "
         "colours have completely different fixes: better blocking, a more robust adapter, and a "
-        "better matcher respectively. DBLP-Scholar uses its earlier reference run.",
+        "better matcher respectively. Blocking embeds the record name only, which is why product "
+        "pairs that differ in title wording but agree on model number are never co-blocked. "
+        "DBLP-Scholar uses its earlier reference run.",
     )
 
     ab_verdict = ab_summary(ab_generic, ab_typed) + iteration_summary(runs)
@@ -1243,8 +1252,9 @@ whole-block LLM matching, with every reported mistake traced back to a real reco
 <div><dt>Student model</dt><dd><code>{STUDENT_MODEL}</code> on Vertex AI MaaS</dd></div>
 <div><dt>Teacher model</dt><dd><code>{TEACHER_MODEL}</code></dd></div>
 <div><dt><code>models.max_tokens</code></dt><dd>{MAX_TOKENS:,}</dd></div>
-<div><dt>Blocking</dt><dd>semantic embeddings, <code>target_block_size</code>
-{TARGET_BLOCK_SIZE}, <code>max_block_size</code> {MAX_BLOCK_SIZE}</dd></div>
+<div><dt>Blocking</dt><dd><code>{EMBEDDING_MODEL}</code> embeddings of the record
+<em>name only</em>, FAISS clustering, <code>target_block_size</code> {TARGET_BLOCK_SIZE},
+<code>max_block_size</code> {MAX_BLOCK_SIZE}</dd></div>
 <div><dt>Matching</dt><dd>whole blocks through a DSPy signature with
 <code>dspy.XMLAdapter</code></dd></div>
 </dl>
@@ -1668,12 +1678,13 @@ def cost_section(runs: list[dict[str, Any]], analysis: dict[str, Any]) -> str:
         total_in += run["tokens_in"]
         total_out += run["tokens_out"]
         total_seconds += float(run["saved"]["elapsed_seconds"])
+        passes = int(run.get("iterations_run", 1))
         label = {
             "full_baseline": "full data",
             "raw_baseline": "earlier reference",
         }.get(
             run["group"],
-            f"1,000-record A/B ({run['group']})"
+            f"1,000-record A/B, {passes} pass{'es' if passes > 1 else ''}"
             if run["group"].startswith("ab_")
             else run["group"],
         )
@@ -1725,6 +1736,12 @@ the absolute total is small &mdash; every traced benchmark call in this experime
 ${trace_cost:.2f} of inference &mdash; so the practical constraint on these runs is wall-clock
 time, not money. The {duration(total_seconds)} of benchmark wall clock in the table above cost
 ${attributed_cost:.2f}.</p>
+
+<p>Rows showing zero tokens are real runs that cost nothing: DSPy caches completions on disk, so an
+arm whose exact prompts had already been sent replayed from cache and issued no billable call. Those
+rows still carry a full set of traces and their scores are genuine, which also makes them a
+determinism check &mdash; a replayed arm reproduces its earlier F1 to every decimal place. For the
+same reason the elapsed column is not a fair comparison between arms.</p>
 
 <p class="caveat">GEPA optimisation runs are not represented in this table.
 <code>mlflow.autolog.log_traces_from_compile</code> was only enabled recently, so the earlier
@@ -1814,6 +1831,13 @@ modes appear in the logs: adapter parse failures on large blocks
 (<code>JSONAdapter failed to parse the LM response</code>), and a
 <code>litellm</code> circular-import race at process start-up that is purely an infrastructure
 flake.</li>
+
+<li><strong>Blocking sees less than the matcher does.</strong> Blocking embeds the record name only
+&mdash; paper title, product title &mdash; while the matcher is shown every field. That asymmetry
+is the direct cause of most blocking misses in the decomposition: two listings for the same product
+with the same <code>modelno</code> but differently worded titles are far apart in name-embedding
+space and never meet. It is a configuration choice, not a property of the datasets, so the blocking
+share of the misses should not be read as a floor.</li>
 
 <li><strong>Iterative runs carry scores only.</strong> Runs that took more than one ER iteration
 re-block the entities each round merged, so their later traces describe merged entities and their

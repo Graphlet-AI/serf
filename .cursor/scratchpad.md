@@ -94,3 +94,35 @@ Recall 0.4748 / F1 0.6299.
 - **Measure endpoint limits, do not guess them.** The Vertex `gpt-oss-120b-maas` endpoint accepted
   `max_tokens` up to 65536 and rejected 131072 only because input and output share a 131072 token
   context, so 8192 was needlessly truncating the student's reasoning plus XML output.
+
+- **A lazily imported module is only safe if one thread reaches it first.** The generic matcher lost
+  27 of 33 blocks on `dblp-acm` to `partially initialized module 'litellm' has no attribute
+  'completion'`. DSPy resolves litellm through `dspy.utils.lazy_import.require`, which returns
+  whatever `sys.modules` already holds, and MLflow's tracing hook runs a plain `import litellm` from
+  inside a traced call. While that import was part way through, `sys.modules["litellm"]` held a
+  module whose spec was still `_initializing`, so every other matcher thread's first touch raised.
+  `EntityMatcher` made this easy to hit by building its LM and predictor lazily *inside* the thread
+  pool, so ~8 threads took their first litellm touch at once and each minted its own Vertex token.
+  Two fixes, both needed: import litellm at the top of `serf.dspy.lm` so it is executed once
+  single-threaded, and `warm_up()` the LM and predictor on the calling thread before
+  `resolve_blocks` fans out. The failure was silent - `resolve_block` catches every exception and
+  degrades the block to `error_recovery` - so a run reported recall 0.1092 and looked like a result.
+  Count and report degraded blocks so this can never read as a real number again.
+- **One matching pass cannot beat its own blocking.** Recall of 0.52 / 0.48 / 0.14 against precision
+  above 0.9 is the signature of gold pairs that were never co-blocked, not of a weak matcher. The
+  benchmark now defaults to `er.max_iterations: 3`, and each round re-blocks the entities the
+  previous round merged. The loop used to feed the *matcher's* resolved entities forward, which the
+  per-dataset matcher returns unchanged, so `--max-iterations 3` was a no-op for the typed arm; it
+  now merges connected components of predicted pairs itself, uniformly for both arms.
+- **`auto_scale_by_iteration` does nothing at benchmark scale.** `FAISS_SCRIPT` caps the IVF cell
+  count at `sqrt(n)`: `nlist = min(n // target_block_size, sqrt(n))`. At n = 1001 the cap binds for
+  every target at or below 31, so targets of 30, 15 and 10 all produce the identical 31 blocks of
+  average size 32.3. Auto-scaling only bites while `n < target_block_size^2`, i.e. below ~900
+  records for a target of 30. Re-blocking on later iterations still repartitions, but because the
+  entity count drops, not because of the scaling. Left as is - changing the cap would move every
+  benchmark number.
+- **`models.embedding` and the docs disagree.** `config.yml` sets
+  `models.embedding: "intfloat/multilingual-e5-base"`, while `CLAUDE.md` lists Qwen3 embeddings as a
+  key technology and `README.md` phase 1 says "Qwen3 sentence embeddings" (though its stack table
+  correctly says multilingual-e5-base). Not changed - it needs a decision, and swapping the
+  embedding model would invalidate every blocking number recorded so far.

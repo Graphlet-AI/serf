@@ -1649,11 +1649,14 @@ priced at the Vertex MaaS rate for <code>gpt-oss-120b</code>:
 <th class="num">${trace_cost:.4f}</th><th></th></tr></tfoot>
 </table>
 
-<p>Two things stand out. First, output tokens dominate the bill: they are four times the unit
-price and the model emits nearly as many as it reads, because the generic contract asks it to
-echo every resolved entity back rather than just report the pairs it matched. Second, the total
-is small in absolute terms &mdash; the whole experiment to date costs a little over a dollar in
-inference &mdash; so the practical constraint on these runs is wall-clock time, not money.</p>
+<p>Two things stand out. First, output tokens dominate the bill: they are four times the unit price
+and the model emits nearly as many as it reads, because the generic contract asks it to echo every
+resolved entity back rather than just report the pairs it matched. Output alone accounts for
+${totals["tokens_out"] / 1e6 * OUTPUT_COST_PER_MTOK:.2f} of the ${trace_cost:.2f} total. Second,
+the absolute total is small &mdash; every traced benchmark call in this experiment comes to
+${trace_cost:.2f} of inference &mdash; so the practical constraint on these runs is wall-clock
+time, not money. The {duration(total_seconds)} of benchmark wall clock in the table above cost
+${attributed_cost:.2f}.</p>
 
 <p class="caveat">GEPA optimisation runs are not represented in this table.
 <code>mlflow.autolog.log_traces_from_compile</code> was only enabled recently, so the earlier
@@ -1743,6 +1746,12 @@ modes appear in the logs: adapter parse failures on large blocks
 (<code>JSONAdapter failed to parse the LM response</code>), and a
 <code>litellm</code> circular-import race at process start-up that is purely an infrastructure
 flake.</li>
+
+<li><strong>Iterative runs carry scores only.</strong> Runs that took more than one ER iteration
+re-block the entities each round merged, so their later traces describe merged entities and their
+pair set is expanded back through those merges by the benchmark itself. A single trace no longer
+determines which record pairs a round asserted, so these runs contribute precision, recall and
+token usage but no error decomposition and no worked examples.</li>
 
 <li><strong>False-negative attribution is per-run, not global.</strong> A gold pair is called a
 blocking miss when its two records never shared a block <em>in that run</em>. Blocking is

@@ -20,6 +20,8 @@ from serf.match.matcher import EntityMatcher
 
 logger = get_logger(__name__)
 
+ERROR_RECOVERY_REASON = "error_recovery"
+
 
 @dataclass
 class MatchOutcome:
@@ -37,6 +39,9 @@ class MatchOutcome:
         Blocks skipped because they held records from only one source
     dropped_candidates : int
         Candidates dropped because they referenced an unknown record id
+    failed_blocks : int
+        Blocks whose LLM call failed and fell back to error recovery, so they
+        contributed no matches
     """
 
     predicted_pairs: set[tuple[int, int]] = field(default_factory=set)
@@ -44,6 +49,7 @@ class MatchOutcome:
     resolutions: list[BlockResolution] = field(default_factory=list)
     single_source_blocks: int = 0
     dropped_candidates: int = 0
+    failed_blocks: int = 0
 
 
 def create_matcher(
@@ -126,6 +132,11 @@ def match_blocks(
     )
     resolutions = asyncio.run(matcher.resolve_blocks(blocks, limit=limit, iteration=iteration))
     outcome = collect_pairs(resolutions)
+    if outcome.failed_blocks:
+        logger.warning(
+            f"{outcome.failed_blocks} of {len(resolutions)} blocks failed their LLM call and "
+            f"contributed no matches, so recall for this run is understated"
+        )
     if isinstance(matcher, DatasetMatcher):
         outcome.single_source_blocks = matcher.single_source_blocks
         outcome.dropped_candidates = matcher.unknown_record_ids
@@ -155,7 +166,10 @@ def collect_pairs(resolutions: list[BlockResolution]) -> MatchOutcome:
     """
     predicted_pairs: set[tuple[int, int]] = set()
     resolved_entities: list[Entity] = []
+    failed_blocks = 0
     for resolution in resolutions:
+        if any(e.match_skip_reason == ERROR_RECOVERY_REASON for e in resolution.resolved_entities):
+            failed_blocks += 1
         for match in resolution.matches:
             if match.is_match:
                 left, right = match.entity_a_id, match.entity_b_id
@@ -168,4 +182,5 @@ def collect_pairs(resolutions: list[BlockResolution]) -> MatchOutcome:
         predicted_pairs=predicted_pairs,
         resolved_entities=resolved_entities,
         resolutions=list(resolutions),
+        failed_blocks=failed_blocks,
     )

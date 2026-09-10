@@ -21,7 +21,7 @@ from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import Entity, EntityBlock
 from serf.match.dataset_matcher import SINGLE_SOURCE_SKIP_REASON, DatasetMatcher, typed_sides
 from serf.match.matcher import EntityMatcher
-from serf.match.run import create_matcher
+from serf.match.run import collect_pairs, create_matcher
 
 RIGHT_ID_OFFSET = 100000
 
@@ -231,3 +231,38 @@ def test_create_matcher_rejects_unknown_modes() -> None:
 def test_generic_mode_constant_is_the_default() -> None:
     """The generic mode is the documented default for the CLI."""
     assert SIGNATURE_MODE_GENERIC == "generic"
+
+
+def test_collect_pairs_counts_blocks_that_fell_back_to_error_recovery() -> None:
+    """A failed block is counted so a degraded run is not read as a real one."""
+    matcher = DatasetMatcher("walmart-amazon")
+    good_block = _block([_walmart_entity(1), _amazon_entity(RIGHT_ID_OFFSET + 2)])
+    bad_block = _block([_walmart_entity(3), _amazon_entity(RIGHT_ID_OFFSET + 4)])
+
+    matcher._predictor = _StubPredict([_candidate(0, 1)])  # type: ignore[assignment]
+    with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
+        good = matcher.resolve_block(good_block)
+
+    def _raise(**_kwargs: Any) -> dspy.Prediction:
+        raise RuntimeError("endpoint exploded")
+
+    matcher._predictor = _raise  # type: ignore[assignment]
+    with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
+        bad = matcher.resolve_block(bad_block)
+
+    outcome = collect_pairs([good, bad])
+
+    assert outcome.failed_blocks == 1
+    assert outcome.predicted_pairs == {(1, RIGHT_ID_OFFSET + 2)}
+
+
+def test_collect_pairs_reports_no_failures_for_healthy_blocks() -> None:
+    """A run where every block answered reports zero failed blocks."""
+    matcher = DatasetMatcher("walmart-amazon")
+    block = _block([_walmart_entity(1), _amazon_entity(RIGHT_ID_OFFSET + 2)])
+    matcher._predictor = _StubPredict([_candidate(0, 1)])  # type: ignore[assignment]
+
+    with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
+        resolution = matcher.resolve_block(block)
+
+    assert collect_pairs([resolution]).failed_blocks == 0

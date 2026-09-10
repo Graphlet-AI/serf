@@ -1276,6 +1276,11 @@ def _benchmark_llm_matching(
         click.echo(f"    {outcome.single_source_blocks} single-source blocks skipped")
     if outcome.dropped_candidates:
         click.echo(f"    {outcome.dropped_candidates} candidates dropped for unknown record ids")
+    if outcome.failed_blocks:
+        click.echo(
+            f"    WARNING: {outcome.failed_blocks} blocks failed their LLM call, "
+            f"recall is understated"
+        )
 
     click.echo(f"    Predicted {len(outcome.predicted_pairs)} match pairs")
     return outcome.predicted_pairs, outcome.resolved_entities

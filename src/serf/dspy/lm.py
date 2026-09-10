@@ -9,6 +9,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import dspy
+import litellm
 from google.auth.transport.requests import Request
 from google.oauth2 import service_account
 
@@ -16,6 +17,12 @@ from serf.config import config
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
+
+# DSPy imports litellm lazily on first use, and that lazy import is not thread safe:
+# concurrent matcher threads see a partially initialized module and lose the block with
+# "partially initialized module 'litellm' has no attribute 'completion'". Importing it
+# here materializes the module in the main thread before any worker thread runs.
+_ = litellm.completion
 
 _CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 _DEFAULT_REFRESH_MARGIN_SECONDS = 300

@@ -124,7 +124,7 @@ def test_pipeline_json_strategy_embeds_every_field() -> None:
 def test_pipeline_strategy_defaults_to_config() -> None:
     """Omitting the strategy falls back to the configured one."""
     pipeline = SemanticBlockingPipeline(model_name="test-model")
-    assert pipeline.blocking_strategy in {"name", "json"}
+    assert pipeline.blocking_strategy in {"name", "json", "union"}
 
 
 def test_pipeline_passes_trust_remote_code_to_the_embedder() -> None:

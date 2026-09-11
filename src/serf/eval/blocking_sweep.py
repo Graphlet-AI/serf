@@ -12,13 +12,41 @@ from dataclasses import asdict, dataclass
 
 from serf.block.pipeline import SemanticBlockingPipeline
 from serf.config import config
-from serf.dspy.types import Entity
+from serf.dspy.types import Entity, EntityBlock
 from serf.eval.benchmarks import BenchmarkDataset
 from serf.eval.sample import sample_records
 from serf.logs import get_logger
 from serf.match.run import entity_members, merge_matched_entities
 
 logger = get_logger(__name__)
+
+# Shared empty membership, so the co-blocking test does not allocate a set per
+# gold pair for records that reached no block at all.
+NO_BLOCKS: frozenset[int] = frozenset()
+
+
+def block_membership(blocks: list[EntityBlock]) -> dict[int, set[int]]:
+    """Map each record id to the indices of every block holding it.
+
+    A record belongs to one block per view, so ``union`` blocking puts it in
+    two. Membership therefore has to be a set: a pair counts as co-blocked when
+    the two records share *any* block, not when they share *the* block.
+
+    Parameters
+    ----------
+    blocks : list[EntityBlock]
+        Blocks to index
+
+    Returns
+    -------
+    dict[int, set[int]]
+        Record id to the set of block indices containing it
+    """
+    membership: dict[int, set[int]] = {}
+    for index, block in enumerate(blocks):
+        for entity in block.entities:
+            membership.setdefault(int(entity.id), set()).add(index)
+    return membership
 
 
 @dataclass(frozen=True)
@@ -87,7 +115,11 @@ class BlockingSweepResult:
     trust_remote_code : bool
         Whether the model repository's own code was executed to load it
     strategy : str
-        Text fed to the embedding: ``"name"`` or ``"json"``
+        Text fed to the embedding: ``"name"``, ``"json"`` or ``"union"``
+    blocked_pairs : int
+        Distinct pairs the matcher would be asked to judge. Recall bought with
+        a larger number here is recall bought with inference spend, so the two
+        belong on the same row.
     """
 
     dataset: str
@@ -107,6 +139,7 @@ class BlockingSweepResult:
     cumulative_recall: float = 0.0
     trust_remote_code: bool = False
     strategy: str = "name"
+    blocked_pairs: int = 0
 
     def as_dict(self) -> dict[str, object]:
         """Return the result as a plain dict."""
@@ -145,7 +178,7 @@ def evaluate_blocking(
     trust_remote_code : bool
         Execute the modelling code shipped in the model repository
     strategy : str
-        ``"name"`` or ``"json"``
+        ``"name"``, ``"json"`` or ``"union"``
 
     Returns
     -------
@@ -166,20 +199,18 @@ def evaluate_blocking(
     blocks, metrics = pipeline.run(entities)
     elapsed = time.time() - start
 
-    block_of: dict[int, int] = {}
-    for index, block in enumerate(blocks):
-        for entity in block.entities:
-            block_of[int(entity.id)] = index
-
+    membership = block_membership(blocks)
     co_blocked = sum(
-        1 for left, right in ground_truth if block_of.get(left, -1) == block_of.get(right, -2)
+        1
+        for left, right in ground_truth
+        if membership.get(left, NO_BLOCKS) & membership.get(right, NO_BLOCKS)
     )
     recall = co_blocked / len(ground_truth) if ground_truth else 0.0
 
     logger.info(
-        f"{dataset} {model_name} prompt={prompt!r}: "
+        f"{dataset} {model_name} prompt={prompt!r} strategy={strategy}: "
         f"blocking recall {recall:.4f} ({co_blocked}/{len(ground_truth)}) "
-        f"in {elapsed:.1f}s"
+        f"over {metrics.blocked_pairs} pairs in {elapsed:.1f}s"
     )
 
     return BlockingSweepResult(
@@ -199,6 +230,7 @@ def evaluate_blocking(
         cumulative_recall=recall,
         trust_remote_code=trust_remote_code,
         strategy=strategy,
+        blocked_pairs=metrics.blocked_pairs,
     )
 
 
@@ -244,7 +276,7 @@ def evaluate_blocking_rounds(
     trust_remote_code : bool
         Execute the modelling code shipped in the model repository
     strategy : str
-        ``"name"`` or ``"json"``
+        ``"name"``, ``"json"`` or ``"union"``
 
     Returns
     -------
@@ -273,11 +305,10 @@ def evaluate_blocking_rounds(
 
         members = entity_members(current)
         owner = {record: entity for entity, records in members.items() for record in records}
-        block_of = {
-            int(entity.id): index for index, block in enumerate(blocks) for entity in block.entities
-        }
+        membership = block_membership(blocks)
 
         matched: set[tuple[int, int]] = set()
+        this_round = 0
         for left, right in ground_truth:
             left_entity = owner.get(left)
             right_entity = owner.get(right)
@@ -285,16 +316,13 @@ def evaluate_blocking_rounds(
                 continue
             if left_entity == right_entity:
                 covered.add((left, right))
+                this_round += 1
                 continue
-            if block_of.get(left_entity, -1) == block_of.get(right_entity, -2):
+            if membership.get(left_entity, NO_BLOCKS) & membership.get(right_entity, NO_BLOCKS):
                 covered.add((left, right))
                 matched.add((left_entity, right_entity))
+                this_round += 1
 
-        this_round = sum(
-            1
-            for left, right in ground_truth
-            if block_of.get(owner.get(left, -1), -1) == block_of.get(owner.get(right, -2), -2)
-        )
         recall = this_round / len(ground_truth) if ground_truth else 0.0
         cumulative = len(covered) / len(ground_truth) if ground_truth else 0.0
 
@@ -323,6 +351,7 @@ def evaluate_blocking_rounds(
                 cumulative_recall=cumulative,
                 trust_remote_code=trust_remote_code,
                 strategy=strategy,
+                blocked_pairs=metrics.blocked_pairs,
             )
         )
 
@@ -369,7 +398,7 @@ def sweep_dataset(
     rounds : int
         ER rounds to simulate per candidate. One means a single blocking pass.
     strategy : str
-        Text fed to the embedding: ``"name"`` or ``"json"``
+        Text fed to the embedding: ``"name"``, ``"json"`` or ``"union"``
 
     Returns
     -------

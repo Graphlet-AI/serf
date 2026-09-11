@@ -426,6 +426,11 @@ class BlockingMetrics(BaseModel):
         Fraction of true pairs retained
     reduction_ratio : float
         1 - (pairs after blocking / total possible pairs)
+    blocked_pairs : int
+        Distinct record pairs sharing at least one block, which is the number
+        of comparisons the matcher is asked to make. Counted distinctly rather
+        than summed over blocks, because a record can sit in more than one
+        block and the same pair must not be billed twice.
     """
 
     total_blocks: int = 0
@@ -435,3 +440,4 @@ class BlockingMetrics(BaseModel):
     singleton_blocks: int = 0
     pair_completeness: float = 0.0
     reduction_ratio: float = 0.0
+    blocked_pairs: int = 0

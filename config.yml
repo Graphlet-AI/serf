@@ -3,29 +3,21 @@ logs:
     path: logs
 
 models:
-  # Two blocking embeddings, selectable with `serf benchmark --embedding-tier`.
-  #
-  # LOW is the default. It won `serf blocking-sweep` over the five Leipzig
+  # The blocking embedding. It won `serf blocking-sweep` over the five Leipzig
   # benchmarks against every candidate that fits 3B parameters and 1024
   # dimensions, and it does so at a sixth of the CPU of the large models, which
   # matters because blocking re-embeds every record on every ER round.
   #
-  # HIGH is the large alternative. It is behind LOW on mean blocking recall
-  # (0.8665 against 0.8765 over 2K-record samples), so it is worth reaching for
-  # only on the bibliographic datasets, where it leads: 0.9936 against 0.9745
-  # on dblp-acm. Two other large models were measured and rejected:
-  # intfloat/multilingual-e5-large-instruct (0.8705) and
-  # mixedbread-ai/mxbai-embed-large-v1 (0.8842, the only large model to beat
-  # LOW, and then by 0.0077 for six times the CPU).
-  embedding_low: "BAAI/bge-small-en-v1.5"
-  embedding_low_prompt: "Represent this sentence for searching relevant passages: "
-  embedding_high: "BAAI/bge-large-en-v1.5"
-  embedding_high_prompt: "Represent this sentence for searching relevant passages: "
-  embedding: "${models.embedding_low}"
+  # Going large does not pay here. `bge-large-en-v1.5` is behind this model on
+  # mean blocking recall (0.8665 against 0.8765 over 2K-record samples) and only
+  # leads on the bibliographic datasets; `multilingual-e5-large-instruct` reaches
+  # 0.8705; `mxbai-embed-large-v1` is the one large model that beats it, by
+  # 0.0077 for six times the CPU. To try another model, point this key at it.
+  embedding: "BAAI/bge-small-en-v1.5"
   # The e5 and bge families are trained with an instruction prefix on every input
   # and lose accuracy without it. Blocking is a symmetric similarity task, so both
   # sides get the same prefix. Leave empty for models trained without one.
-  embedding_prompt: "${models.embedding_low_prompt}"
+  embedding_prompt: "Represent this sentence for searching relevant passages: "
   student: "openai/gpt-oss-120b-maas"
   teacher: "gemini/gemini-3.5-flash-lite"
   llm: "${models.student}"

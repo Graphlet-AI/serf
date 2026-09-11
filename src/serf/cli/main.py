@@ -1288,12 +1288,6 @@ def optimize(
     help="Random seed for record sampling (from config.yml optimize.seed)",
 )
 @click.option(
-    "--embedding-tier",
-    type=click.Choice(["low", "high"], case_sensitive=False),
-    default="low",
-    help="Blocking embedding: the small default or the large alternative",
-)
-@click.option(
     "--blocking-strategy",
     type=click.Choice(["name", "json", "union"], case_sensitive=False),
     default=None,
@@ -1314,7 +1308,6 @@ def benchmark(
     signature_mode: str,
     sample_records: int | None,
     seed: int | None,
-    embedding_tier: str,
     blocking_strategy: str | None,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
@@ -1333,15 +1326,14 @@ def benchmark(
     setup_mlflow()
 
     model = model or serf_config.get("models.llm")
-    tier = embedding_tier.lower()
-    embedding_model = str(serf_config.get(f"models.embedding_{tier}"))
-    embedding_prompt = str(serf_config.get(f"models.embedding_{tier}_prompt", ""))
+    embedding_model = str(serf_config.get("models.embedding"))
+    embedding_prompt = str(serf_config.get("models.embedding_prompt", ""))
     strategy = (blocking_strategy or str(serf_config.get("er.blocking.strategy", "name"))).lower()
 
     click.echo(f"Running benchmark: {dataset}")
     click.echo(f"  Model: {model}")
     click.echo(f"  Signature mode: {signature_mode}")
-    click.echo(f"  Embedding: {embedding_model} ({tier} tier, {strategy} blocking)")
+    click.echo(f"  Embedding: {embedding_model} ({strategy} blocking)")
     start = time.time()
 
     benchmark_data = BenchmarkDataset.download(dataset, output_path)

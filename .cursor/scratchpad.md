@@ -144,6 +144,7 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Six-arm prompt A/B on identical samples: mean F1 0.8648 to 0.8783, precision up on all five
 - [x] Findings adopted only where they beat the prompt they replaced; the other two say why in-prompt
 - [x] Regression tests pin each adopted instruction to the measurement that forced it
+- [x] LOW / HIGH tiers removed; one blocking embedding, `BAAI/bge-small-en-v1.5`, always
 
 ## Executor's Feedback or Assistance Requests
 
@@ -162,7 +163,16 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   `bge-large-en-v1.5` on both recall and speed: 0.9031 against 0.8665 mean blocking recall, 250s
   against 315s. It is the first large model to dominate HIGH on both axes, so `models.embedding_high`
   is a one-line change away from being strictly better. Left unchanged pending a decision, because
-  changing HIGH invalidates the recorded end-to-end abt-buy comparison.
+  changing HIGH invalidates the recorded end-to-end abt-buy comparison. _(Resolved below: the tier
+  was removed rather than repointed.)_
+
+- **The tier question is closed: there is no HIGH tier.** Every measurement above said the large tier
+  was the worse setting — 0.8665 against 0.8765 mean blocking recall, 0.8963 against 0.9038 end-to-end
+  F1 on abt-buy, at six times the embedding CPU — so `--embedding-tier` only ever offered a way to
+  make a run slower and less accurate at once. `models.embedding_low` / `models.embedding_high` and
+  the CLI option are gone; `models.embedding` now names `BAAI/bge-small-en-v1.5` literally. Swapping
+  in `GIST-large-Embedding-v0` is still the one-line change it always was, just without a second
+  runtime code path to keep honest.
 
 - **Union blocking is off by default and the default may be wrong.** It gains +0.0520 mean blocking
   recall over name-only on all five datasets, and over +0.10 on both product datasets, for 1.76x the
@@ -189,6 +199,16 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   three passes.
 
 ## Lessons
+
+- **`config.get(key)` raises `KeyError` for a missing key; it does not return `None`.** It returns a
+  default only when one is passed as the second argument. A test that a config key is gone has to use
+  `pytest.raises(KeyError)`, not `assert config.get(key) is None`.
+
+- **A tuning knob whose every setting but the default measured worse is not a knob, it is a trap.**
+  The LOW / HIGH embedding tiers cost a CLI option, four config keys and a second runtime code path
+  so that a user could opt into 0.0100 less mean blocking recall for six times the embedding CPU.
+  Configure the alternative candidates in the sweep lists where the sweep can measure them; do not
+  promote a losing option into the runtime interface.
 
 - **An agreement rate is not a coverage rate, and only the pair of them licenses a veto.** Writing
   every measured "agrees on X% of matches against Y% of near misses" into the prompts as a rule cost

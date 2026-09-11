@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pytest
 from click.testing import CliRunner
 
 from serf.cli.main import BENCHMARK_DATASETS, cli
@@ -86,7 +87,6 @@ def test_benchmark_help() -> None:
     assert "--max-right-entities" in result.output
     assert "walmart-amazon" in result.output
     assert "amazon-google" in result.output
-    assert "--embedding-tier" in result.output
     assert "--blocking-strategy" in result.output
 
 
@@ -124,13 +124,20 @@ def test_profile_benchmark_help() -> None:
     assert "dblp-scholar" in result.output
 
 
-def test_embedding_tiers_are_configured() -> None:
-    """Both blocking tiers exist and the pipeline default is the low one."""
-    low = config.get("models.embedding_low")
-    high = config.get("models.embedding_high")
-    assert low and high and low != high
-    assert config.get("models.embedding") == low
-    assert config.get("models.embedding_prompt") == config.get("models.embedding_low_prompt")
+def test_blocking_embedding_is_a_single_configured_model() -> None:
+    """One blocking embedding, named literally, with the prefix bge is trained on.
+
+    The low/high tier pair is gone: the large tier measured worse than the small
+    one on mean blocking recall for six times the CPU, so selecting it was a way
+    to make the pipeline slower and less accurate at the same time.
+    """
+    assert config.get("models.embedding") == "BAAI/bge-small-en-v1.5"
+    assert config.get("models.embedding_prompt") == (
+        "Represent this sentence for searching relevant passages: "
+    )
+    for removed in ("models.embedding_low", "models.embedding_high"):
+        with pytest.raises(KeyError):
+            config.get(removed)
 
 
 def test_benchmark_all_help() -> None:

@@ -20,7 +20,7 @@ DSPy ReAct agents dynamically orchestrate the entire pipeline, adjusting blockin
 
 ### Phase 1 — Semantic Blocking
 
-Clusters records using **bge-small-en-v1.5 sentence embeddings** and **FAISS IVF** to create efficient blocks for comparison. Auto-scales block size across iterations. A larger `bge-large-en-v1.5` tier is available with `--embedding-tier high`, and records can be embedded as JSON with all field names inline instead of by name with `--blocking-strategy json`.
+Clusters records using **bge-small-en-v1.5 sentence embeddings** and **FAISS IVF** to create efficient blocks for comparison. Auto-scales block size across iterations. Records can be embedded as JSON with all field names inline instead of by name with `--blocking-strategy json`.
 
 ### Phase 2 — Schema Alignment, Matching and Merging
 
@@ -32,15 +32,15 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 
 ## Architecture
 
-| Component          | Technology                                         |
-| ------------------ | -------------------------------------------------- |
-| Package Manager    | **uv**                                             |
-| Data Processing    | **PySpark 4.x**                                    |
-| LLM Framework      | **DSPy 3.x** with `XMLAdapter`                     |
-| Embeddings         | **bge-small-en-v1.5** (LOW) / **bge-large-en-v1.5** (HIGH) via sentence-transformers |
-| Vector Search      | **FAISS IndexIVFFlat**                             |
-| Linting/Formatting | **Ruff**                                           |
-| Type Checking      | **zuban** (mypy-compatible)                        |
+| Component          | Technology                                      |
+| ------------------ | ----------------------------------------------- |
+| Package Manager    | **uv**                                          |
+| Data Processing    | **PySpark 4.x**                                 |
+| LLM Framework      | **DSPy 3.x** with `XMLAdapter`                  |
+| Embeddings         | **bge-small-en-v1.5** via sentence-transformers |
+| Vector Search      | **FAISS IndexIVFFlat**                          |
+| Linting/Formatting | **Ruff**                                        |
+| Type Checking      | **zuban** (mypy-compatible)                     |
 
 ## Quick Start
 
@@ -135,7 +135,7 @@ serf mteb-rank --candidate-set all --sweep data/blocking_sweep_large.json
 
 # Block twice, on the name and on the whole record as JSON, and keep both sets
 # of blocks so a pair only has to be caught by one of them
-serf benchmark --dataset amazon-google --embedding-tier high --blocking-strategy union \
+serf benchmark --dataset amazon-google --blocking-strategy union \
   --sample-records 1000 --output data/results/
 
 # Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
@@ -225,19 +225,18 @@ task. Papers With Code was sunset in 2025 and now redirects to Hugging Face, so 
 those boards is [OpenCodePapers](https://opencodepapers-b7572d.gitlab.io/benchmarks/entity-resolution-on-abt-buy.html).
 SERF is a 1,000-record sample at seed 42, three ER iterations, `gpt-oss-120b` matching, no training.
 
-| Model                                | Abt-Buy F1 | Task                     | Trained on the benchmark |
-| ------------------------------------ | ---------- | ------------------------ | ------------------------ |
-| gpt4-0613 zero-shot                  | 95.78      | pair classification      | no                       |
-| RoBERTa-SupCon                       | 94.29      | pair classification      | yes                      |
-| gpt-4o-mini fine-tuned               | 94.09      | pair classification      | yes                      |
-| gpt-4o-2024-08-06                    | 92.20      | pair classification      | no                       |
-| RobEM                                | 90.90      | pair classification      | yes                      |
-| **SERF gpt-oss-120b, LOW**           | **90.38**  | **end-to-end resolution**| **no**                   |
-| HierGAT                              | 89.80      | pair classification      | yes                      |
-| **SERF gpt-oss-120b, HIGH**          | **89.63**  | **end-to-end resolution**| **no**                   |
-| Ditto                                | 89.33      | pair classification      | yes                      |
-| gpt-4o-mini                          | 87.68      | pair classification      | no                       |
-| Llama-3.1-70B                        | 79.12      | pair classification      | no                       |
+| Model                  | Abt-Buy F1 | Task                      | Trained on the benchmark |
+| ---------------------- | ---------- | ------------------------- | ------------------------ |
+| gpt4-0613 zero-shot    | 95.78      | pair classification       | no                       |
+| RoBERTa-SupCon         | 94.29      | pair classification       | yes                      |
+| gpt-4o-mini fine-tuned | 94.09      | pair classification       | yes                      |
+| gpt-4o-2024-08-06      | 92.20      | pair classification       | no                       |
+| RobEM                  | 90.90      | pair classification       | yes                      |
+| **SERF gpt-oss-120b**  | **90.38**  | **end-to-end resolution** | **no**                   |
+| HierGAT                | 89.80      | pair classification       | yes                      |
+| Ditto                  | 89.33      | pair classification       | yes                      |
+| gpt-4o-mini            | 87.68      | pair classification       | no                       |
+| Llama-3.1-70B          | 79.12      | pair classification       | no                       |
 
 The comparison is indicative, not like-for-like. Every leaderboard entry scores pair classification:
 the candidate pairs are handed to the model and it labels each one. SERF does the whole task, so its
@@ -254,38 +253,40 @@ uncovered are in [experiments/embedding-blocking-sweep.md](experiments/embedding
 
 | Embedding                         | DBLP-ACM | DBLP-Scholar | Abt-Buy | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
 | --------------------------------- | -------- | ------------ | ------- | ------------- | -------------- | ---------- | ---------- |
-| **bge-small-en-v1.5** *(default)* | 0.9654   | 0.9048       | 0.8952  | 0.6512        | 0.8545         | **0.8542** | **273**    |
+| **bge-small-en-v1.5** _(default)_ | 0.9654   | 0.9048       | 0.8952  | 0.6512        | 0.8545         | **0.8542** | **273**    |
 | gte-base                          | 0.9708   | 0.9211       | 0.8724  | 0.6821        | 0.8514         | 0.8595     | 661        |
 | gte-small                         | 0.9604   | 0.9233       | 0.8824  | 0.6410        | 0.8410         | 0.8496     | 228        |
 | bge-base-en-v1.5                  | 0.9856   | 0.9020       | 0.8569  | 0.6461        | 0.8545         | 0.8490     | 898        |
 | all-MiniLM-L6-v2                  | 0.9717   | 0.9205       | 0.8551  | 0.6435        | 0.7775         | 0.8337     | 133        |
 | all-mpnet-base-v2                 | 0.9793   | 0.9278       | 0.8323  | 0.6590        | 0.7391         | 0.8275     | 697        |
-| multilingual-e5-base *(former)*   | 0.9735   | 0.8898       | 0.8724  | 0.5047        | 0.8025         | 0.8086     | 718        |
+| multilingual-e5-base _(former)_   | 0.9735   | 0.8898       | 0.8724  | 0.5047        | 0.8025         | 0.8086     | 718        |
 
 `gte-base` edges out the default by 0.005 mean recall for 2.4x the embedding time. Blocking re-embeds
 every record on every ER round, so the smaller model is the better default; set `models.embedding` to
 trade back.
 
-### LOW vs HIGH Embeddings
+### Large Embeddings Do Not Pay
 
-The default is the LOW tier. HIGH is the large alternative, chosen from MTEB(eng, v2) *clustering* —
-the task category blocking actually performs — among models within 3B parameters and 1,024 dimensions.
-Measured on 2,000-record samples per dataset, name-only blocking, one pass. Full protocol, the JSON
-results and the four large models that will not run on transformers 5.16 are in
+Large candidates were chosen from MTEB(eng, v2) _clustering_ — the task category blocking appears to
+perform — among models within 3B parameters and 1,024 dimensions. Measured on 2,000-record samples
+per dataset, name-only blocking, one pass. Full protocol, the JSON results and the four large models
+that will not run on transformers 5.16 are in
 [experiments/low-high-embeddings-and-json-blocking.md](experiments/low-high-embeddings-and-json-blocking.md).
 
-| Embedding                                | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Walmart-Amazon | Amazon-Google | Mean       | Embed secs |
-| ---------------------------------------- | ---------- | ------------ | ---------- | -------------- | ------------- | ---------- | ---------- |
-| mxbai-embed-large-v1                     | 0.9904     | **0.9744**   | **0.9001** | **0.9236**     | 0.6323        | **0.8842** | 291        |
-| **bge-small-en-v1.5** *(LOW, default)*   | 0.9745     | 0.9659       | 0.8912     | 0.8750         | **0.6756**    | 0.8765     | **47**     |
-| multilingual-e5-large-instruct           | **0.9947** | 0.9455       | 0.8952     | 0.9028         | 0.6143        | 0.8705     | 334        |
-| **bge-large-en-v1.5** *(HIGH)*           | 0.9936     | 0.9489       | 0.8813     | 0.8750         | 0.6338        | 0.8665     | 324        |
-| F2LLM-0.6B                               | 0.9172     | 0.8944       | 0.7636     | 0.7708         | 0.5979        | 0.7888     | 183        |
-| Qwen3-Embedding-0.6B                     | 0.9299     | 0.8739       | 0.7280     | 0.7847         | 0.6099        | 0.7853     | 186        |
+| Embedding                         | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Walmart-Amazon | Amazon-Google | Mean       | Embed secs |
+| --------------------------------- | ---------- | ------------ | ---------- | -------------- | ------------- | ---------- | ---------- |
+| mxbai-embed-large-v1              | 0.9904     | **0.9744**   | **0.9001** | **0.9236**     | 0.6323        | **0.8842** | 291        |
+| **bge-small-en-v1.5** _(default)_ | 0.9745     | 0.9659       | 0.8912     | 0.8750         | **0.6756**    | 0.8765     | **47**     |
+| multilingual-e5-large-instruct    | **0.9947** | 0.9455       | 0.8952     | 0.9028         | 0.6143        | 0.8705     | 334        |
+| bge-large-en-v1.5                 | 0.9936     | 0.9489       | 0.8813     | 0.8750         | 0.6338        | 0.8665     | 324        |
+| F2LLM-0.6B                        | 0.9172     | 0.8944       | 0.7636     | 0.7708         | 0.5979        | 0.7888     | 183        |
+| Qwen3-Embedding-0.6B              | 0.9299     | 0.8739       | 0.7280     | 0.7847         | 0.6099        | 0.7853     | 186        |
 
 Going big does not buy blocking recall. Only one large model beats the 33M default, by 0.0077 for six
-times the CPU, and two finish below it. HIGH is worth reaching for on the bibliographic datasets,
-where it leads by 0.019 on DBLP-ACM.
+times the CPU, and two finish below it. This is why there is one blocking embedding rather than a
+small and a large tier: the large one lost on the mean and cost six times the CPU to do it. A large
+model only leads on the bibliographic datasets, `bge-large-en-v1.5` by 0.019 on DBLP-ACM, which is
+not worth a second code path. Point `models.embedding` at another model to trade.
 
 ### Which MTEB Category Predicts Blocking Recall
 
@@ -321,21 +322,21 @@ serf mteb-rank --candidate-set all --sweep data/blocking_sweep.json
 
 The measured table on those shared samples, best instruction prefix per model:
 
-| Embedding                              | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
-| -------------------------------------- | ---------- | ------------ | ---------- | ------------- | -------------- | ---------- | ---------- |
-| gte-base                               | 0.9841     | **0.9779**   | **0.9179** | **0.7100**    | 0.9028         | **0.8985** | 86         |
-| mxbai-embed-large-v1                   | 0.9904     | 0.9744       | 0.9001     | 0.6323        | **0.9236**     | 0.8842     | 294        |
-| gte-small                              | 0.9904     | 0.9370       | 0.9100     | 0.6697        | 0.9097         | 0.8834     | 44         |
-| bge-base-en-v1.5                       | 0.9841     | 0.9659       | 0.8853     | 0.6487        | 0.9097         | 0.8787     | 111        |
-| **bge-small-en-v1.5** *(LOW, default)* | 0.9745     | 0.9659       | 0.8912     | 0.6756        | 0.8750         | 0.8765     | **47**     |
-| multilingual-e5-large-instruct         | **0.9947** | 0.9455       | 0.8952     | 0.6143        | 0.9028         | 0.8705     | 355        |
-| **bge-large-en-v1.5** *(HIGH)*         | 0.9936     | 0.9489       | 0.8813     | 0.6338        | 0.8750         | 0.8665     | 315        |
-| all-mpnet-base-v2                      | 0.9915     | 0.9727       | 0.8853     | 0.6203        | 0.8403         | 0.8620     | 90         |
-| all-MiniLM-L6-v2                       | 0.9639     | 0.9574       | 0.8408     | 0.6173        | 0.8681         | 0.8495     | 34         |
-| multilingual-e5-base                   | 0.9798     | 0.9727       | 0.8724     | 0.5546        | 0.8056         | 0.8370     | 200        |
-| multilingual-e5-small                  | 0.9798     | 0.9455       | 0.8417     | 0.5725        | 0.7917         | 0.8262     | 54         |
-| F2LLM-0.6B                             | 0.9289     | 0.8910       | 0.7596     | 0.5859        | 0.7708         | 0.7873     | 188        |
-| Qwen3-Embedding-0.6B                   | 0.9299     | 0.8705       | 0.7250     | 0.5755        | 0.7986         | 0.7799     | 207        |
+| Embedding                         | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
+| --------------------------------- | ---------- | ------------ | ---------- | ------------- | -------------- | ---------- | ---------- |
+| gte-base                          | 0.9841     | **0.9779**   | **0.9179** | **0.7100**    | 0.9028         | **0.8985** | 86         |
+| mxbai-embed-large-v1              | 0.9904     | 0.9744       | 0.9001     | 0.6323        | **0.9236**     | 0.8842     | 294        |
+| gte-small                         | 0.9904     | 0.9370       | 0.9100     | 0.6697        | 0.9097         | 0.8834     | 44         |
+| bge-base-en-v1.5                  | 0.9841     | 0.9659       | 0.8853     | 0.6487        | 0.9097         | 0.8787     | 111        |
+| **bge-small-en-v1.5** _(default)_ | 0.9745     | 0.9659       | 0.8912     | 0.6756        | 0.8750         | 0.8765     | **47**     |
+| multilingual-e5-large-instruct    | **0.9947** | 0.9455       | 0.8952     | 0.6143        | 0.9028         | 0.8705     | 355        |
+| bge-large-en-v1.5                 | 0.9936     | 0.9489       | 0.8813     | 0.6338        | 0.8750         | 0.8665     | 315        |
+| all-mpnet-base-v2                 | 0.9915     | 0.9727       | 0.8853     | 0.6203        | 0.8403         | 0.8620     | 90         |
+| all-MiniLM-L6-v2                  | 0.9639     | 0.9574       | 0.8408     | 0.6173        | 0.8681         | 0.8495     | 34         |
+| multilingual-e5-base              | 0.9798     | 0.9727       | 0.8724     | 0.5546        | 0.8056         | 0.8370     | 200        |
+| multilingual-e5-small             | 0.9798     | 0.9455       | 0.8417     | 0.5725        | 0.7917         | 0.8262     | 54         |
+| F2LLM-0.6B                        | 0.9289     | 0.8910       | 0.7596     | 0.5859        | 0.7708         | 0.7873     | 188        |
+| Qwen3-Embedding-0.6B              | 0.9299     | 0.8705       | 0.7250     | 0.5755        | 0.7986         | 0.7799     | 207        |
 
 A correlation of 0.57 is worth selecting candidates on and is not worth trusting instead of measuring.
 PairClassification's own top pick finishes second, and the model that actually wins, `gte-base`, is
@@ -349,22 +350,22 @@ Taking the top PairClassification scorers inside 3B parameters and 1,024 dimensi
 models that the clustering ranking never did. Four of the five beat every clustering-selected large
 model, and the best of them sets a new ceiling on four of the five datasets:
 
-| Embedding                                | Selected on            | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
-| ---------------------------------------- | ---------------------- | ---------- | ------------ | ---------- | ------------- | -------------- | ---------- | ---------- |
-| **GIST-large-Embedding-v0**              | **PairClassification** | 0.9820     | **0.9813**   | 0.9149     | 0.7070        | **0.9306**     | **0.9031** | 250        |
-| gte-base                                 | clustering-era sweep   | 0.9841     | 0.9779       | **0.9179** | 0.7100        | 0.9028         | 0.8985     | **86**     |
-| **b1ade-embed**                          | **PairClassification** | 0.9904     | 0.9830       | 0.8872     | **0.7130**    | 0.9097         | 0.8967     | 245        |
-| **gte-modernbert-base**                  | **PairClassification** | 0.9830     | 0.9761       | 0.8912     | 0.6607        | **0.9306**     | 0.8883     | 111        |
-| **UAE-Large-V1**                         | **PairClassification** | 0.9915     | 0.9710       | 0.8912     | 0.6741        | 0.9028         | 0.8861     | 248        |
-| mxbai-embed-large-v1                     | clustering             | 0.9904     | 0.9744       | 0.9001     | 0.6323        | 0.9236         | 0.8842     | 294        |
-| **bge-small-en-v1.5** *(LOW, default)*   | clustering-era sweep   | 0.9745     | 0.9659       | 0.8912     | 0.6756        | 0.8750         | 0.8765     | 47         |
-| **bge-large-en-v1.5** *(HIGH)*           | clustering             | 0.9936     | 0.9489       | 0.8813     | 0.6338        | 0.8750         | 0.8665     | 315        |
-| **ember-v1**                             | **PairClassification** | 0.9915     | 0.9710       | 0.7953     | 0.6413        | 0.9028         | 0.8604     | 245        |
-| F2LLM-0.6B                               | clustering *(ranked 1)* | 0.9289    | 0.8910       | 0.7596     | 0.5859        | 0.7708         | 0.7873     | 188        |
+| Embedding                         | Selected on             | DBLP-ACM | DBLP-Scholar | Abt-Buy    | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
+| --------------------------------- | ----------------------- | -------- | ------------ | ---------- | ------------- | -------------- | ---------- | ---------- |
+| **GIST-large-Embedding-v0**       | **PairClassification**  | 0.9820   | **0.9813**   | 0.9149     | 0.7070        | **0.9306**     | **0.9031** | 250        |
+| gte-base                          | clustering-era sweep    | 0.9841   | 0.9779       | **0.9179** | 0.7100        | 0.9028         | 0.8985     | **86**     |
+| **b1ade-embed**                   | **PairClassification**  | 0.9904   | 0.9830       | 0.8872     | **0.7130**    | 0.9097         | 0.8967     | 245        |
+| **gte-modernbert-base**           | **PairClassification**  | 0.9830   | 0.9761       | 0.8912     | 0.6607        | **0.9306**     | 0.8883     | 111        |
+| **UAE-Large-V1**                  | **PairClassification**  | 0.9915   | 0.9710       | 0.8912     | 0.6741        | 0.9028         | 0.8861     | 248        |
+| mxbai-embed-large-v1              | clustering              | 0.9904   | 0.9744       | 0.9001     | 0.6323        | 0.9236         | 0.8842     | 294        |
+| **bge-small-en-v1.5** _(default)_ | clustering-era sweep    | 0.9745   | 0.9659       | 0.8912     | 0.6756        | 0.8750         | 0.8765     | 47         |
+| bge-large-en-v1.5                 | clustering              | 0.9936   | 0.9489       | 0.8813     | 0.6338        | 0.8750         | 0.8665     | 315        |
+| **ember-v1**                      | **PairClassification**  | 0.9915   | 0.9710       | 0.7953     | 0.6413        | 0.9028         | 0.8604     | 245        |
+| F2LLM-0.6B                        | clustering _(ranked 1)_ | 0.9289   | 0.8910       | 0.7596     | 0.5859        | 0.7708         | 0.7873     | 188        |
 
-`avsolatorio/GIST-large-Embedding-v0` beats the configured HIGH tier by 0.0366 mean blocking recall
-while embedding faster, 250s against 315s, which is the first large model to dominate `bge-large-en-v1.5`
-on both axes. `ember-v1` is the counterexample that keeps the correlation honest: it outscores all of
+`avsolatorio/GIST-large-Embedding-v0` beats `bge-large-en-v1.5` by 0.0366 mean blocking recall while
+embedding faster, 250s against 315s, making it the first large model to dominate that model on both
+axes. `ember-v1` is the counterexample that keeps the correlation honest: it outscores all of
 them on PairClassification at 87.37 and finishes below all of them, because it collapses on Abt-Buy.
 
 `KiteFishAI/Nano-Em1-0.6B-v2.1` leads PairClassification outright at 89.9 and could not be measured:
@@ -374,7 +375,7 @@ to load it.
 ### Name, JSON and the Union of Both
 
 `--blocking-strategy json` embeds every populated field as a JSON object with the field names inline
-instead of embedding the name alone. As a *replacement* for name blocking it loses badly, by 0.34 on
+instead of embedding the name alone. As a _replacement_ for name blocking it loses badly, by 0.34 on
 the mean with the default embedding, worst on DBLP-ACM where venue, year and authors are shared by
 thousands of papers and drown the title.
 
@@ -383,7 +384,7 @@ blocks from each, so a pair only has to be caught by one view. It wins on all fi
 
 | Strategy, bge-small-en-v1.5 | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Walmart-Amazon | Amazon-Google | Mean       |
 | --------------------------- | ---------- | ------------ | ---------- | -------------- | ------------- | ---------- |
-| name only *(default)*       | 0.9745     | 0.9659       | 0.8912     | 0.8750         | 0.6756        | 0.8765     |
+| name only _(default)_       | 0.9745     | 0.9659       | 0.8912     | 0.8750         | 0.6756        | 0.8765     |
 | json only                   | 0.2070     | 0.6065       | 0.6113     | 0.7917         | 0.4753        | 0.5384     |
 | **union**                   | **0.9766** | **0.9813**   | **0.9248** | **0.9792**     | **0.7803**    | **0.9284** |
 | union gain over name        | +0.0021    | +0.0154      | +0.0336    | **+0.1042**    | **+0.1047**   | +0.0520    |
@@ -397,13 +398,13 @@ reaches 0.2070 on DBLP-ACM and still lifts it.
 
 On Amazon-Google, the dataset that has resisted every other change, the union sets a new ceiling:
 
-| Strategy                                  | Amazon-Google | Pairs to judge |
-| ----------------------------------------- | ------------- | -------------- |
+| Strategy                                   | Amazon-Google | Pairs to judge |
+| ------------------------------------------ | ------------- | -------------- |
 | **union** + multilingual-e5-large-instruct | **0.8251**    | 65,253         |
-| union + bge-small-en-v1.5 *(default)*      | 0.7803        | 74,112         |
+| union + bge-small-en-v1.5 _(default)_      | 0.7803        | 74,112         |
 | union + bge-large-en-v1.5                  | 0.7638        | 70,938         |
 | json + multilingual-e5-large-instruct      | 0.7429        | 40,182         |
-| name + bge-small-en-v1.5 *(default)*       | 0.6756        | 41,337         |
+| name + bge-small-en-v1.5 _(default)_       | 0.6756        | 41,337         |
 | name + bge-large-en-v1.5                   | 0.6338        | 43,601         |
 | name + multilingual-e5-large-instruct      | 0.6143        | 39,293         |
 
@@ -415,12 +416,12 @@ for on product data.
 
 End to end on Abt-Buy, 1,000-record sample at seed 42, three ER iterations, the ordering holds:
 
-| Tier     | Embedding            | Precision  | Recall     | F1         | Seconds |
-| -------- | -------------------- | ---------- | ---------- | ---------- | ------- |
-| **LOW**  | bge-small-en-v1.5    | 0.9204     | **0.8878** | **0.9038** | 410     |
-| HIGH     | bge-large-en-v1.5    | **0.9265** | 0.8681     | 0.8963     | 508     |
+| Embedding                         | Precision  | Recall     | F1         | Seconds |
+| --------------------------------- | ---------- | ---------- | ---------- | ------- |
+| **bge-small-en-v1.5** _(default)_ | 0.9204     | **0.8878** | **0.9038** | 410     |
+| bge-large-en-v1.5                 | **0.9265** | 0.8681     | 0.8963     | 508     |
 
-Matching cannot recover a pair blocking never proposed, so the tier that blocks better finishes better.
+Matching cannot recover a pair blocking never proposed, so the model that blocks better finishes better.
 
 ### Generic vs Per-Dataset Signatures
 
@@ -429,13 +430,13 @@ iteration, identical blocking in both arms. These are sample runs, so they are n
 full-table row above. Full protocol and cost in
 [experiments/per-dataset-signature-baseline.md](experiments/per-dataset-signature-baseline.md).
 
-| Dataset            | F1 `generic` | F1 `per-dataset` | Delta      |
-| ------------------ | ------------ | ---------------- | ---------- |
-| **DBLP-ACM**       | 0.9077       | **0.9742**       | +0.0666    |
-| **DBLP-Scholar**   | 0.7491       | **0.8713**       | +0.1222    |
-| **Abt-Buy**        | 0.7574       | **0.8402**       | +0.0827    |
-| **Amazon-Google**  | 0.5000       | **0.6654**       | +0.1654    |
-| **Walmart-Amazon** | 0.7634       | **0.8905**       | +0.1272    |
+| Dataset            | F1 `generic` | F1 `per-dataset` | Delta   |
+| ------------------ | ------------ | ---------------- | ------- |
+| **DBLP-ACM**       | 0.9077       | **0.9742**       | +0.0666 |
+| **DBLP-Scholar**   | 0.7491       | **0.8713**       | +0.1222 |
+| **Abt-Buy**        | 0.7574       | **0.8402**       | +0.0827 |
+| **Amazon-Google**  | 0.5000       | **0.6654**       | +0.1654 |
+| **Walmart-Amazon** | 0.7634       | **0.8905**       | +0.1272 |
 
 The typed signatures also improved precision on all five datasets and used less than half the tokens,
 because their output is the list of matched pairs rather than an echo of every entity in the block.
@@ -449,11 +450,11 @@ and typed field descriptions raises mean F1 from 0.8648 to 0.8783 on the same sa
 
 | Dataset            | F1 before  | F1 after   | Delta   | What the profiling changed                                |
 | ------------------ | ---------- | ---------- | ------- | --------------------------------------------------------- |
-| **Abt-Buy**        | 0.8038     | **0.8413** | +0.0375 | Model-code containment instead of equality                 |
-| **DBLP-ACM**       | 0.9568     | **0.9788** | +0.0220 | Year equality instead of a year of slack; venue crosswalk  |
-| **Amazon-Google**  | 0.7521     | **0.7619** | +0.0098 | Price as real evidence; expand Google's abbreviations      |
-| **DBLP-Scholar**   | **0.9192** | 0.9189     | -0.0003 | Prompt retained: every rewrite scored lower                |
-| **Walmart-Amazon** | **0.8921** | 0.8905     | -0.0016 | Prompt retained: every rewrite scored lower                |
+| **Abt-Buy**        | 0.8038     | **0.8413** | +0.0375 | Model-code containment instead of equality                |
+| **DBLP-ACM**       | 0.9568     | **0.9788** | +0.0220 | Year equality instead of a year of slack; venue crosswalk |
+| **Amazon-Google**  | 0.7521     | **0.7619** | +0.0098 | Price as real evidence; expand Google's abbreviations     |
+| **DBLP-Scholar**   | **0.9192** | 0.9189     | -0.0003 | Prompt retained: every rewrite scored lower               |
+| **Walmart-Amazon** | **0.8921** | 0.8905     | -0.0016 | Prompt retained: every rewrite scored lower               |
 
 A measured agreement rate is not a licence to reject. Writing the rates in as hard rules first cost
 3.7 F1 points, almost all recall, because the attribute a finding turns on is often missing: Abt-Buy

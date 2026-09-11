@@ -4,6 +4,10 @@ logs:
 
 models:
   embedding: "intfloat/multilingual-e5-base"
+  # The e5 and bge families are trained with an instruction prefix on every input
+  # and lose accuracy without it. Blocking is a symmetric similarity task, so both
+  # sides get the same prefix. Leave empty for models trained without one.
+  embedding_prompt: "query: "
   student: "openai/gpt-oss-120b-maas"
   teacher: "gemini/gemini-3.5-flash-lite"
   llm: "${models.student}"
@@ -68,6 +72,28 @@ benchmarks:
   train_records: 2000
   val_records: 1000
   holdout_records: 1000
+  # Candidates for `serf blocking-sweep`. Small CPU-friendly models only, since
+  # blocking embeds every record on every ER iteration. The e5 and bge families
+  # need their instruction prefix; the others are trained without one.
+  embedding_candidates:
+    - model: "intfloat/multilingual-e5-base"
+      prompt: ""
+    - model: "intfloat/multilingual-e5-base"
+      prompt: "query: "
+    - model: "intfloat/multilingual-e5-small"
+      prompt: "query: "
+    - model: "BAAI/bge-small-en-v1.5"
+      prompt: "Represent this sentence for searching relevant passages: "
+    - model: "BAAI/bge-base-en-v1.5"
+      prompt: "Represent this sentence for searching relevant passages: "
+    - model: "sentence-transformers/all-MiniLM-L6-v2"
+      prompt: ""
+    - model: "sentence-transformers/all-mpnet-base-v2"
+      prompt: ""
+    - model: "thenlper/gte-small"
+      prompt: ""
+    - model: "thenlper/gte-base"
+      prompt: ""
   datasets:
     walmart-amazon:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"

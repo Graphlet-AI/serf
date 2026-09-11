@@ -41,6 +41,8 @@ class EntityEmbedder:
         Torch device. Auto-detected if None.
     normalize : bool
         Whether to L2-normalize embeddings.
+    prompt : str | None
+        Instruction prefix prepended to every text. Defaults to config.
     """
 
     def __init__(
@@ -48,15 +50,19 @@ class EntityEmbedder:
         model_name: str | None = None,
         device: str | None = None,
         normalize: bool = True,
+        prompt: str | None = None,
     ) -> None:
         if model_name is None:
             model_name = config.get("models.embedding")
         if device is None:
             device = get_torch_device()
+        if prompt is None:
+            prompt = config.get("models.embedding_prompt", "")
 
         self.model_name = model_name
         self.device = device
         self.normalize = normalize
+        self.prompt = prompt
 
         logger.info(f"Loading embedding model {model_name} on {device}")
         self.model = SentenceTransformer(model_name, device=device)
@@ -79,7 +85,7 @@ class EntityEmbedder:
             Embeddings matrix of shape (len(texts), embedding_dim)
         """
         embeddings = self.model.encode(
-            texts,
+            [self.prompt + t for t in texts] if self.prompt else texts,
             batch_size=batch_size,
             show_progress_bar=len(texts) > 100,
             normalize_embeddings=self.normalize,

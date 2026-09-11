@@ -30,6 +30,7 @@ def main():
     texts_file = args["texts_file"]
     output_file = args["output_file"]
     model_name = args["model_name"]
+    prompt = args["prompt"]
 
     with open(texts_file) as f:
         texts = json.load(f)
@@ -37,7 +38,7 @@ def main():
     from sentence_transformers import SentenceTransformer
     model = SentenceTransformer(model_name, device="cpu")
     embeddings = model.encode(
-        texts,
+        [prompt + t for t in texts] if prompt else texts,
         batch_size=64,
         show_progress_bar=len(texts) > 100,
         normalize_embeddings=True,
@@ -107,6 +108,7 @@ if __name__ == "__main__":
 def embed_in_subprocess(
     texts: list[str],
     model_name: str,
+    prompt: str = "",
 ) -> np.ndarray:
     """Compute embeddings in an isolated subprocess.
 
@@ -119,6 +121,9 @@ def embed_in_subprocess(
         Texts to embed
     model_name : str
         HuggingFace model name
+    prompt : str
+        Instruction prefix prepended to every text. Required by the e5 and
+        bge families; empty for models trained without one.
 
     Returns
     -------
@@ -137,10 +142,13 @@ def embed_in_subprocess(
                 "texts_file": texts_file,
                 "output_file": output_file,
                 "model_name": model_name,
+                "prompt": prompt,
             }
         )
 
-        logger.info(f"Embedding {len(texts)} texts in subprocess (model={model_name})")
+        logger.info(
+            f"Embedding {len(texts)} texts in subprocess (model={model_name}, prompt={prompt!r})"
+        )
         result = subprocess.run(
             [sys.executable, "-c", EMBED_SCRIPT, args],
             capture_output=True,

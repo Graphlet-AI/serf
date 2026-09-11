@@ -64,6 +64,10 @@ class SemanticBlockingPipeline:
         Current ER iteration
     auto_scale : bool
         Whether to auto-scale target_block_size by iteration
+    blocking_fields : list[str] | None
+        Additional fields appended to the name before embedding
+    embedding_prompt : str | None
+        Instruction prefix prepended to every text. Defaults to config.
     """
 
     def __init__(
@@ -74,10 +78,14 @@ class SemanticBlockingPipeline:
         iteration: int = 1,
         auto_scale: bool = True,
         blocking_fields: list[str] | None = None,
+        embedding_prompt: str | None = None,
     ) -> None:
         if model_name is None:
             model_name = config.get("models.embedding")
+        if embedding_prompt is None:
+            embedding_prompt = config.get("models.embedding_prompt", "")
         self.model_name = model_name
+        self.embedding_prompt = embedding_prompt
         self.target_block_size = target_block_size
         self.max_block_size = max_block_size
         self.iteration = iteration
@@ -111,7 +119,9 @@ class SemanticBlockingPipeline:
 
         # Embed in subprocess (name-only by default)
         texts = [e.text_for_embedding(self.blocking_fields) for e in entities]
-        embeddings = embed_in_subprocess(texts, model_name=self.model_name)
+        embeddings = embed_in_subprocess(
+            texts, model_name=self.model_name, prompt=self.embedding_prompt
+        )
 
         # Cluster in subprocess
         effective_target = self.target_block_size

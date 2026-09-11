@@ -114,6 +114,12 @@ serf benchmark --dataset dblp-acm --max-iterations 1 --output data/results/
 serf benchmark --dataset dblp-acm --signature-mode per-dataset \
   --sample-records 1000 --seed 42 --output data/results/
 
+# Exploratory analysis of the benchmark datasets, in Spark SQL and with no LLM
+# calls. Reports attribute discriminativeness, common values, how often each
+# attribute agrees on a true match against the hardest non-matches, and worked
+# examples of both. This is what BENCHMARKS.md is built from
+serf profile-benchmark --dataset abt-buy --output data/abt_buy_profile.md
+
 # Compare embedding models on blocking recall alone, no LLM calls and no cost.
 # Candidates default to benchmarks.embedding_candidates in config.yml
 serf blocking-sweep --dataset dblp-acm --output data/blocking_sweep.json
@@ -185,6 +191,11 @@ resolutions = await DatasetMatcher("walmart-amazon").resolve_blocks(blocks)
 ## Benchmark Results
 
 Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.5 Flash-Lite as the teacher/reflection LM for GEPA.
+
+What each of these datasets actually contains — its quirks, its common values, which attributes
+carry signal, and real examples of the match and mismatch patterns a prompt has to handle — is
+written up one page per dataset in [BENCHMARKS.md](BENCHMARKS.md), alongside the lessons from the
+two technical reports that defined them.
 
 These rows were measured with the former multilingual-e5-base default, before the FAISS cluster-count fix and before the XML adapter fix, so they understate what the current config reaches — see [Blocking Recall](#blocking-recall) for the gap and `experiments/embedding-blocking-sweep.md` for the measurements.
 
@@ -327,7 +338,7 @@ src/serf/
 ├── merge/           # Field-level entity merging
 ├── edge/            # Edge resolution for knowledge graphs
 ├── eval/            # Metrics, benchmark datasets
-├── analyze/         # Dataset profiling, field detection
+├── analyze/         # Dataset profiling, benchmark EDA, field detection
 ├── spark/           # PySpark schemas, utils, Iceberg, graph components
 ├── config.py        # Configuration management
 └── logs.py          # Logging
@@ -370,8 +381,9 @@ pre-commit run --all-files
 1. Jurney, R. (2024). "[The Rise of Semantic Entity Resolution](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/)." _Towards Data Science_.
 2. Khattab, O. et al. (2024). "DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines." _ICLR 2024_.
 3. Li, Y. et al. (2021). "Ditto: A Simple and Efficient Entity Matching Framework." _VLDB 2021_.
-4. Mudgal, S. et al. (2018). "Deep Learning for Entity Matching: A Design Space Exploration." _SIGMOD 2018_.
-5. Papadakis, G. et al. (2020). "Blocking and Filtering Techniques for Entity Resolution: A Survey." _ACM Computing Surveys_.
+4. Mudgal, S. et al. (2018). "Deep Learning for Entity Matching: A Design Space Exploration." _SIGMOD 2018_. Technical report in [docs/papers/deepmatcher-tr.md](docs/papers/deepmatcher-tr.md).
+5. Konda, P. et al. (2016). "Magellan: Toward Building Entity Matching Management Systems." _VLDB 2016_. Technical report in [docs/papers/magellan-tr.md](docs/papers/magellan-tr.md).
+6. Papadakis, G. et al. (2020). "Blocking and Filtering Techniques for Entity Resolution: A Survey." _ACM Computing Surveys_.
 
 ## License
 

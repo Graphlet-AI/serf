@@ -68,6 +68,12 @@ Recall 0.4748 / F1 0.6299.
 - [x] Magellan and DeepMatcher technical reports converted to Markdown under `docs/papers/`
 - [x] `serf profile-benchmark` added: Spark SQL EDA over the five benchmarks
 - [x] `BENCHMARKS.md` written: lessons from both reports plus a page per dataset
+- [x] `serf mteb-rank` added: scores candidates on any MTEB category from the `mteb/results` dataset
+- [x] Measured which MTEB category predicts blocking recall; clustering +0.0165, PairClassification +0.5714
+- [x] Five matching-category candidates swept; `GIST-large-Embedding-v0` best ever at 0.9031 mean
+- [x] `--blocking-strategy union` added: name and JSON blockings kept together, not swapped
+- [x] Distinct blocked-pair accounting so overlapping blocks do not double-bill the matcher
+- [x] Union measured on all five datasets: 0.8765 to 0.9284 mean recall for 1.76x the pairs
 
 ## Executor's Feedback or Assistance Requests
 
@@ -79,7 +85,20 @@ Recall 0.4748 / F1 0.6299.
   model", change one line in `config.yml`.
 - **Nothing large beats LOW by enough to matter.** mxbai is the only large model ahead of the 33M
   default, by 0.0077 mean blocking recall for six times the CPU. Two of the four large models are
-  behind it. The LOW default should stay the default.
+  behind it. The LOW default should stay the default. *(Superseded below.)*
+
+- **The HIGH tier now has a clear answer.** Selecting candidates on MTEB PairClassification instead
+  of clustering surfaced `avsolatorio/GIST-large-Embedding-v0`, which beats the configured
+  `bge-large-en-v1.5` on both recall and speed: 0.9031 against 0.8665 mean blocking recall, 250s
+  against 315s. It is the first large model to dominate HIGH on both axes, so `models.embedding_high`
+  is a one-line change away from being strictly better. Left unchanged pending a decision, because
+  changing HIGH invalidates the recorded end-to-end abt-buy comparison.
+
+- **Union blocking is off by default and the default may be wrong.** It gains +0.0520 mean blocking
+  recall over name-only on all five datasets, and over +0.10 on both product datasets, for 1.76x the
+  pairs the matcher must judge. Pairs are LLM calls, so this is a spend decision rather than a
+  technical one. The sensible middle is per-dataset: union on walmart-amazon and amazon-google,
+  name-only on dblp-acm where it buys 0.0021 for twice the comparisons.
 
 - The v2 run is deliberately left running; do not kill tmux session `gepa-dblp-acm-v2`.
   Log: `/opt/cursor/artifacts/gepa_dblp_acm_v2.log`, output: `data/gepa_logs/dblp-acm-v2`.
@@ -271,3 +290,37 @@ Recall 0.4748 / F1 0.6299.
   does, so the name projection and the shared-column projection collided and Spark raised
   `AMBIGUOUS_REFERENCE`. The aliases are `left_key` and `right_key` now, which cannot collide with
   anything `a_`- or `b_`-prefixed.
+- **Pick the benchmark category by the decision, not by the mechanism.** Blocking runs k-means, so
+  MTEB *clustering* looked like the matching category. It correlates with measured blocking recall
+  at Spearman +0.0165 over thirteen models, which is nothing, and it would have picked the two worst
+  models in the list first and second. `PairClassification` correlates at +0.5714, because its tasks
+  ask whether two short texts denote the same thing — the decision blocking has to preserve, not the
+  algorithm blocking happens to use. Selecting on it found a model 0.0366 better than the configured
+  HIGH tier and faster. There is no MTEB task type named "matching"; `PairClassification` is it.
+- **A 0.57 correlation chooses the pool, not the winner.** PairClassification's own top scorer among
+  the new candidates, `llmrails/ember-v1` at 87.37, measured *last* of the five, because it collapses
+  to 0.7953 on abt-buy while the others sit near 0.89. Use the leaderboard to decide what to sweep,
+  then sweep it.
+- **Test an augmentation as an augmentation before writing it off.** JSON blocking lost on 27 of 30
+  cells as a *replacement* for name blocking, by up to 0.34, and that looked conclusive. Kept
+  alongside name blocking instead of instead of it, the same JSON view gains +0.0520 mean recall and
+  wins on all five datasets, including dblp-acm where JSON alone scores 0.2070. Two weak-but-
+  uncorrelated views beat one strong view; the question "does A beat B" is not the question "does
+  A add to B".
+- **Overlapping blocks break every metric that assumes disjointness.** Once a record is in a name
+  block and a JSON block, `block_of[left] == block_of[right]` silently under-counts co-blocking and
+  `sum(size * (size - 1) / 2)` double-bills the matcher for pairs both views found. Membership has
+  to become `dict[int, set[int]]` with a set-intersection test, and the pair count a distinct count
+  over packed `(left << 32) | right` ints. Keep the arithmetic fast path for when the blocks really
+  are disjoint, guarded by `sum(sizes) == len(distinct ids)`.
+- **JSON texts are roughly 10x longer than names, so large models cost 10x on the JSON pass.** A
+  five-dataset union sweep with `bge-large-en-v1.5` projected at four to five hours against 32
+  seconds for `bge-small`. Scope large-model union runs to the one dataset that motivates them.
+- **`mteb/results` is the leaderboard without the browser.** The Space renders client-side, so
+  scraping it returns nothing. The dataset is four parquet parts keyed
+  `model_name, model_revision, task_name, split, language, subset, score`; filter `split == "test"`
+  and `subset == "default"` and take the max score per model and task across revisions.
+- **Some leaderboard leaders will not load.** `KiteFishAI/Nano-Em1-0.6B-v2.1` tops
+  PairClassification at 89.9 and raises `Cannot use chat template functions because
+  tokenizer.chat_template is not set`, because it is an LLM-based embedder. Load-test a candidate
+  before planning a sweep around it.

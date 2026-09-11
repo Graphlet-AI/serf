@@ -91,6 +91,17 @@ are being separated by an arbitrary chunking of oversized clusters, the measurem
 about the chunking. Any embedding comparison run against this pipeline before commit `2388eae`
 should be discarded.
 
+## Where the candidate list went next
+
+These nine were hand-picked. The large-model follow-up in
+[low-high-embeddings-and-json-blocking.md](low-high-embeddings-and-json-blocking.md) picked its
+candidates from MTEB(eng, v2) clustering score instead, which turned out to carry no
+information about blocking recall — Spearman +0.0165 over thirteen models. `serf mteb-rank`
+shows `PairClassification` is the category that does, at +0.5714, and selecting on it surfaced
+`avsolatorio/GIST-large-Embedding-v0` at 0.9031 mean blocking recall, the best measured here.
+`--blocking-strategy union` adds a further +0.0520 on top of the default model by blocking a
+second time over the record as JSON and keeping both sets of blocks.
+
 ## Reproducing
 
 ```bash

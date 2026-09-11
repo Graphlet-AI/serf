@@ -209,7 +209,9 @@ These rows were measured with the former multilingual-e5-base default, before th
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
 | **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8849    | 0.5809 | **0.7014** |
 
-Blocking uses name-only embeddings for tighter semantic clusters. All matching decisions are made by the LLM — no embedding similarity thresholds.
+Blocking embeds the name alone by default, for tighter semantic clusters; `--blocking-strategy union`
+adds a second blocking over the whole record as JSON and keeps both. All matching decisions are made by
+the LLM — no embedding similarity thresholds.
 
 Every number below the full-table row is post-fix. Until recently `dspy.XMLAdapter` rejected 27 of every
 33 blocks over unescaped ampersands and XML's missing null literal, which sent them through DSPy's JSON
@@ -282,29 +284,134 @@ results and the four large models that will not run on transformers 5.16 are in
 | Qwen3-Embedding-0.6B                     | 0.9299     | 0.8739       | 0.7280     | 0.7847         | 0.6099        | 0.7853     | 186        |
 
 Going big does not buy blocking recall. Only one large model beats the 33M default, by 0.0077 for six
-times the CPU, and two finish below it. MTEB clustering rank is no guide either: `F2LLM-0.6B` has the
-best clustering score of the six and the worst blocking recall, while `bge-small-en-v1.5` has the
-second-worst clustering score and the second-best blocking recall. HIGH is worth reaching for on the
-bibliographic datasets, where it leads by 0.019 on DBLP-ACM.
+times the CPU, and two finish below it. HIGH is worth reaching for on the bibliographic datasets,
+where it leads by 0.019 on DBLP-ACM.
 
-### Name vs JSON Blocking
+### Which MTEB Category Predicts Blocking Recall
+
+Clustering was the wrong category to select candidates on, and this is now measured rather than
+suspected. `serf mteb-rank` reads published scores from the `mteb/results` dataset, averages the tasks
+in a category, and correlates that against measured blocking recall. Run over all thirteen candidates
+on one set of 2,000-record samples, so the MTEB rank and the measurement are compared on the same
+footing:
+
+| MTEB(eng, v2) category | Spearman, 13 models | Spearman, 18 models |
+| ---------------------- | ------------------- | ------------------- |
+| **PairClassification** | **+0.5714**         | **+0.5129**         |
+| STS                    | +0.0879             | +0.2322             |
+| Classification         | +0.0220             | +0.1208             |
+| Clustering             | +0.0165             | +0.0941             |
+| Reranking              | +0.0165             | +0.3044             |
+| Retrieval              | −0.0549             | +0.1662             |
+
+The 18-model column adds the candidates the matching category surfaced, below. PairClassification
+stays first and clustering stays last.
+
+Clustering carries no information about blocking recall at all. It would have ranked `F2LLM-0.6B` and
+`Qwen3-Embedding-0.6B` first and second of the thirteen; they measure last and second from last.
+PairClassification is the only category with signal, and the reason is that it is the matching
+category: SprintDuplicateQuestions, TwitterSemEval2015 and TwitterURLCorpus all ask whether two short
+texts denote the same thing, scored by average precision over cosine similarity, which is the entity
+matching decision. It ranks `F2LLM-0.6B` last, and its top pick is `mxbai-embed-large-v1`, the best
+large model measured.
+
+```bash
+serf mteb-rank --candidate-set all --sweep data/blocking_sweep.json
+```
+
+The measured table on those shared samples, best instruction prefix per model:
+
+| Embedding                              | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
+| -------------------------------------- | ---------- | ------------ | ---------- | ------------- | -------------- | ---------- | ---------- |
+| gte-base                               | 0.9841     | **0.9779**   | **0.9179** | **0.7100**    | 0.9028         | **0.8985** | 86         |
+| mxbai-embed-large-v1                   | 0.9904     | 0.9744       | 0.9001     | 0.6323        | **0.9236**     | 0.8842     | 294        |
+| gte-small                              | 0.9904     | 0.9370       | 0.9100     | 0.6697        | 0.9097         | 0.8834     | 44         |
+| bge-base-en-v1.5                       | 0.9841     | 0.9659       | 0.8853     | 0.6487        | 0.9097         | 0.8787     | 111        |
+| **bge-small-en-v1.5** *(LOW, default)* | 0.9745     | 0.9659       | 0.8912     | 0.6756        | 0.8750         | 0.8765     | **47**     |
+| multilingual-e5-large-instruct         | **0.9947** | 0.9455       | 0.8952     | 0.6143        | 0.9028         | 0.8705     | 355        |
+| **bge-large-en-v1.5** *(HIGH)*         | 0.9936     | 0.9489       | 0.8813     | 0.6338        | 0.8750         | 0.8665     | 315        |
+| all-mpnet-base-v2                      | 0.9915     | 0.9727       | 0.8853     | 0.6203        | 0.8403         | 0.8620     | 90         |
+| all-MiniLM-L6-v2                       | 0.9639     | 0.9574       | 0.8408     | 0.6173        | 0.8681         | 0.8495     | 34         |
+| multilingual-e5-base                   | 0.9798     | 0.9727       | 0.8724     | 0.5546        | 0.8056         | 0.8370     | 200        |
+| multilingual-e5-small                  | 0.9798     | 0.9455       | 0.8417     | 0.5725        | 0.7917         | 0.8262     | 54         |
+| F2LLM-0.6B                             | 0.9289     | 0.8910       | 0.7596     | 0.5859        | 0.7708         | 0.7873     | 188        |
+| Qwen3-Embedding-0.6B                   | 0.9299     | 0.8705       | 0.7250     | 0.5755        | 0.7986         | 0.7799     | 207        |
+
+A correlation of 0.57 is worth selecting candidates on and is not worth trusting instead of measuring.
+PairClassification's own top pick finishes second, and the model that actually wins, `gte-base`, is
+only sixth on it. The ordering is not even stable across record sets: `gte-small` beats the default by
+0.0069 on these samples and loses to it by 0.0046 on the full tables. Use the matching category to
+choose what to sweep, then sweep it.
+
+### Selecting Candidates on the Matching Category
+
+Taking the top PairClassification scorers inside 3B parameters and 1,024 dimensions surfaces five
+models that the clustering ranking never did. Four of the five beat every clustering-selected large
+model, and the best of them sets a new ceiling on four of the five datasets:
+
+| Embedding                                | Selected on            | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
+| ---------------------------------------- | ---------------------- | ---------- | ------------ | ---------- | ------------- | -------------- | ---------- | ---------- |
+| **GIST-large-Embedding-v0**              | **PairClassification** | 0.9820     | **0.9813**   | 0.9149     | 0.7070        | **0.9306**     | **0.9031** | 250        |
+| gte-base                                 | clustering-era sweep   | 0.9841     | 0.9779       | **0.9179** | 0.7100        | 0.9028         | 0.8985     | **86**     |
+| **b1ade-embed**                          | **PairClassification** | 0.9904     | 0.9830       | 0.8872     | **0.7130**    | 0.9097         | 0.8967     | 245        |
+| **gte-modernbert-base**                  | **PairClassification** | 0.9830     | 0.9761       | 0.8912     | 0.6607        | **0.9306**     | 0.8883     | 111        |
+| **UAE-Large-V1**                         | **PairClassification** | 0.9915     | 0.9710       | 0.8912     | 0.6741        | 0.9028         | 0.8861     | 248        |
+| mxbai-embed-large-v1                     | clustering             | 0.9904     | 0.9744       | 0.9001     | 0.6323        | 0.9236         | 0.8842     | 294        |
+| **bge-small-en-v1.5** *(LOW, default)*   | clustering-era sweep   | 0.9745     | 0.9659       | 0.8912     | 0.6756        | 0.8750         | 0.8765     | 47         |
+| **bge-large-en-v1.5** *(HIGH)*           | clustering             | 0.9936     | 0.9489       | 0.8813     | 0.6338        | 0.8750         | 0.8665     | 315        |
+| **ember-v1**                             | **PairClassification** | 0.9915     | 0.9710       | 0.7953     | 0.6413        | 0.9028         | 0.8604     | 245        |
+| F2LLM-0.6B                               | clustering *(ranked 1)* | 0.9289    | 0.8910       | 0.7596     | 0.5859        | 0.7708         | 0.7873     | 188        |
+
+`avsolatorio/GIST-large-Embedding-v0` beats the configured HIGH tier by 0.0366 mean blocking recall
+while embedding faster, 250s against 315s, which is the first large model to dominate `bge-large-en-v1.5`
+on both axes. `ember-v1` is the counterexample that keeps the correlation honest: it outscores all of
+them on PairClassification at 87.37 and finishes below all of them, because it collapses on Abt-Buy.
+
+`KiteFishAI/Nano-Em1-0.6B-v2.1` leads PairClassification outright at 89.9 and could not be measured:
+it is an LLM-based embedder whose tokenizer ships no chat template, so `sentence-transformers` refuses
+to load it.
+
+### Name, JSON and the Union of Both
 
 `--blocking-strategy json` embeds every populated field as a JSON object with the field names inline
-instead of embedding the name alone. It loses on 27 of 30 model-dataset cells, by 0.13 to 0.34 on the
-mean, worst on DBLP-ACM where venue, year and authors are shared by thousands of papers and drown the
-title. The exception is Amazon-Google with a large model, where it produces the best blocking recall
-this project has reached:
+instead of embedding the name alone. As a *replacement* for name blocking it loses badly, by 0.34 on
+the mean with the default embedding, worst on DBLP-ACM where venue, year and authors are shared by
+thousands of papers and drown the title.
 
-| Strategy                                 | Amazon-Google |
-| ---------------------------------------- | ------------- |
-| **json** + multilingual-e5-large-instruct | **0.7429**    |
-| json + mxbai-embed-large-v1               | 0.7190        |
-| name + bge-small-en-v1.5 *(default)*      | 0.6756        |
-| json + bge-small-en-v1.5                  | 0.4753        |
+That only rules it out as a replacement. `--blocking-strategy union` blocks both ways and keeps the
+blocks from each, so a pair only has to be caught by one view. It wins on all five datasets:
 
-Short, abbreviated product names that share a manufacturer token leave the name alone ambiguous, and
-the side fields carry signal it does not. Only models large enough to read structure out of a JSON blob
-benefit; the smaller ones lose on Amazon-Google too. JSON blocking stays off by default.
+| Strategy, bge-small-en-v1.5 | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Walmart-Amazon | Amazon-Google | Mean       |
+| --------------------------- | ---------- | ------------ | ---------- | -------------- | ------------- | ---------- |
+| name only *(default)*       | 0.9745     | 0.9659       | 0.8912     | 0.8750         | 0.6756        | 0.8765     |
+| json only                   | 0.2070     | 0.6065       | 0.6113     | 0.7917         | 0.4753        | 0.5384     |
+| **union**                   | **0.9766** | **0.9813**   | **0.9248** | **0.9792**     | **0.7803**    | **0.9284** |
+| union gain over name        | +0.0021    | +0.0154      | +0.0336    | **+0.1042**    | **+0.1047**   | +0.0520    |
+| pairs to judge, union/name  | 2.07x      | 1.88x        | 1.36x      | 1.71x          | 1.79x         | 1.76x      |
+
+The union costs 1.76x the pairs, and pairs are LLM calls, so this is recall bought with inference
+spend. It buys most where the name alone is weakest: Walmart-Amazon and Amazon-Google gain over 0.10
+each, while DBLP-ACM, where the title is nearly a key, gains 0.002 for twice the comparisons. The two
+views fail on different records, which is the whole reason the union works — JSON blocking on its own
+reaches 0.2070 on DBLP-ACM and still lifts it.
+
+On Amazon-Google, the dataset that has resisted every other change, the union sets a new ceiling:
+
+| Strategy                                  | Amazon-Google | Pairs to judge |
+| ----------------------------------------- | ------------- | -------------- |
+| **union** + multilingual-e5-large-instruct | **0.8251**    | 65,253         |
+| union + bge-small-en-v1.5 *(default)*      | 0.7803        | 74,112         |
+| union + bge-large-en-v1.5                  | 0.7638        | 70,938         |
+| json + multilingual-e5-large-instruct      | 0.7429        | 40,182         |
+| name + bge-small-en-v1.5 *(default)*       | 0.6756        | 41,337         |
+| name + bge-large-en-v1.5                   | 0.6338        | 43,601         |
+| name + multilingual-e5-large-instruct      | 0.6143        | 39,293         |
+
+That is +0.0822 over the previous best and +0.2108 over the same model on the name alone, for 1.66x
+the comparisons. Short, abbreviated product names that share a manufacturer token leave the name
+ambiguous, and the side fields carry signal it does not; keeping both views keeps both kinds of pair.
+The union stays off by default because the extra pairs are real money, but it is the setting to reach
+for on product data.
 
 End to end on Abt-Buy, 1,000-record sample at seed 42, three ER iterations, the ordering holds:
 
@@ -343,7 +450,7 @@ src/serf/
 ├── match/           # UUID mapping, LLM matching, few-shot examples
 ├── merge/           # Field-level entity merging
 ├── edge/            # Edge resolution for knowledge graphs
-├── eval/            # Metrics, benchmark datasets
+├── eval/            # Metrics, benchmark datasets, blocking and MTEB sweeps
 ├── analyze/         # Dataset profiling, benchmark EDA, field detection
 ├── spark/           # PySpark schemas, utils, Iceberg, graph components
 ├── config.py        # Configuration management

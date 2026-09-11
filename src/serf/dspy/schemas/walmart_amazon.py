@@ -68,43 +68,52 @@ class WalmartProduct(EntitySide):
         default="",
         description=(
             "Lower-cased Walmart catalog title, for example 'epson 1500 hours 200w "
-            "uhe projector lamp elplp12'. Normally leads with the brand and ends "
-            "with the model number, and often restates brand or model that is also "
-            "in its own column."
+            "uhe projector lamp elplp12'. Terse where the Amazon title is "
+            "keyword-stuffed, so a true pair can share almost no words. Leads with "
+            "the brand and ends with the model number, sometimes truncated: 'hp "
+            "cb40 toner' for the cartridge whose code is 'cb400a'."
         ),
     )
     category: SourceText = Field(
         default="",
         description=(
             "Walmart shelf taxonomy label such as 'electronics - general' or "
-            "'monitors'. Walmart and Amazon use different taxonomies, so a category "
-            "mismatch is weak evidence against a match; only a clearly incompatible "
-            "product kind matters."
+            "'monitors'. Ignore it. It agrees on under five per cent of true pairs, "
+            "barely above the rate for non-pairs, and it is frequently wrong rather "
+            "than merely coarse: an HP Ultrium data cartridge is filed under 'mp3 "
+            "accessories'. An incompatible-looking category is not evidence against "
+            "a match."
         ),
     )
     brand: SourceText = Field(
         default="",
         description=(
-            "Brand name, lower-cased. Should agree with the Amazon brand for a true "
-            "match, allowing for aliases and sub-brands. May be blank even when the "
-            "brand is visible in the title."
+            "Brand name, lower-cased. Use it only as a gate: it agrees on most true "
+            "pairs but also on two fifths of near misses, so it can rule a pair out "
+            "and never rule one in. May be blank even when the brand is visible in "
+            "the title."
         ),
     )
     modelno: SourceText = Field(
         default="",
         description=(
             "Manufacturer model number as listed by Walmart, for example 'elplp12'. "
-            "The highest-precision field in this task: normalised equality with the "
-            "Amazon model number is close to decisive. Compare case-insensitively "
-            "and ignore separators such as dashes and spaces."
+            "The sharpest exact-equality signal in any of these tasks: normalised "
+            "equality with the Amazon model number holds on about two thirds of true "
+            "pairs and on roughly one in four hundred near misses, so equality "
+            "decides the pair. Compare case-insensitively, ignoring dashes and "
+            "spaces, and when two codes disagree compare them character by "
+            "character, because one changed character always means a different "
+            "capacity, colour or revision."
         ),
     )
     price: SourcePrice = Field(
         default=None,
         description=(
-            "Walmart price in US dollars. Retail prices differ between the two "
-            "retailers, so price cannot decide a match; a very large gap can hint at "
-            "an accessory versus the main product."
+            "Walmart price in US dollars, using 0.0 as a null sentinel that must be "
+            "read as missing. When both sides carry a real price, a gap inside a "
+            "quarter is about three times more common on true pairs than on near "
+            "misses, which makes it a tie-breaker only."
         ),
     )
 
@@ -152,31 +161,38 @@ class AmazonElectronicsProduct(EntitySide):
         default="",
         description=(
             "Amazon browse-node category label such as 'headphone accessories' or "
-            "'inkjet printer ink'. Finer-grained and worded differently from the "
-            "Walmart shelf label, so do not require the two to be equal."
+            "'inkjet printer ink'. Ignore it: Amazon uses hundreds of fine nodes "
+            "where Walmart uses dozens of coarse shelves, so the two agree on under "
+            "five per cent of true pairs."
         ),
     )
     brand: SourceText = Field(
         default="",
         description=(
             "Brand name, lower-cased. Occasionally the seller name rather than the "
-            "manufacturer, and may be blank while the brand is present in the title."
+            "manufacturer, and may be blank while the brand is present in the title. "
+            "A gate, not evidence for a match."
         ),
     )
     modelno: SourceText = Field(
         default="",
         description=(
-            "Manufacturer part number as listed by Amazon, frequently repeated at the "
-            "end of the title. Normalised equality with the Walmart model number is "
-            "close to decisive; a clear mismatch of two present model numbers is "
-            "strong evidence against a match."
+            "Manufacturer part number as listed by Amazon, frequently repeated at "
+            "the end of the title. Normalised equality with the Walmart model number "
+            "decides the pair. Two *different* values are only evidence against a "
+            "match once you have checked that this one is really a code: it is blank "
+            "on more than a quarter of rows and often holds leftover descriptive "
+            "text instead ('high power', 'with csr', 'high contrast matte white'). A "
+            "multi-word value with no digits is prose and tells you nothing."
         ),
     )
     price: SourcePrice = Field(
         default=None,
         description=(
-            "Current Amazon price in US dollars, which is a street price rather than "
-            "a list price and therefore usually below Walmart's."
+            "Current Amazon price in US dollars, a street price rather than a list "
+            "price and so usually below Walmart's. Never zero on this side; null on "
+            "about one row in eight. Use it as a tie-breaker with a quarter of "
+            "tolerance."
         ),
     )
 

@@ -110,6 +110,106 @@ def test_signature_instructions_forbid_same_source_pairs(dataset: str) -> None:
     assert "two records from the same source are never a match" in instructions
 
 
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_signature_instructions_warn_about_the_one_attribute_difference(dataset: str) -> None:
+    """The cross-dataset finding from BENCHMARKS.md reaches every prompt.
+
+    The hardest non-match differs from a true match on one short attribute in all
+    five tasks, so the rule belongs in the shared block rules rather than in five
+    separate docstrings.
+    """
+    instructions = " ".join(get_dataset_spec(dataset).signature.instructions.split())
+
+    assert "differ from true matches on exactly one attribute" in instructions
+
+
+# One measured finding per dataset that the profiler in `serf profile-benchmark`
+# established and that the signature used to contradict. Each phrase is the
+# instruction the measurement forced; losing one is a silent regression back to
+# an instruction the data says is wrong.
+MEASURED_FINDINGS: dict[str, tuple[str, ...]] = {
+    "dblp-acm": (
+        # Year is equal on 100% of gold pairs and 12.8% of near misses, so the
+        # earlier "within one year" tolerance let the journal-extension false
+        # positive straight through.
+        "Require the years to be equal",
+        "Do not allow a year of slack",
+        # Venue agrees on 0% of gold pairs as a string and is a five-row bijection.
+        "Never compare venue as a string",
+    ),
+    "dblp-scholar": (
+        # Scholar writes 2002.0, so string equality fires on 0% of gold pairs
+        # and numeric comparison on 99.96%.
+        "Compare the year as a number, never as a string",
+        # Whitespace is dropped in ~1% of Scholar titles, which zeroes word-token
+        # overlap on pairs that are the same paper.
+        "Compare titles by their characters, not by their words",
+    ),
+    "abt-buy": (
+        # Containment finds 82% of gold pairs against 47% for exact equality, at
+        # a 2.5% near-miss rate. This is the strongest single finding measured.
+        "Then test containment, not equality",
+        # 85% of near misses also carry codes on both sides, so presence is not
+        # evidence; only the containment relation is.
+        "mere presence of a code on each side is worth nothing",
+    ),
+    "amazon-google": (
+        # Only 15% of pairs carry a code, so hunting for one is wasted effort.
+        "no model codes to fall back on",
+        # Price is within 25% on 79.9% of gold pairs against 24.0% of near misses
+        # and is comparable on 89.6% of them.
+        "most useful attribute here after the title",
+    ),
+    "walmart-amazon": (
+        # Amazon's modelno holds descriptive text often enough that inequality
+        # cannot be trusted before the value is checked.
+        "check that the Amazon value is really a code",
+        # Category agrees on 4.4% of gold pairs against 2.2% of near misses, and
+        # the Walmart label is frequently wrong outright.
+        "Ignore the category field completely",
+    ),
+}
+
+
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_signature_instructions_carry_the_measured_findings(dataset: str) -> None:
+    """Each dataset's prompt states what profiling measured, not what was assumed."""
+    instructions = " ".join(get_dataset_spec(dataset).signature.instructions.split())
+
+    for finding in MEASURED_FINDINGS[dataset]:
+        assert finding in instructions, f"{dataset} lost the measured finding: {finding}"
+
+
+def test_dblp_acm_no_longer_tolerates_a_year_of_slack() -> None:
+    """The DBLP-ACM year rule is equality, because the measurement says so.
+
+    DBLP-Scholar legitimately allows a year of slack, since Scholar may have
+    crawled a preprint. DBLP-ACM does not: both sources are curated catalogues
+    of the same venues and every gold pair shares a year, so tolerance there only
+    admits the conference-paper-against-journal-extension false positive.
+    """
+    acm = " ".join(DblpAcmBlockMatch.instructions.split())
+    scholar = " ".join(DblpScholarBlockMatch.instructions.split())
+
+    assert "Allow one year of slack" not in acm
+    assert "Allow one year of slack" in scholar
+
+
+def test_price_guidance_matches_how_useful_price_measured_per_dataset() -> None:
+    """Price is a tie-breaker where it separates the populations, ignored where it does not.
+
+    On Amazon-Google price is the sharpest non-title attribute (79.9% of gold
+    pairs within 25% against 24.0% of near misses). On Abt-Buy four gold pairs in
+    five have no comparable price at all. Both prompts have to say which case
+    they are in.
+    """
+    amazon_google = " ".join(AmazonGoogleBlockMatch.instructions.split())
+    abt_buy = " ".join(AbtBuyBlockMatch.instructions.split())
+
+    assert "tie-breaker" in amazon_google
+    assert "no comparable price at all" in abt_buy
+
+
 def test_signature_modes_are_generic_and_per_dataset() -> None:
     """The two selectable modes are the generic and per-dataset contracts."""
     assert SIGNATURE_MODES == (SIGNATURE_MODE_GENERIC, SIGNATURE_MODE_PER_DATASET)

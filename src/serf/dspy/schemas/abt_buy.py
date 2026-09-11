@@ -59,26 +59,30 @@ class AbtProduct(EntitySide):
         default="",
         description=(
             "Product name, conventionally 'Brand Product Description - MODELNO', "
-            "for example 'Sony Turntable - PSLX350H'. This is the most informative "
-            "field on this side: the trailing model number is the highest-precision "
-            "evidence available, and the leading token is normally the brand, which "
-            "has no column of its own here."
+            "for example 'Sony White Earbud Style Headphones - MDREX55WH'. The "
+            "trailing model code is the highest-precision evidence in this task, "
+            "worth far more than the words around it: the full names are identical "
+            "on under two per cent of true pairs. The leading token is normally "
+            "the brand, which has no column of its own on this side."
         ),
     )
     description: SourceText = Field(
         default="",
         description=(
-            "Long specification blob that repeats the name and then lists features "
-            "separated by '/'. Contains model numbers, capacities and dimensions "
-            "worth checking, but is verbose and unaligned with the Buy.com side."
+            "Long specification blob that repeats the name verbatim and then lists "
+            "features separated by '/'. Because it restates the name it is not "
+            "independent evidence and agreeing with the name proves nothing; mine "
+            "it only for a model code or a capacity the name left out."
         ),
     )
     price: SourcePrice = Field(
         default=None,
         description=(
-            "Listed price in US dollars, stored with a currency symbol in the source "
-            "and often missing. Two retailers rarely list the same price, so a price "
-            "difference is weak evidence against a match and a missing price is none."
+            "Listed price in US dollars, stored with a currency symbol and missing "
+            "on most rows, so four gold pairs in five have no comparable price at "
+            "all. Where both sides do have one, prices within a quarter of each "
+            "other are three times more common on true pairs than on near misses, "
+            "which makes it a tie-breaker and never a reason to decide."
         ),
     )
 
@@ -110,31 +114,35 @@ class BuyProduct(EntitySide):
     name: SourceText = Field(
         default="",
         description=(
-            "Product name, for example 'Linksys EtherFast EZXS88W Ethernet Switch - "
-            "EZXS88W'. Shorter and worded differently from the Abt name for the same "
-            "product, so match on brand plus model number plus product type rather "
-            "than on string overlap."
+            "Product name, for example 'Ex Series Earbuds Wht - MDR EX55/WHI'. "
+            "Shorter and worded differently from the Abt name for the same product, "
+            "and it interleaves the model code with spaces and slashes where Abt "
+            "appends it unbroken. Strip every separator out of this name before "
+            "testing whether an Abt code appears inside it."
         ),
     )
     description: SourceText = Field(
         default="",
         description=(
-            "Short specification fragment such as '5 x 10/100Base-TX LAN', often "
-            "nearly empty. Much less informative than the Abt description."
+            "Short specification fragment such as '5 x 10/100Base-TX LAN', missing "
+            "two times in five and sometimes just a colour word. Worth reading only "
+            "for a model code the name omitted."
         ),
     )
     manufacturer: SourceText = Field(
         default="",
         description=(
             "Brand, usually upper-cased such as 'LINKSYS'. The Abt side has no such "
-            "column, so compare this against the leading tokens of the Abt name."
+            "column, so this can only constrain a candidate against the leading "
+            "tokens of the Abt name, never be compared field to field."
         ),
     )
     price: SourcePrice = Field(
         default=None,
         description=(
-            "Listed price in US dollars, often missing. Prices differ between the two "
-            "retailers, so they cannot decide a match."
+            "Listed price in US dollars, missing on nearly half of these rows. "
+            "Useful only as a tie-breaker when the Abt side also has one, with "
+            "roughly a quarter of tolerance."
         ),
     )
 

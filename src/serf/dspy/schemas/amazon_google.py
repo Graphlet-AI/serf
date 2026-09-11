@@ -73,15 +73,20 @@ class AmazonSoftwareProduct(EntitySide):
     manufacturer: SourceText = Field(
         default="",
         description=(
-            "Software publisher or vendor, lower-cased, for example 'broderbund' or "
-            "'computer associates'. Present far more often than on the Google side."
+            "Software publisher or vendor, lower-cased and space-separated, for "
+            "example 'broderbund' or 'computer associates'. Present far more often "
+            "than on the Google side, which usually carries the publisher inside "
+            "its title instead. Count this value appearing anywhere in the Google "
+            "title as manufacturer agreement."
         ),
     )
     price: SourcePrice = Field(
         default=None,
         description=(
-            "Amazon price in US dollars. Frequently missing or zero in this snapshot, "
-            "so it is close to useless as matching evidence."
+            "Amazon price in US dollars. Comparable on nine pairs in ten, and the "
+            "most useful attribute here after the title: four true pairs in five "
+            "are within a quarter of the Google price against fewer than one in "
+            "four of the hardest non-pairs. Use it as a tie-breaker."
         ),
     )
 
@@ -115,27 +120,32 @@ class GoogleSoftwareProduct(EntitySide):
     title: SourceText = Field(
         default="",
         description=(
-            "Merchant listing title, for example 'learning quickbooks 2007'. Often "
-            "much shorter than the Amazon title, or a synonym of it with almost no "
-            "shared tokens, which is exactly why string similarity fails on this "
-            "task. Version numbers, years and platform tokens that do appear are "
-            "reliable and must agree."
+            "Merchant listing title, built as publisher, then an internal numeric "
+            "SKU, then an aggressively abbreviated product name: 'intuit inc 284216 "
+            "qckbks prem nonprofit ed 2005' is Amazon's 'quickbooks premier "
+            "non-profit edition 2005'. Discard the SKU, expand the abbreviations "
+            "(prem premier, prof professional, ed edition, upg upgrade, win "
+            "windows, jc jewel case, pk pack), and ignore the pre-tokenised "
+            "punctuation that sits in its own tokens such as '( r )'. Version "
+            "numbers, edition years and platform tokens must agree exactly."
         ),
     )
     manufacturer: SourceText = Field(
         default="",
         description=(
-            "Publisher or vendor, blank for most listings because merchants omit it. "
-            "A blank value is not evidence against a match."
+            "Publisher or vendor, blank on roughly nine rows in ten because "
+            "merchants omit it, and hyphen-joined when present "
+            "('sony-pictures-digital-entertainment'). A blank value is not evidence "
+            "against a match; look for the publisher inside the title instead."
         ),
     )
     price: SourcePrice = Field(
         default=None,
         description=(
             "Merchant price in US dollars, usually present. Merchants undercut and "
-            "bundle, so prices differ from Amazon's even for identical products; a "
-            "price that is off by an order of magnitude does suggest a different "
-            "edition or a bundle."
+            "bundle, so it will not equal Amazon's, but agreement within about a "
+            "quarter separates true pairs from near misses better than any other "
+            "non-title attribute in this task."
         ),
     )
 

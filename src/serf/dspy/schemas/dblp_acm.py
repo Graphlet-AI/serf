@@ -62,7 +62,8 @@ class DblpPublication(EntitySide):
         description=(
             "Comma-separated author list, usually with full first names "
             "(for example 'Viswanath Poosala, Yannis E. Ioannidis'). Author order "
-            "matches the publication."
+            "matches the publication. A bare '?' is DBLP's way of writing 'no "
+            "author list recorded' and must be read as missing, not as an author."
         ),
     )
     venue: SourceText = Field(
@@ -70,15 +71,18 @@ class DblpPublication(EntitySide):
         description=(
             "Abbreviated venue name as used by DBLP, for example 'VLDB', "
             "'SIGMOD Record' or 'SIGMOD Conference'. The ACM side spells the same "
-            "venue out in full, so compare venues semantically, never literally."
+            "venue out in full, so the two never agree as strings. Map it through "
+            "the crosswalk in the instructions and use it only to separate a "
+            "conference paper from its journal version."
         ),
     )
     year: SourceYear = Field(
         default=None,
         description=(
-            "Publication year. Nearly always present on this side and consistent "
-            "with the ACM side, so a year mismatch of more than one is strong "
-            "evidence against a match."
+            "Publication year. Present on essentially every row and equal to the "
+            "ACM year on every true pair, so require equality rather than "
+            "allowing slack: an unequal year rules the pair out even when the "
+            "titles and the authors both match."
         ),
     )
 
@@ -109,30 +113,38 @@ class AcmPublication(EntitySide):
     title: SourceText = Field(
         default="",
         description=(
-            "Publication title as recorded by the ACM Digital Library. Clean, and "
-            "usually word-for-word identical to the DBLP title apart from casing "
-            "and truncation."
+            "Publication title as recorded by the ACM Digital Library. Sentence-"
+            "cased where DBLP is title-cased, so lowercase before comparing. ACM "
+            "keeps the full subtitle after a colon where DBLP truncates it, so an "
+            "ACM title that starts with the whole DBLP title is the same paper."
         ),
     )
     authors: SourceText = Field(
         default="",
         description=(
-            "Comma-separated author list. Occasionally uses different first-name "
-            "forms or a different order than DBLP, so partial author overlap is "
-            "normal for a true match."
+            "Comma-separated author list. Uses different first-name forms and "
+            "orderings from DBLP often enough that the two strings are equal on "
+            "under a third of true pairs, so compare surnames only. Carries "
+            "numeric character references, so 'Oliver G&#252;nther' is "
+            "'Oliver Günther'."
         ),
     )
     venue: SourceText = Field(
         default="",
         description=(
             "Full venue name, for example 'International Conference on Management "
-            "of Data' for the venue DBLP abbreviates as 'SIGMOD Conference'. Treat "
-            "the abbreviated and spelled-out forms of one venue as equal."
+            "of Data' for the venue DBLP abbreviates as 'SIGMOD Conference'. "
+            "Carries raw HTML entities such as '&mdash;'. Treat the abbreviated "
+            "and spelled-out forms of one venue as equal."
         ),
     )
     year: SourceYear = Field(
         default=None,
-        description="Publication year, expected to agree with the DBLP side for a true match",
+        description=(
+            "Publication year. Equal to the DBLP year on every true pair and on "
+            "only about an eighth of the hardest non-pairs, which makes it the "
+            "cheapest filter available. Require equality."
+        ),
     )
 
 

@@ -125,17 +125,30 @@ benchmarks:
       prompt: ""
     - model: "thenlper/gte-base"
       prompt: ""
-  # `serf blocking-sweep --candidate-set large`. The best MTEB(eng, v2)
-  # clustering scorers that stay inside 3B parameters and 1024 output
-  # dimensions and that still load on transformers 5.x. Prompts are each
+    # Added from the PairClassification ranking, and the only one of its size
+    # there: 149M parameters and 768 dimensions, trained without a prefix.
+    - model: "Alibaba-NLP/gte-modernbert-base"
+      prompt: ""
+  # `serf blocking-sweep --candidate-set large`. Models inside 3B parameters and
+  # 1024 output dimensions that load on transformers 5.x. Prompts are each
   # model's own documented template for a symmetric task.
   #
-  # Four higher-scoring models are deliberately absent. Jasper-Token-Compression-600M
-  # emits 2048 dimensions despite a hidden size of 1024. embeddinggemma-300m is
-  # gated. stella_en_400M_v5 and stella_en_1.5B_v5 ship custom modelling code
-  # written against transformers 4.x that fails on 5.x, the 400M asking for
-  # xformers and the 1.5B for a `DynamicCache.from_legacy_cache` that no longer
-  # exists.
+  # The first five were chosen on MTEB(eng, v2) *clustering* score. That was the
+  # wrong category: measured over all thirteen candidates on one set of samples,
+  # clustering correlates with blocking recall at Spearman 0.0165, which is no
+  # information at all. `serf mteb-rank` shows PairClassification is the only
+  # category that carries signal, at 0.5714, because its tasks ask whether two
+  # short texts denote the same thing. The rest were added from the
+  # PairClassification ranking.
+  #
+  # Models deliberately absent, all higher scorers that will not run here:
+  # Jasper-Token-Compression-600M emits 2048 dimensions despite a hidden size of
+  # 1024; embeddinggemma-300m is gated; stella_en_400M_v5 and stella_en_1.5B_v5
+  # ship custom modelling code written against transformers 4.x, the 400M asking
+  # for xformers and the 1.5B for a `DynamicCache.from_legacy_cache` that no
+  # longer exists; Nano-Em1-0.6B-v2.1 leads PairClassification at 89.9 but is an
+  # LLM-based embedder whose tokenizer ships no chat template, so
+  # sentence-transformers cannot drive it.
   embedding_candidates_large:
     - model: "codefuse-ai/F2LLM-0.6B"
       prompt: "Instruct: Identify the topic or theme of the given text\nQuery: "
@@ -147,6 +160,18 @@ benchmarks:
       prompt: "Represent this sentence for searching relevant passages: "
     - model: "BAAI/bge-large-en-v1.5"
       prompt: "Represent this sentence for searching relevant passages: "
+    # Added from the PairClassification ranking. All three are 335M parameters
+    # at 1024 dimensions and trained without an instruction prefix, and all
+    # three beat every clustering-selected large model on blocking recall.
+    # `llmrails/ember-v1` came from the same ranking and is not here: it scores
+    # 87.37, above all of them, and measures 0.8604, below all of them, because
+    # it collapses to 0.7953 on Abt-Buy.
+    - model: "avsolatorio/GIST-large-Embedding-v0"
+      prompt: ""
+    - model: "w601sxs/b1ade-embed"
+      prompt: ""
+    - model: "WhereIsAI/UAE-Large-V1"
+      prompt: ""
   # MTEB(eng, v2) task names per category, read by `serf mteb-rank` to score
   # candidate embeddings straight from the `mteb/results` dataset.
   #

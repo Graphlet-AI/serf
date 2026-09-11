@@ -54,6 +54,11 @@ Recall 0.4748 / F1 0.6299.
 - [x] Per-run GEPA `log_dir` so runs stop resuming each other's state
 - [x] Fresh run started in tmux session `gepa-dblp-acm-v2`; iteration 0 valset score 0.4109 over 7/7
 - [ ] GEPA v2 run finishes and produces an optimized program to compare against F1 0.6299
+- [x] Baseline benchmark report for all five datasets, generic vs per-dataset signatures
+- [x] Blocking recall traced as the real cap on recall; three blocking bugs found and fixed
+- [x] `serf blocking-sweep` added: scores embeddings on co-blocked gold pairs, no LLM calls
+- [x] Nine embeddings swept over all five full datasets; `BAAI/bge-small-en-v1.5` wins
+- [x] `models.embedding` / `models.embedding_prompt` set to the winner, docs reconciled
 
 ## Executor's Feedback or Assistance Requests
 
@@ -68,8 +73,41 @@ Recall 0.4748 / F1 0.6299.
   position. It is a constant drag on the average rather than a blocker, but if future runs look
   flat this is the first thing to revisit.
 
+- Every recorded F1 number predates the blocking fixes and the embedding change, so all of them
+  understate the current pipeline, worst on amazon-google and walmart-amazon. Re-running the LLM
+  baselines costs real inference spend, so it needs a decision rather than an assumption. Related
+  open calls: whether to flip the default `--signature-mode` from `generic` to `per-dataset`, and
+  whether `er.max_iterations` should be per-dataset given dblp-scholar's precision collapse at
+  three passes.
+
 ## Lessons
 
+- **Blocking recall is a hard ceiling, so measure it before blaming the LLM.** 2,060 of 3,479 missed
+  gold pairs across four full runs were pairs never placed in the same block, against 594 the matcher
+  actually looked at and rejected. A blocking-only sweep needs no LLM calls, so it costs CPU time
+  instead of inference spend, and it isolates the question completely.
+- **Check that a cap cannot swallow the parameter it guards.** `nlist = min(n // target, sqrt(n))`
+  makes `target_block_size` silently unreachable above n = target squared, which is 900 records at
+  the default. Removing it was a strict improvement on both axes at once: dblp-scholar recall 0.2469
+  to 0.9205 *and* blocks shrinking from 84.2 to 29.9 records. A knob that stops responding above a
+  threshold is worse than no knob.
+- **A measurement taken over a bug ranks the bug.** The embedding sweep was run once before the
+  cluster-count fix and once after, and the ranking did not survive: `all-mpnet-base-v2` led the
+  first table and finished sixth in the second. Re-run comparative benchmarks after fixing anything
+  in the shared path, and discard the earlier numbers rather than reconciling them.
+- **Bigger embeddings are not better for blocking.** The 278M `multilingual-e5-base` finished last of
+  nine and the 33M `bge-small-en-v1.5` beat it by 0.046 mean recall at 2.6x the speed. Blocking only
+  asks whether the true match lands in the same Voronoi cell, and multilingual capacity is wasted on
+  English benchmarks. Blocking also re-embeds every record on every ER round, so model size is paid
+  `er.max_iterations` times per run, not once.
+- **Instruction prefixes barely matter for symmetric tasks.** e5 and bge are trained with a required
+  prefix, but adding it to blocking averaged −0.0011 on `multilingual-e5-base`. Both sides of a
+  blocking comparison carry the same prefix, so a constant offset largely cancels. It matters for
+  asymmetric retrieval, not for clustering.
+- **Linux caps a single argv entry at 128 KB (`MAX_ARG_STRLEN`).** Passing entity ids to a subprocess
+  as one argument raised `OSError: [Errno 7]` past roughly 13,000 entities. Pass collections through
+  a temp file. This one hid for a while because a subagent had patched it at runtime and never
+  committed the fix, so the logs showed it working while the committed code could not run at all.
 - **Reserve evaluation budgets before training budgets.** Sampling train first and giving validation
   the leftovers silently starves validation whenever a dataset produces few blocks. On DBLP-ACM,
   4910 records became 82 blocks, so train took 81 of them and val got a single record. Partition

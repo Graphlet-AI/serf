@@ -20,7 +20,7 @@ DSPy ReAct agents dynamically orchestrate the entire pipeline, adjusting blockin
 
 ### Phase 1 — Semantic Blocking
 
-Clusters records using **bge-small-en-v1.5 sentence embeddings** and **FAISS IVF** to create efficient blocks for comparison. Auto-scales block size across iterations.
+Clusters records using **bge-small-en-v1.5 sentence embeddings** and **FAISS IVF** to create efficient blocks for comparison. Auto-scales block size across iterations. A larger `bge-large-en-v1.5` tier is available with `--embedding-tier high`, and records can be embedded as JSON with all field names inline instead of by name with `--blocking-strategy json`.
 
 ### Phase 2 — Schema Alignment, Matching and Merging
 
@@ -37,7 +37,7 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 | Package Manager    | **uv**                                             |
 | Data Processing    | **PySpark 4.x**                                    |
 | LLM Framework      | **DSPy 3.x** with `XMLAdapter`                     |
-| Embeddings         | **bge-small-en-v1.5** via sentence-transformers    |
+| Embeddings         | **bge-small-en-v1.5** (LOW) / **bge-large-en-v1.5** (HIGH) via sentence-transformers |
 | Vector Search      | **FAISS IndexIVFFlat**                             |
 | Linting/Formatting | **Ruff**                                           |
 | Type Checking      | **zuban** (mypy-compatible)                        |
@@ -117,6 +117,14 @@ serf benchmark --dataset dblp-acm --signature-mode per-dataset \
 # Compare embedding models on blocking recall alone, no LLM calls and no cost.
 # Candidates default to benchmarks.embedding_candidates in config.yml
 serf blocking-sweep --dataset dblp-acm --output data/blocking_sweep.json
+
+# Sweep the large candidates instead, scoring name-only against JSON blocking
+serf blocking-sweep --candidate-set large --blocking-strategy both --sample 2000 \
+  --output data/blocking_sweep_large.json
+
+# Block with the large embedding and embed every field as JSON, not just the name
+serf benchmark --dataset amazon-google --embedding-tier high --blocking-strategy json \
+  --sample-records 1000 --output data/results/
 
 # Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
 # Randomly samples 2000 train / 1000 val / 1000 holdout records, keeping
@@ -206,6 +214,48 @@ uncovered are in [experiments/embedding-blocking-sweep.md](experiments/embedding
 `gte-base` edges out the default by 0.005 mean recall for 2.4x the embedding time. Blocking re-embeds
 every record on every ER round, so the smaller model is the better default; set `models.embedding` to
 trade back.
+
+### LOW vs HIGH Embeddings
+
+The default is the LOW tier. HIGH is the large alternative, chosen from MTEB(eng, v2) *clustering* —
+the task category blocking actually performs — among models within 3B parameters and 1,024 dimensions.
+Measured on 2,000-record samples per dataset, name-only blocking, one pass. Full protocol, the JSON
+results and the four large models that will not run on transformers 5.16 are in
+[experiments/low-high-embeddings-and-json-blocking.md](experiments/low-high-embeddings-and-json-blocking.md).
+
+| Embedding                                | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Walmart-Amazon | Amazon-Google | Mean       | Embed secs |
+| ---------------------------------------- | ---------- | ------------ | ---------- | -------------- | ------------- | ---------- | ---------- |
+| mxbai-embed-large-v1                     | 0.9904     | **0.9744**   | **0.9001** | **0.9236**     | 0.6323        | **0.8842** | 291        |
+| **bge-small-en-v1.5** *(LOW, default)*   | 0.9745     | 0.9659       | 0.8912     | 0.8750         | **0.6756**    | 0.8765     | **47**     |
+| multilingual-e5-large-instruct           | **0.9947** | 0.9455       | 0.8952     | 0.9028         | 0.6143        | 0.8705     | 334        |
+| **bge-large-en-v1.5** *(HIGH)*           | 0.9936     | 0.9489       | 0.8813     | 0.8750         | 0.6338        | 0.8665     | 324        |
+| F2LLM-0.6B                               | 0.9172     | 0.8944       | 0.7636     | 0.7708         | 0.5979        | 0.7888     | 183        |
+| Qwen3-Embedding-0.6B                     | 0.9299     | 0.8739       | 0.7280     | 0.7847         | 0.6099        | 0.7853     | 186        |
+
+Going big does not buy blocking recall. Only one large model beats the 33M default, by 0.0077 for six
+times the CPU, and two finish below it. MTEB clustering rank is no guide either: `F2LLM-0.6B` has the
+best clustering score of the six and the worst blocking recall, while `bge-small-en-v1.5` has the
+second-worst clustering score and the second-best blocking recall. HIGH is worth reaching for on the
+bibliographic datasets, where it leads by 0.019 on DBLP-ACM.
+
+### Name vs JSON Blocking
+
+`--blocking-strategy json` embeds every populated field as a JSON object with the field names inline
+instead of embedding the name alone. It loses on 27 of 30 model-dataset cells, by 0.13 to 0.34 on the
+mean, worst on DBLP-ACM where venue, year and authors are shared by thousands of papers and drown the
+title. The exception is Amazon-Google with a large model, where it produces the best blocking recall
+this project has reached:
+
+| Strategy                                 | Amazon-Google |
+| ---------------------------------------- | ------------- |
+| **json** + multilingual-e5-large-instruct | **0.7429**    |
+| json + mxbai-embed-large-v1               | 0.7190        |
+| name + bge-small-en-v1.5 *(default)*      | 0.6756        |
+| json + bge-small-en-v1.5                  | 0.4753        |
+
+Short, abbreviated product names that share a manufacturer token leave the name alone ambiguous, and
+the side fields carry signal it does not. Only models large enough to read structure out of a JSON blob
+benefit; the smaller ones lose on Amazon-Google too. JSON blocking stays off by default.
 
 ### Generic vs Per-Dataset Signatures
 

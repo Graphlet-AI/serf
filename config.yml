@@ -35,6 +35,10 @@ er:
 
   blocking:
     method: semantic
+    # What text gets embedded. "name" uses the name or title alone, which keeps
+    # clusters tight. "json" uses every field as a JSON object with the field
+    # names inline, which helps where names alone are ambiguous.
+    strategy: name
     target_block_size: 30
     max_block_size: 100
     min_block_size: 2
@@ -97,6 +101,28 @@ benchmarks:
       prompt: ""
     - model: "thenlper/gte-base"
       prompt: ""
+  # `serf blocking-sweep --candidate-set large`. The best MTEB(eng, v2)
+  # clustering scorers that stay inside 3B parameters and 1024 output
+  # dimensions and that still load on transformers 5.x. Prompts are each
+  # model's own documented template for a symmetric task.
+  #
+  # Four higher-scoring models are deliberately absent. Jasper-Token-Compression-600M
+  # emits 2048 dimensions despite a hidden size of 1024. embeddinggemma-300m is
+  # gated. stella_en_400M_v5 and stella_en_1.5B_v5 ship custom modelling code
+  # written against transformers 4.x that fails on 5.x, the 400M asking for
+  # xformers and the 1.5B for a `DynamicCache.from_legacy_cache` that no longer
+  # exists.
+  embedding_candidates_large:
+    - model: "codefuse-ai/F2LLM-0.6B"
+      prompt: "Instruct: Identify the topic or theme of the given text\nQuery: "
+    - model: "Qwen/Qwen3-Embedding-0.6B"
+      prompt: "Instruct: Identify the topic or theme of the given text\nQuery: "
+    - model: "intfloat/multilingual-e5-large-instruct"
+      prompt: "Instruct: Retrieve semantically similar text.\nQuery: "
+    - model: "mixedbread-ai/mxbai-embed-large-v1"
+      prompt: "Represent this sentence for searching relevant passages: "
+    - model: "BAAI/bge-large-en-v1.5"
+      prompt: "Represent this sentence for searching relevant passages: "
   datasets:
     walmart-amazon:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"

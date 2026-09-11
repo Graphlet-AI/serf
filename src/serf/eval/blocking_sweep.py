@@ -21,6 +21,32 @@ from serf.match.run import entity_members, merge_matched_entities
 logger = get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class EmbeddingCandidate:
+    """One embedding configuration to score.
+
+    Parameters
+    ----------
+    model : str
+        Hugging Face model name
+    prompt : str
+        Instruction prefix prepended to every text
+    trust_remote_code : bool
+        Execute the modelling code shipped in the model repository. Several
+        architectures will not load without it, and it runs third-party code,
+        so it is opt-in per candidate rather than global.
+    """
+
+    model: str
+    prompt: str = ""
+    trust_remote_code: bool = False
+
+    @property
+    def label(self) -> str:
+        """Return a short display name."""
+        return self.model.split("/")[-1] + (" +prefix" if self.prompt else "")
+
+
 @dataclass
 class BlockingSweepResult:
     """Blocking quality for one embedding model on one dataset.
@@ -58,6 +84,10 @@ class BlockingSweepResult:
     cumulative_recall : float
         ``cumulative_co_blocked / gold_pairs``, the ceiling a multi-round run
         can reach with a perfect matcher
+    trust_remote_code : bool
+        Whether the model repository's own code was executed to load it
+    strategy : str
+        Text fed to the embedding: ``"name"`` or ``"json"``
     """
 
     dataset: str
@@ -75,6 +105,8 @@ class BlockingSweepResult:
     round_number: int = 1
     cumulative_co_blocked: int = 0
     cumulative_recall: float = 0.0
+    trust_remote_code: bool = False
+    strategy: str = "name"
 
     def as_dict(self) -> dict[str, object]:
         """Return the result as a plain dict."""
@@ -89,6 +121,8 @@ def evaluate_blocking(
     prompt: str,
     target_block_size: int,
     max_block_size: int,
+    trust_remote_code: bool = False,
+    strategy: str = "name",
 ) -> BlockingSweepResult:
     """Block a record set with one embedding model and score pair completeness.
 
@@ -108,6 +142,10 @@ def evaluate_blocking(
         Target entities per block
     max_block_size : int
         Oversized blocks are split at this size
+    trust_remote_code : bool
+        Execute the modelling code shipped in the model repository
+    strategy : str
+        ``"name"`` or ``"json"``
 
     Returns
     -------
@@ -120,6 +158,8 @@ def evaluate_blocking(
         max_block_size=max_block_size,
         auto_scale=False,
         embedding_prompt=prompt,
+        embedding_trust_remote_code=trust_remote_code,
+        blocking_strategy=strategy,
     )
 
     start = time.time()
@@ -157,6 +197,8 @@ def evaluate_blocking(
         elapsed_seconds=elapsed,
         cumulative_co_blocked=co_blocked,
         cumulative_recall=recall,
+        trust_remote_code=trust_remote_code,
+        strategy=strategy,
     )
 
 
@@ -169,6 +211,8 @@ def evaluate_blocking_rounds(
     target_block_size: int,
     max_block_size: int,
     rounds: int,
+    trust_remote_code: bool = False,
+    strategy: str = "name",
 ) -> list[BlockingSweepResult]:
     """Measure how much blocking recall extra ER rounds recover.
 
@@ -197,6 +241,10 @@ def evaluate_blocking_rounds(
         Oversized blocks are split at this size
     rounds : int
         ER rounds to simulate
+    trust_remote_code : bool
+        Execute the modelling code shipped in the model repository
+    strategy : str
+        ``"name"`` or ``"json"``
 
     Returns
     -------
@@ -215,6 +263,8 @@ def evaluate_blocking_rounds(
             max_block_size=max_block_size,
             iteration=round_number,
             embedding_prompt=prompt,
+            embedding_trust_remote_code=trust_remote_code,
+            blocking_strategy=strategy,
         )
 
         start = time.time()
@@ -271,6 +321,8 @@ def evaluate_blocking_rounds(
                 round_number=round_number,
                 cumulative_co_blocked=len(covered),
                 cumulative_recall=cumulative,
+                trust_remote_code=trust_remote_code,
+                strategy=strategy,
             )
         )
 
@@ -284,13 +336,14 @@ def evaluate_blocking_rounds(
 
 def sweep_dataset(
     dataset: str,
-    candidates: list[tuple[str, str]],
+    candidates: list[EmbeddingCandidate],
     output_dir: str | None = None,
     sample: int = 0,
     seed: int = 42,
     target_block_size: int | None = None,
     max_block_size: int | None = None,
     rounds: int = 1,
+    strategy: str = "name",
 ) -> list[BlockingSweepResult]:
     """Score every candidate embedding model on one benchmark.
 
@@ -301,8 +354,8 @@ def sweep_dataset(
     ----------
     dataset : str
         Benchmark name
-    candidates : list[tuple[str, str]]
-        ``(model_name, prompt)`` pairs to test
+    candidates : list[EmbeddingCandidate]
+        Embedding configurations to test
     output_dir : str | None
         Directory holding the downloaded benchmark. Defaults to config.
     sample : int
@@ -315,6 +368,8 @@ def sweep_dataset(
         Split threshold. Defaults to config.
     rounds : int
         ER rounds to simulate per candidate. One means a single blocking pass.
+    strategy : str
+        Text fed to the embedding: ``"name"`` or ``"json"``
 
     Returns
     -------
@@ -342,18 +397,20 @@ def sweep_dataset(
     )
 
     results: list[BlockingSweepResult] = []
-    for model_name, prompt in candidates:
+    for candidate in candidates:
         if rounds > 1:
             results.extend(
                 evaluate_blocking_rounds(
                     entities=entities,
                     ground_truth=ground_truth,
                     dataset=dataset,
-                    model_name=model_name,
-                    prompt=prompt,
+                    model_name=candidate.model,
+                    prompt=candidate.prompt,
                     target_block_size=target_block_size,
                     max_block_size=max_block_size,
                     rounds=rounds,
+                    trust_remote_code=candidate.trust_remote_code,
+                    strategy=strategy,
                 )
             )
         else:
@@ -362,10 +419,12 @@ def sweep_dataset(
                     entities=entities,
                     ground_truth=ground_truth,
                     dataset=dataset,
-                    model_name=model_name,
-                    prompt=prompt,
+                    model_name=candidate.model,
+                    prompt=candidate.prompt,
                     target_block_size=target_block_size,
                     max_block_size=max_block_size,
+                    trust_remote_code=candidate.trust_remote_code,
+                    strategy=strategy,
                 )
             )
     return results

@@ -31,12 +31,13 @@ def main():
     output_file = args["output_file"]
     model_name = args["model_name"]
     prompt = args["prompt"]
+    trust_remote_code = args["trust_remote_code"]
 
     with open(texts_file) as f:
         texts = json.load(f)
 
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(model_name, device="cpu")
+    model = SentenceTransformer(model_name, device="cpu", trust_remote_code=trust_remote_code)
     embeddings = model.encode(
         [prompt + t for t in texts] if prompt else texts,
         batch_size=64,
@@ -113,6 +114,7 @@ def embed_in_subprocess(
     texts: list[str],
     model_name: str,
     prompt: str = "",
+    trust_remote_code: bool = False,
 ) -> np.ndarray:
     """Compute embeddings in an isolated subprocess.
 
@@ -128,6 +130,10 @@ def embed_in_subprocess(
     prompt : str
         Instruction prefix prepended to every text. Required by the e5 and
         bge families; empty for models trained without one.
+    trust_remote_code : bool
+        Execute the modelling code shipped in the model repository. Needed by
+        models that define a custom architecture, and off by default because it
+        runs third-party code.
 
     Returns
     -------
@@ -147,6 +153,7 @@ def embed_in_subprocess(
                 "output_file": output_file,
                 "model_name": model_name,
                 "prompt": prompt,
+                "trust_remote_code": trust_remote_code,
             }
         )
 

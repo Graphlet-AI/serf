@@ -744,6 +744,23 @@ def download(dataset: str, output_path: str | None) -> None:
     help="Instruction prefix applied to every --model given on the command line",
 )
 @click.option(
+    "--candidate-set",
+    type=click.Choice(["small", "large", "all"], case_sensitive=False),
+    default="small",
+    help="Which configured candidate list to sweep, ignored when --model is given",
+)
+@click.option(
+    "--trust-remote-code",
+    is_flag=True,
+    help="Run the model repository's own modelling code, which some architectures require",
+)
+@click.option(
+    "--blocking-strategy",
+    type=click.Choice(["name", "json", "both"], case_sensitive=False),
+    default="name",
+    help="Embed the name alone, every field as JSON, or score both",
+)
+@click.option(
     "--sample",
     type=int,
     default=0,
@@ -770,6 +787,9 @@ def blocking_sweep(
     datasets: tuple[str, ...],
     models: tuple[str, ...],
     prompt: str | None,
+    candidate_set: str,
+    blocking_strategy: str,
+    trust_remote_code: bool,
     sample: int,
     seed: int,
     target_block_size: int | None,
@@ -786,44 +806,62 @@ def blocking_sweep(
     the next round, so the cumulative recall is the ceiling a multi-round run
     could reach if the matcher never made a mistake.
     """
-    from serf.eval.blocking_sweep import sweep_dataset
+    from serf.eval.blocking_sweep import EmbeddingCandidate, sweep_dataset
 
     if models:
-        candidates = [(name, prompt or "") for name in models]
+        candidates = [EmbeddingCandidate(name, prompt or "", trust_remote_code) for name in models]
     else:
-        configured = cast(
-            list[dict[str, str]], serf_config.get("benchmarks.embedding_candidates", [])
-        )
-        candidates = [(entry["model"], entry.get("prompt", "")) for entry in configured]
+        keys = {
+            "small": ["benchmarks.embedding_candidates"],
+            "large": ["benchmarks.embedding_candidates_large"],
+            "all": ["benchmarks.embedding_candidates", "benchmarks.embedding_candidates_large"],
+        }[candidate_set.lower()]
+        configured: list[dict[str, object]] = []
+        for key in keys:
+            configured.extend(cast(list[dict[str, object]], serf_config.get(key, [])))
+        candidates = [
+            EmbeddingCandidate(
+                model=str(entry["model"]),
+                prompt=str(entry.get("prompt", "")),
+                trust_remote_code=bool(entry.get("trust_remote_code", False)),
+            )
+            for entry in configured
+        ]
 
     targets = list(datasets) if datasets else BENCHMARK_DATASETS
+    strategies = (
+        ["name", "json"] if blocking_strategy.lower() == "both" else [blocking_strategy.lower()]
+    )
 
     results = []
     for name in targets:
         click.echo(f"\n{name}")
-        for result in sweep_dataset(
-            dataset=name,
-            candidates=candidates,
-            sample=sample,
-            seed=seed,
-            target_block_size=target_block_size,
-            max_block_size=max_block_size,
-            rounds=rounds,
-        ):
-            results.append(result.as_dict())
-            label = result.model.split("/")[-1] + (" +prefix" if result.prompt else "")
-            round_note = f" round {result.round_number}" if rounds > 1 else ""
-            cumulative = (
-                f"  cumulative {result.cumulative_recall:.4f}"
-                f" ({result.cumulative_co_blocked}/{result.gold_pairs})"
-                if rounds > 1
-                else ""
-            )
-            click.echo(
-                f"  {label:>34}{round_note}  recall {result.blocking_recall:.4f}"
-                f"  ({result.co_blocked}/{result.gold_pairs}){cumulative}"
-                f"  {result.blocks} blocks  {result.elapsed_seconds:.0f}s"
-            )
+        for strategy in strategies:
+            for result in sweep_dataset(
+                dataset=name,
+                candidates=candidates,
+                sample=sample,
+                seed=seed,
+                target_block_size=target_block_size,
+                max_block_size=max_block_size,
+                rounds=rounds,
+                strategy=strategy,
+            ):
+                results.append(result.as_dict())
+                label = result.model.split("/")[-1] + (" +prefix" if result.prompt else "")
+                round_note = f" round {result.round_number}" if rounds > 1 else ""
+                cumulative = (
+                    f"  cumulative {result.cumulative_recall:.4f}"
+                    f" ({result.cumulative_co_blocked}/{result.gold_pairs})"
+                    if rounds > 1
+                    else ""
+                )
+                click.echo(
+                    f"  [{strategy}] {label:>34}{round_note}"
+                    f"  recall {result.blocking_recall:.4f}"
+                    f"  ({result.co_blocked}/{result.gold_pairs}){cumulative}"
+                    f"  {result.blocks} blocks  {result.elapsed_seconds:.0f}s"
+                )
 
     if output_path:
         with open(output_path, "w") as handle:

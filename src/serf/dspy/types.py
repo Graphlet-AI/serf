@@ -4,6 +4,7 @@ Domain-agnostic Pydantic types used throughout the ER pipeline.
 Domain-specific fields live in the Entity `attributes` dict.
 """
 
+import json
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -86,6 +87,46 @@ class Entity(BaseModel):
             if val and isinstance(val, str):
                 parts.append(val)
         return " ".join(parts)
+
+    def json_for_embedding(self) -> str:
+        """Return every populated field as a JSON object, field names inline.
+
+        The alternative to name-only blocking. Naming each value lets the model
+        read "brand" and "price" as different kinds of thing rather than as one
+        undifferentiated string, which matters most where the name alone is
+        ambiguous, as with product titles that share a manufacturer.
+
+        Two details keep the two sides of a join comparable. The ``l_`` and
+        ``r_`` prefixes that Leipzig-style benchmarks put on every column are
+        stripped, because every gold pair crosses sources and a field name that
+        encodes which source a record came from pushes the sides apart. Record
+        identifiers are dropped for the same reason: they are drawn from
+        unrelated namespaces, so they are noise at best.
+
+        Returns
+        -------
+        str
+            Compact JSON with keys sorted, so the text is stable across runs
+        """
+        record: dict[str, str] = {}
+        for key, value in self.attributes.items():
+            if value is None or value == "":
+                continue
+            field = key
+            for prefix in ("l_", "r_"):
+                if field.startswith(prefix):
+                    field = field[len(prefix) :]
+                    break
+            if field == "id":
+                continue
+            record[field] = str(value)
+
+        if self.name and self.name not in record.values():
+            record["name"] = self.name
+        if self.description and self.description not in record.values():
+            record["description"] = self.description
+
+        return json.dumps(record, ensure_ascii=False, sort_keys=True)
 
 
 class Publication(Entity):

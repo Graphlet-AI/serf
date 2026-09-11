@@ -68,6 +68,12 @@ class SemanticBlockingPipeline:
         Additional fields appended to the name before embedding
     embedding_prompt : str | None
         Instruction prefix prepended to every text. Defaults to config.
+    embedding_trust_remote_code : bool | None
+        Execute the modelling code shipped in the model repository, which some
+        architectures require. Defaults to config.
+    blocking_strategy : str | None
+        ``"name"`` embeds the name alone, ``"json"`` embeds every field as a
+        JSON object with the field names inline. Defaults to config.
     """
 
     def __init__(
@@ -79,13 +85,23 @@ class SemanticBlockingPipeline:
         auto_scale: bool = True,
         blocking_fields: list[str] | None = None,
         embedding_prompt: str | None = None,
+        embedding_trust_remote_code: bool | None = None,
+        blocking_strategy: str | None = None,
     ) -> None:
         if model_name is None:
             model_name = config.get("models.embedding")
         if embedding_prompt is None:
             embedding_prompt = config.get("models.embedding_prompt", "")
+        if embedding_trust_remote_code is None:
+            embedding_trust_remote_code = bool(
+                config.get("models.embedding_trust_remote_code", False)
+            )
         self.model_name = model_name
         self.embedding_prompt = embedding_prompt
+        self.embedding_trust_remote_code = embedding_trust_remote_code
+        self.blocking_strategy = blocking_strategy or str(
+            config.get("er.blocking.strategy", "name")
+        )
         self.target_block_size = target_block_size
         self.max_block_size = max_block_size
         self.iteration = iteration
@@ -118,9 +134,15 @@ class SemanticBlockingPipeline:
         ids = [str(e.id) for e in entities]
 
         # Embed in subprocess (name-only by default)
-        texts = [e.text_for_embedding(self.blocking_fields) for e in entities]
+        if self.blocking_strategy == "json":
+            texts = [e.json_for_embedding() for e in entities]
+        else:
+            texts = [e.text_for_embedding(self.blocking_fields) for e in entities]
         embeddings = embed_in_subprocess(
-            texts, model_name=self.model_name, prompt=self.embedding_prompt
+            texts,
+            model_name=self.model_name,
+            prompt=self.embedding_prompt,
+            trust_remote_code=self.embedding_trust_remote_code,
         )
 
         # Cluster in subprocess

@@ -5,6 +5,7 @@ from unittest.mock import MagicMock, patch
 from serf.dspy.types import BlockingMetrics, Entity, EntityBlock
 from serf.eval.blocking_sweep import (
     BlockingSweepResult,
+    EmbeddingCandidate,
     evaluate_blocking,
     evaluate_blocking_rounds,
 )
@@ -157,3 +158,39 @@ def test_prompt_is_passed_to_the_pipeline() -> None:
 
     assert mock_pipeline.call_args.kwargs["embedding_prompt"] == "query: "
     assert mock_pipeline.call_args.kwargs["model_name"] == "test-model"
+
+
+def test_strategy_reaches_the_pipeline_and_is_recorded() -> None:
+    """A result says which text the recall was measured on."""
+    entities = [_entity(1, "a"), _entity(2, "b")]
+    pipeline = MagicMock()
+    pipeline.run.return_value = ([_block(entities)], BlockingMetrics(total_blocks=1))
+
+    with patch(
+        "serf.eval.blocking_sweep.SemanticBlockingPipeline", return_value=pipeline
+    ) as mock_pipeline:
+        result = evaluate_blocking(
+            entities=entities,
+            ground_truth={(1, 2)},
+            dataset="test",
+            model_name="test-model",
+            prompt="",
+            target_block_size=30,
+            max_block_size=100,
+            strategy="json",
+        )
+
+    assert mock_pipeline.call_args.kwargs["blocking_strategy"] == "json"
+    assert result.strategy == "json"
+
+
+def test_candidate_carries_prompt_and_remote_code_flag() -> None:
+    """Each candidate configures its own model, prefix and code-trust."""
+    plain = EmbeddingCandidate("BAAI/bge-small-en-v1.5")
+    custom = EmbeddingCandidate("org/model", "query: ", trust_remote_code=True)
+
+    assert plain.prompt == ""
+    assert plain.trust_remote_code is False
+    assert plain.label == "bge-small-en-v1.5"
+    assert custom.label == "model +prefix"
+    assert custom.trust_remote_code is True

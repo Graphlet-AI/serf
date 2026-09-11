@@ -1,5 +1,6 @@
 """Tests for the SERF CLI."""
 
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -26,6 +27,7 @@ def test_cli_help() -> None:
     assert "benchmark-all" in result.output
     assert "download" in result.output
     assert "optimize" in result.output
+    assert "prompts" in result.output
     assert "profile-benchmark" in result.output
     assert "blocking-sweep" in result.output
     assert "mteb-rank" in result.output
@@ -88,6 +90,47 @@ def test_benchmark_help() -> None:
     assert "walmart-amazon" in result.output
     assert "amazon-google" in result.output
     assert "--blocking-strategy" in result.output
+
+
+def test_prompts_help() -> None:
+    """The prompt report is available per dataset, per mode, and to a file."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["prompts", "--help"])
+    assert result.exit_code == 0
+    assert "--dataset" in result.output
+    assert "--signature-mode" in result.output
+    assert "--instructions-only" in result.output
+    assert "--trained" in result.output
+    assert "--output" in result.output
+
+
+def test_prompts_shows_the_signature_and_its_rendered_prompt() -> None:
+    """The report has to show what the model is told, not a description of it."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["prompts", "--dataset", "abt-buy"])
+    assert result.exit_code == 0
+    assert "AbtBuyBlockMatch" in result.output
+    assert "### Instructions" in result.output
+    assert "### System message" in result.output
+    assert "abt_records" in result.output
+    assert "buy_records" in result.output
+
+
+def test_prompts_writes_a_report_for_every_dataset(tmp_path: Path) -> None:
+    """With no --dataset the report covers all five signatures."""
+    runner = CliRunner()
+    target = tmp_path / "prompts.md"
+    result = runner.invoke(cli, ["prompts", "--output", str(target)])
+    assert result.exit_code == 0
+    document = target.read_text(encoding="utf-8")
+    for signature in (
+        "DblpAcmBlockMatch",
+        "DblpScholarBlockMatch",
+        "AbtBuyBlockMatch",
+        "AmazonGoogleBlockMatch",
+        "WalmartAmazonBlockMatch",
+    ):
+        assert signature in document
 
 
 def test_blocking_sweep_help() -> None:

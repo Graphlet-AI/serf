@@ -11,7 +11,11 @@ import click
 import pandas as pd
 
 from serf.config import config as serf_config
-from serf.dspy.dataset_signatures import SIGNATURE_MODE_GENERIC, SIGNATURE_MODES
+from serf.dspy.dataset_signatures import (
+    SIGNATURE_MODE_GENERIC,
+    SIGNATURE_MODE_PER_DATASET,
+    SIGNATURE_MODES,
+)
 from serf.eval.benchmarks import DATASET_REGISTRY
 from serf.logs import get_logger, setup_logging
 from serf.match.run import entity_members, expand_pairs, merge_matched_entities
@@ -1050,6 +1054,92 @@ def mteb_rank(
     click.echo("\nDoes an MTEB category predict blocking recall? (Spearman)")
     for category, correlation, count in correlate_categories(recalls, targets):
         click.echo(f"  {correlation:>7.4f}  {category}  (n={count})")
+
+
+# ---------------------------------------------------------------------------
+# prompts  (show the signatures and prompts the matcher sends)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--dataset",
+    "-d",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    required=False,
+    help="Show one dataset instead of every one",
+)
+@click.option(
+    "--signature-mode",
+    type=click.Choice(list(SIGNATURE_MODES), case_sensitive=False),
+    default=SIGNATURE_MODE_PER_DATASET,
+    help="Show the shared BlockMatch signature or the typed per-dataset signatures",
+)
+@click.option(
+    "--full/--instructions-only",
+    default=True,
+    help="Include the rendered system and user messages, not just the instructions",
+)
+@click.option(
+    "--trained/--as-written",
+    default=False,
+    help="Show the instructions `serf train` wrote instead of the signature docstring",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Write the Markdown report to this file instead of stdout",
+)
+def prompts(
+    dataset: str | None,
+    signature_mode: str,
+    full: bool,
+    trained: bool,
+    output_path: str | None,
+) -> None:
+    """Show the DSPy signatures and prompts matching runs on.
+
+    A signature's docstring is its prompt: DSPy copies it into
+    Signature.instructions and the adapter renders it into the system message.
+    The report also prints the field list and the nested XML skeleton the answer
+    has to fill, which are fixed by the signature's types and are the part GEPA
+    cannot rewrite.
+
+    Makes no LLM call, so this is the cheap way to read what the model is told
+    before and after `serf train`.
+    """
+    from serf.dspy.prompts import all_prompt_reports, render_reports
+    from serf.dspy.trained import trained_instructions
+
+    datasets = [dataset] if dataset else None
+    reports = all_prompt_reports(signature_mode=signature_mode, datasets=datasets)
+    if trained:
+        from dataclasses import replace
+
+        reports = [
+            replace(
+                report, instructions=trained_instructions(report.dataset) or report.instructions
+            )
+            for report in reports
+        ]
+    document = render_reports(reports, include_prompt=full)
+
+    if output_path:
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as handle:
+            handle.write(document)
+        click.echo(f"Wrote {len(reports)} signature report(s) to {output_path}")
+        for report in reports:
+            click.echo(
+                f"  {report.dataset}: {report.signature_name}, "
+                f"{report.instruction_characters:,} instruction characters, "
+                f"{report.prompt_characters:,} in the full prompt"
+            )
+        return
+    click.echo(document)
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,9 @@ optimize:
   num_threads: 4
   log_dir: "data/gepa_logs"
   seed: 42
+  # Where `serf train` writes the program it trained and where the matcher looks
+  # for one. A dataset with no file here matches with its signature as written.
+  trained_dir: "data/trained_prompts"
 
 er:
   # One matching pass can only pair records that blocking already put together,

@@ -59,8 +59,24 @@ Recall 0.4748 / F1 0.6299.
 - [x] `serf blocking-sweep` added: scores embeddings on co-blocked gold pairs, no LLM calls
 - [x] Nine embeddings swept over all five full datasets; `BAAI/bge-small-en-v1.5` wins
 - [x] `models.embedding` / `models.embedding_prompt` set to the winner, docs reconciled
+- [x] LOW / HIGH embedding tiers added, selectable with `serf benchmark --embedding-tier`
+- [x] Large candidates chosen from MTEB clustering and swept; no large model is worth the CPU
+- [x] JSON all-fields blocking strategy added; loses on 27 of 30 cells, kept off by default
+- [x] `dspy.XMLAdapter` block loss found and fixed: 6 of 33 blocks parsed, now 29 of 33
+- [x] 1K abt-buy sample run on both tiers; LOW F1 0.9038, HIGH F1 0.8963
+- [x] Public ER leaderboard located and SERF placed against it in the README
 
 ## Executor's Feedback or Assistance Requests
+
+- **The HIGH tier needs a decision.** The instruction was to default HIGH to a bge model after
+  trying intfloat. `intfloat/multilingual-e5-large-instruct` was measured and lost (0.8705 mean
+  blocking recall against LOW's 0.8765), so HIGH is `BAAI/bge-large-en-v1.5` at 0.8665. But
+  `mixedbread-ai/mxbai-embed-large-v1` measured best of every large model at 0.8842 and is also
+  faster than bge-large. If HIGH is meant to be "the best large model" rather than "the bge large
+  model", change one line in `config.yml`.
+- **Nothing large beats LOW by enough to matter.** mxbai is the only large model ahead of the 33M
+  default, by 0.0077 mean blocking recall for six times the CPU. Two of the four large models are
+  behind it. The LOW default should stay the default.
 
 - The v2 run is deliberately left running; do not kill tmux session `gepa-dblp-acm-v2`.
   Log: `/opt/cursor/artifacts/gepa_dblp_acm_v2.log`, output: `data/gepa_logs/dblp-acm-v2`.
@@ -159,7 +175,7 @@ Recall 0.4748 / F1 0.6299.
   records for a target of 30. Re-blocking on later iterations still repartitions, but because the
   entity count drops, not because of the scaling. Left as is - changing the cap would move every
   benchmark number.
-- **`models.embedding` and the docs disagree.** `config.yml` sets
+- **[OUTDATED - resolved]** **`models.embedding` and the docs disagree.** `config.yml` sets
   `models.embedding: "intfloat/multilingual-e5-base"`, while `CLAUDE.md` lists Qwen3 embeddings as a
   key technology and `README.md` phase 1 says "Qwen3 sentence embeddings" (though its stack table
   correctly says multilingual-e5-base). Not changed - it needs a decision, and swapping the
@@ -193,3 +209,36 @@ Recall 0.4748 / F1 0.6299.
   so `TMUX="tmux -f ..."` in a driver script launched from inside a pane makes every child tmux call
   fail with `error creating tmux -f ... (No such file or directory)`. Sessions then vanish in
   seconds and the runs look like instant failures with empty logs.
+
+- **An adapter error naming the wrong adapter means a silent fallback fired.** The matcher is
+  configured with `dspy.XMLAdapter` and logged `Adapter JSONAdapter failed to parse`, because
+  `ChatAdapter.__call__` catches any parse failure, re-runs the request through `JSONAdapter` and
+  raises the *fallback's* error. Only 6 of 33 abt-buy blocks were parsing on the first call; the
+  other 27 were paying for two inferences and the ones whose fallback also failed were lost
+  outright. Replay real blocks with `XMLAdapter(use_json_adapter_fallback=False)` to see the real
+  error - a synthetic four-entity block looks like a success from the outside because the fallback
+  answers correctly.
+- **XML has no null and no bare ampersand.** Three distinct defects, all in the same place. A `dict`
+  output field renders as one flat tag, so the model writes JSON into the body and Pydantic gets a
+  `str`. An optional field has no null literal, so the model writes the word `null` and Pydantic
+  gets `'null'` for a `bool | None`. And `xml.etree.ElementTree` rejects the whole document over one
+  unescaped `&`, which every product catalog contains (`Office Home & Student`, `AT&T`). Two
+  `field_validator`s on `Entity` and a `RepairingXMLAdapter` that escapes stray metacharacters and
+  retries took first-call parses from 6 of 33 to 29 of 33, and abt-buy 1K from F1 0.8875 to 0.9038.
+  This supersedes the harmony-envelope lesson above: the envelope only appears in the JSON fallback,
+  so keeping the XML parse working avoids it almost entirely.
+- **MTEB clustering rank does not predict blocking recall.** `codefuse-ai/F2LLM-0.6B` tops MTEB(eng,
+  v2) clustering among models within 3B parameters and 1024 dimensions at 0.6036 and finishes *last*
+  on blocking recall at 0.7888. `BAAI/bge-small-en-v1.5` has the second-lowest clustering score in
+  the same candidate list and the second-best blocking recall. Choosing embeddings from the
+  leaderboard alone would have made the pipeline worse; sweep them on the actual task.
+- **Read MTEB from `mteb/results`, not the leaderboard Space.** The Space renders client-side, so a
+  fetch of the page returns no numbers. The parquet dataset has all 688 models and every task score.
+- **Papers With Code is gone.** `paperswithcode.com` redirects to `huggingface.co/papers/trending`.
+  The leaderboards survive at `opencodepapers-b7572d.gitlab.io`, which renders server-side, so the
+  entity-resolution boards for abt-buy and amazon-google can be scraped directly. dblp-acm,
+  dblp-scholar and walmart-amazon have no board there.
+- **Cite what a leaderboard is actually measuring.** Every entry on the ER boards scores pair
+  classification: the candidate pairs are given and the model labels them. SERF resolves end to end,
+  so its recall carries the pairs blocking never proposed. The numbers belong side by side with that
+  caveat attached, not in a rank.

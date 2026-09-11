@@ -2,6 +2,9 @@
 
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from serf.dspy.types import (
     BlockingMetrics,
     BlockResolution,
@@ -24,6 +27,25 @@ def test_entity_creation() -> None:
     assert entity.attributes == {}
     assert entity.source_ids is None
     assert entity.match_skip is None
+
+
+def test_entity_attributes_from_json_string() -> None:
+    """XMLAdapter hands a dict field back as the tag body, so parse it."""
+    entity = Entity(id=1, name="Sony MDR-V150", attributes='{"price": "$24.95"}')  # type: ignore[arg-type]
+    assert entity.attributes == {"price": "$24.95"}
+
+
+def test_entity_attributes_from_empty_tag() -> None:
+    """An empty <attributes></attributes> tag means no attributes."""
+    assert Entity(id=1, name="Sony", attributes="").attributes == {}  # type: ignore[arg-type]
+    assert Entity(id=1, name="Sony", attributes="  \n ").attributes == {}  # type: ignore[arg-type]
+
+
+def test_entity_attributes_reject_non_object() -> None:
+    """A string that is not a JSON object is still an error, not a silent dict."""
+    for bad in ("not json", "[1, 2]", '"just a string"'):
+        with pytest.raises(ValidationError):
+            Entity(id=1, name="Sony", attributes=bad)  # type: ignore[arg-type]
 
 
 def test_entity_with_all_fields() -> None:

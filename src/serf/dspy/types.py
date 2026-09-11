@@ -7,7 +7,7 @@ Domain-specific fields live in the Entity `attributes` dict.
 import json
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class Entity(BaseModel):
@@ -53,6 +53,40 @@ class Entity(BaseModel):
     match_skip: bool | None = None
     match_skip_reason: str | None = None
     match_skip_history: list[int] | None = None
+
+    @field_validator("attributes", mode="before")
+    @classmethod
+    def _parse_attributes(cls, value: Any) -> Any:
+        """Accept the JSON-object string an XML tag body carries.
+
+        ``dspy.XMLAdapter`` renders a dict output field as a single
+        ``<attributes>...</attributes>`` tag with no nested structure, so the
+        model writes a JSON object into the tag body and the adapter hands the
+        text back as ``str``. Rejecting that makes every block fall through to
+        DSPy's JSON fallback, which doubles the LLM calls and loses the blocks
+        whose fallback response is malformed.
+
+        Parameters
+        ----------
+        value : Any
+            Raw value from the adapter or the source data
+
+        Returns
+        -------
+        Any
+            A dict when the input was a JSON object or an empty string,
+            otherwise the input unchanged so Pydantic reports the real error
+        """
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return value
+        return parsed if isinstance(parsed, dict) else value
 
     def text_for_embedding(self, blocking_fields: list[str] | None = None) -> str:
         """Return text for embedding-based blocking.

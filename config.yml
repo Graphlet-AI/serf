@@ -36,6 +36,12 @@ optimize:
   # Where `serf train` writes the program it trained and where the matcher looks
   # for one. A dataset with no file here matches with its signature as written.
   trained_dir: "data/trained_prompts"
+  # Blocks GEPA rolls out on and selects candidates against. Both are small on
+  # purpose: GEPA reached its optimum in 79 to 737 rollouts in the paper, and
+  # DSPy warns above 35 validation examples because most of the budget is spent
+  # re-scoring the validation set rather than learning from the training one.
+  train_blocks: 40
+  val_blocks: 20
 
 er:
   # One matching pass can only pair records that blocking already put together,

@@ -100,6 +100,13 @@ def er_metric(
     """
     gold_pairs = _match_pairs(getattr(gold, "resolution", None))
     pred_pairs = _match_pairs(getattr(pred, "resolution", None))
+    if not gold_pairs and not pred_pairs:
+        # F1 is undefined on two empty sets, and scoring this zero would punish
+        # the only correct answer a block with no true pair admits.
+        return ScoreWithFeedback(
+            score=1.0,
+            feedback="No errors. This block contains no matching pair and none was emitted.",
+        )
     score = f1_score(pred_pairs, gold_pairs)
 
     missed = gold_pairs - pred_pairs
@@ -294,6 +301,7 @@ def optimize_module(
     trainset: list[dspy.Example],
     valset: list[dspy.Example] | None = None,
     *,
+    metric: GEPAFeedbackMetric | None = None,
     student_model: str | None = None,
     teacher_model: str | None = None,
     auto: str | None = None,
@@ -312,6 +320,9 @@ def optimize_module(
         Labeled training examples
     valset : list[dspy.Example] | None
         Optional validation examples
+    metric : GEPAFeedbackMetric | None
+        Feedback metric scoring one example and explaining its errors. Defaults
+        to ``er_metric``, which reads the generic ``resolution`` output field.
     student_model : str | None
         Override for the student/task LM
     teacher_model : str | None
@@ -342,9 +353,9 @@ def optimize_module(
         f"auto={auto_budget} train={len(trainset)} val={len(valset) if valset else 0} "
         f"log_dir={log_dir}"
     )
-    metric: GEPAFeedbackMetric = er_metric
+    gepa_metric: GEPAFeedbackMetric = metric or er_metric
     optimizer = dspy.GEPA(
-        metric=metric,
+        metric=gepa_metric,
         reflection_lm=teacher_lm,
         auto=auto_budget,
         num_threads=num_threads,

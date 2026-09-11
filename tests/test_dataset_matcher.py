@@ -228,6 +228,56 @@ def test_create_matcher_rejects_unknown_modes() -> None:
         create_matcher(signature_mode="embedding")
 
 
+def test_create_matcher_passes_the_trained_prompt_request_through() -> None:
+    """The benchmark flag has to reach the matcher that loads the program."""
+    matcher = create_matcher(
+        signature_mode=SIGNATURE_MODE_PER_DATASET,
+        dataset="abt-buy",
+        trained_prompts=True,
+        trained_dir="somewhere",
+    )
+
+    assert isinstance(matcher, DatasetMatcher)
+    assert matcher.trained_prompts is True
+    assert matcher.trained_dir == "somewhere"
+
+
+def test_create_matcher_rejects_trained_prompts_for_the_generic_signature() -> None:
+    """`serf train` writes per-dataset programs; the shared signature has none."""
+    with pytest.raises(ValueError, match="requires signature_mode 'per-dataset'"):
+        create_matcher(trained_prompts=True)
+
+
+def test_matcher_defaults_to_the_signature_as_written() -> None:
+    """Trained prompts are opt-in, so an untrained repo behaves exactly as before."""
+    matcher = DatasetMatcher("abt-buy")
+
+    assert matcher.trained_prompts is False
+    assert matcher.predictor.signature is get_dataset_spec("abt-buy").signature
+
+
+def test_matcher_matches_with_the_trained_instructions_when_asked(tmp_path: Any) -> None:
+    """A trained program replaces the docstring without anyone editing the source."""
+    spec = get_dataset_spec("abt-buy")
+    trained = dspy.Predict(spec.signature)
+    trained.signature = spec.signature.with_instructions("Trained abt-buy instructions.")
+    trained.save(str(tmp_path / "abt-buy_gepa.json"))
+
+    matcher = DatasetMatcher("abt-buy", trained_prompts=True, trained_dir=str(tmp_path))
+
+    signature = matcher.predictor.signature
+    assert signature is not None
+    assert signature.instructions == "Trained abt-buy instructions."
+    assert list(signature.input_fields) == [spec.left_field, spec.right_field]
+
+
+def test_matcher_falls_back_to_the_docstring_when_no_program_was_trained(tmp_path: Any) -> None:
+    """Asking for a prompt that was never trained must not fail the run."""
+    matcher = DatasetMatcher("abt-buy", trained_prompts=True, trained_dir=str(tmp_path))
+
+    assert matcher.predictor.signature is get_dataset_spec("abt-buy").signature
+
+
 def test_generic_mode_constant_is_the_default() -> None:
     """The generic mode is the documented default for the CLI."""
     assert SIGNATURE_MODE_GENERIC == "generic"

@@ -58,6 +58,8 @@ def create_matcher(
     dataset: str | None = None,
     model: str | None = None,
     concurrency: int | None = None,
+    trained_prompts: bool = False,
+    trained_dir: str | None = None,
 ) -> EntityMatcher:
     """Build the matcher for a signature mode.
 
@@ -72,6 +74,12 @@ def create_matcher(
         LLM model name. Defaults to config models.llm.
     concurrency : int | None
         Max concurrent LLM calls. Defaults to config er.matching.max_concurrent.
+    trained_prompts : bool
+        Match with the instructions ``serf train`` wrote for this dataset.
+        Per-dataset signatures only; the generic signature has no trained form.
+    trained_dir : str | None
+        Directory holding trained programs. Defaults to config
+        ``optimize.trained_dir``.
 
     Returns
     -------
@@ -81,14 +89,26 @@ def create_matcher(
     Raises
     ------
     ValueError
-        If the mode is unknown, or ``per-dataset`` is requested without a dataset
+        If the mode is unknown, ``per-dataset`` is requested without a dataset,
+        or trained prompts are requested for the generic signature
     """
     if signature_mode not in SIGNATURE_MODES:
         raise ValueError(f"Unknown signature mode: {signature_mode}. Available: {SIGNATURE_MODES}")
     if signature_mode == SIGNATURE_MODE_PER_DATASET:
         if not dataset:
             raise ValueError("signature_mode 'per-dataset' requires a dataset name")
-        return DatasetMatcher(dataset, model=model, max_concurrent=concurrency)
+        return DatasetMatcher(
+            dataset,
+            model=model,
+            max_concurrent=concurrency,
+            trained_prompts=trained_prompts,
+            trained_dir=trained_dir,
+        )
+    if trained_prompts:
+        raise ValueError(
+            "trained_prompts requires signature_mode 'per-dataset'; `serf train` writes a "
+            "program per dataset signature, and the shared BlockMatch signature has none"
+        )
     return EntityMatcher(model=model, max_concurrent=concurrency)
 
 
@@ -100,6 +120,8 @@ def match_blocks(
     concurrency: int | None = None,
     limit: int | None = None,
     iteration: int = 1,
+    trained_prompts: bool = False,
+    trained_dir: str | None = None,
 ) -> MatchOutcome:
     """Match blocks with the LLM and collect the predicted pairs.
 
@@ -119,6 +141,10 @@ def match_blocks(
         Max blocks to send to the LLM
     iteration : int
         Current pipeline iteration number
+    trained_prompts : bool
+        Match with the instructions ``serf train`` wrote for this dataset
+    trained_dir : str | None
+        Directory holding trained programs
 
     Returns
     -------
@@ -130,6 +156,8 @@ def match_blocks(
         dataset=dataset,
         model=model,
         concurrency=concurrency,
+        trained_prompts=trained_prompts,
+        trained_dir=trained_dir,
     )
     resolutions = asyncio.run(matcher.resolve_blocks(blocks, limit=limit, iteration=iteration))
     outcome = collect_pairs(resolutions)

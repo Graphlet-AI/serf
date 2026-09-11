@@ -22,6 +22,7 @@ from serf.dspy.schemas.base import (
     EntitySide,
     entity_side,
 )
+from serf.dspy.trained import load_trained_predictor
 from serf.dspy.types import BlockResolution, Entity, EntityBlock, MatchDecision
 from serf.logs import get_logger
 from serf.match.matcher import EntityMatcher
@@ -49,6 +50,12 @@ class DatasetMatcher(EntityMatcher):
         Batch size for processing. Defaults to config er.matching.batch_size.
     max_concurrent : int | None
         Max concurrent LLM calls. Defaults to config er.matching.max_concurrent.
+    trained_prompts : bool
+        Load the instructions ``serf train`` wrote for this dataset instead of
+        the ones in the signature's docstring
+    trained_dir : str | None
+        Directory holding trained programs. Defaults to config
+        ``optimize.trained_dir``.
     """
 
     def __init__(
@@ -57,18 +64,27 @@ class DatasetMatcher(EntityMatcher):
         model: str | None = None,
         batch_size: int | None = None,
         max_concurrent: int | None = None,
+        trained_prompts: bool = False,
+        trained_dir: str | None = None,
     ) -> None:
         super().__init__(model=model, batch_size=batch_size, max_concurrent=max_concurrent)
         self.dataset = dataset
         self.spec: DatasetSignatureSpec = get_dataset_spec(dataset)
+        self.trained_prompts = trained_prompts
+        self.trained_dir = trained_dir
         self.single_source_blocks = 0
         self.unknown_record_ids = 0
 
     @property
     def predictor(self) -> dspy.Predict:
-        """Lazy-load the per-dataset predictor."""
+        """Lazy-load the per-dataset predictor, trained instructions included."""
         if self._predictor is None:
-            self._predictor = cast(dspy.Predict, dspy.Predict(self.spec.signature))
+            trained = (
+                load_trained_predictor(self.dataset, self.trained_dir)
+                if self.trained_prompts
+                else None
+            )
+            self._predictor = trained or cast(dspy.Predict, dspy.Predict(self.spec.signature))
         return self._predictor
 
     def resolve_block(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:

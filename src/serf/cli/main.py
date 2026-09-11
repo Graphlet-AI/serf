@@ -1143,6 +1143,183 @@ def prompts(
 
 
 # ---------------------------------------------------------------------------
+# train  (GEPA optimization of a dataset's matching prompt)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--dataset",
+    "-d",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    multiple=True,
+    help="Benchmark dataset to train. Repeat the option to train several.",
+)
+@click.option(
+    "--all-datasets",
+    is_flag=True,
+    default=False,
+    help="Train every benchmark dataset in turn",
+)
+@click.option(
+    "--student-model",
+    type=str,
+    default=None,
+    help="Task LM that executes the matching rollouts (from config.yml models.student)",
+)
+@click.option(
+    "--teacher-model",
+    type=str,
+    default=None,
+    help="Reflection LM that rewrites the instructions (from config.yml models.teacher)",
+)
+@click.option(
+    "--auto",
+    type=click.Choice(["light", "medium", "heavy"], case_sensitive=False),
+    default=None,
+    help="GEPA budget preset (from config.yml optimize.auto)",
+)
+@click.option(
+    "--train-blocks",
+    type=int,
+    default=None,
+    help="Cap on training blocks (from config.yml optimize.train_blocks)",
+)
+@click.option(
+    "--val-blocks",
+    type=int,
+    default=None,
+    help="Cap on validation blocks (from config.yml optimize.val_blocks)",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for split sampling (from config.yml optimize.seed)",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_dir",
+    type=click.Path(),
+    default=None,
+    help="Directory to write the trained programs to (from config.yml optimize.trained_dir)",
+)
+@click.option(
+    "--log-dir",
+    type=click.Path(),
+    default=None,
+    help="GEPA checkpoint directory (from config.yml optimize.log_dir)",
+)
+@click.option(
+    "--data-dir",
+    type=click.Path(),
+    default=None,
+    help="Directory to download benchmark data into",
+)
+def train(
+    dataset: tuple[str, ...],
+    all_datasets: bool,
+    student_model: str | None,
+    teacher_model: str | None,
+    auto: str | None,
+    train_blocks: int | None,
+    val_blocks: int | None,
+    seed: int | None,
+    output_dir: str | None,
+    log_dir: str | None,
+    data_dir: str | None,
+) -> None:
+    """Train a benchmark dataset's matching prompt with GEPA.
+
+    Optimizes the per-dataset signature the benchmark actually runs. The student
+    LM executes matching rollouts, the teacher LM reads the feedback and rewrites
+    the instructions, and the winning program is written where `serf benchmark
+    --trained-prompts` and `serf prompts --trained` can read it.
+
+    Samples disjoint train and validation records, blocks each split on its own
+    so no record crosses the boundary, and keeps only the blocks that hold both
+    sources and at least one gold pair.
+
+    Requires VERTEX_AI_TOKEN for GPT OSS 120b and GEMINI_API_KEY for Gemini 3.5
+    Flash-Lite. `serf optimize` remains the path for the shared BlockMatch,
+    EntityMerge and EdgeResolve signatures.
+    """
+    from serf.dspy.train import train_dataset
+
+    names = list(BENCHMARK_DATASETS) if all_datasets else list(dataset)
+    if not names:
+        raise click.UsageError("Provide --dataset at least once, or --all-datasets")
+
+    setup_mlflow()
+
+    student_model = student_model or serf_config.get("models.student")
+    teacher_model = teacher_model or serf_config.get("models.teacher")
+    click.echo("GEPA training of the per-dataset matching prompts")
+    click.echo(f"  Student: {student_model}")
+    click.echo(f"  Teacher: {teacher_model}")
+    click.echo(f"  Datasets: {', '.join(names)}")
+
+    results = []
+    for name in names:
+        click.echo(f"\n=== {name} ===")
+        result = train_dataset(
+            name,
+            seed=seed,
+            train_blocks=train_blocks,
+            val_blocks=val_blocks,
+            student_model=student_model,
+            teacher_model=teacher_model,
+            auto=auto,
+            log_dir=log_dir,
+            output_dir=output_dir,
+            data_dir=data_dir,
+        )
+        results.append(result)
+        click.echo(f"  Signature: {result.signature_name}")
+        click.echo(f"  Examples:  {result.train_examples} train, {result.val_examples} val")
+        click.echo(
+            f"  Validation: {_score_text(result.baseline_score)} as written -> "
+            f"{_score_text(result.best_score)} trained"
+        )
+        click.echo(
+            f"  Instructions: {len(result.instructions_before):,} -> "
+            f"{len(result.instructions_after):,} characters"
+        )
+        click.echo(f"  Saved: {result.program_path}")
+        if not result.improved:
+            click.echo(
+                "  GEPA did not beat the shipped prompt on validation. Benchmark before "
+                "adopting it; --trained-prompts is opt-in for exactly this reason."
+            )
+
+    if len(results) > 1:
+        click.echo("\nSummary")
+        for result in results:
+            click.echo(
+                f"  {result.dataset:<16} {_score_text(result.baseline_score)} -> "
+                f"{_score_text(result.best_score)}"
+                f"{'  (improved)' if result.improved else ''}"
+            )
+
+
+def _score_text(score: float | None) -> str:
+    """Format a validation score for the CLI.
+
+    Parameters
+    ----------
+    score : float | None
+        Score to format
+
+    Returns
+    -------
+    str
+        Four-decimal score, or ``n/a`` when GEPA reported none
+    """
+    return "n/a" if score is None else f"{score:.4f}"
+
+
+# ---------------------------------------------------------------------------
 # optimize  (GEPA student/teacher prompt optimization)
 # ---------------------------------------------------------------------------
 
@@ -1386,6 +1563,11 @@ def optimize(
         " or block on both and keep the blocks from each"
     ),
 )
+@click.option(
+    "--trained-prompts/--no-trained-prompts",
+    default=False,
+    help="Match with the instructions `serf train` wrote instead of the signature docstring",
+)
 def benchmark(
     dataset: str,
     output_path: str | None,
@@ -1399,6 +1581,7 @@ def benchmark(
     sample_records: int | None,
     seed: int | None,
     blocking_strategy: str | None,
+    trained_prompts: bool,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
 
@@ -1408,6 +1591,8 @@ def benchmark(
 
     With --signature-mode per-dataset the block is matched with the typed DSPy
     signature written for this dataset instead of the shared BlockMatch one.
+    With --trained-prompts it matches with the instructions `serf train` left in
+    config.yml optimize.trained_dir, which requires per-dataset mode.
     With --sample-records the dataset is sampled by ground-truth match group, so
     gold pairs survive, and metrics are scored against the surviving pairs.
     """
@@ -1424,6 +1609,10 @@ def benchmark(
     click.echo(f"  Model: {model}")
     click.echo(f"  Signature mode: {signature_mode}")
     click.echo(f"  Embedding: {embedding_model} ({strategy} blocking)")
+    if trained_prompts:
+        from serf.dspy.trained import trained_program_path
+
+        click.echo(f"  Trained prompt: {trained_program_path(dataset)}")
     start = time.time()
 
     benchmark_data = BenchmarkDataset.download(dataset, output_path)
@@ -1493,6 +1682,7 @@ def benchmark(
             embedding_model=embedding_model,
             embedding_prompt=embedding_prompt,
             blocking_strategy=strategy,
+            trained_prompts=trained_prompts,
         )
         all_predicted_pairs.update(expand_pairs(pairs, entity_members(current_entities)))
         iterations_run = iteration
@@ -1673,6 +1863,7 @@ def _benchmark_llm_matching(
     embedding_model: str | None = None,
     embedding_prompt: str | None = None,
     blocking_strategy: str | None = None,
+    trained_prompts: bool = False,
 ) -> tuple[set[tuple[int, int]], list[Any]]:
     """Run LLM-based matching for benchmarks.
 
@@ -1705,6 +1896,8 @@ def _benchmark_llm_matching(
         Instruction prefix for that model. Defaults to config.
     blocking_strategy : str | None
         ``name`` or ``json``. Defaults to config.
+    trained_prompts : bool
+        Match with the instructions ``serf train`` wrote for this dataset
 
     Returns
     -------
@@ -1746,6 +1939,7 @@ def _benchmark_llm_matching(
         model=model,
         concurrency=concurrency,
         limit=limit,
+        trained_prompts=trained_prompts,
     )
     if outcome.single_source_blocks:
         click.echo(f"    {outcome.single_source_blocks} single-source blocks skipped")

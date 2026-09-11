@@ -28,6 +28,7 @@ def test_cli_help() -> None:
     assert "download" in result.output
     assert "optimize" in result.output
     assert "prompts" in result.output
+    assert "train" in result.output
     assert "profile-benchmark" in result.output
     assert "blocking-sweep" in result.output
     assert "mteb-rank" in result.output
@@ -90,6 +91,7 @@ def test_benchmark_help() -> None:
     assert "walmart-amazon" in result.output
     assert "amazon-google" in result.output
     assert "--blocking-strategy" in result.output
+    assert "--trained-prompts" in result.output
 
 
 def test_prompts_help() -> None:
@@ -131,6 +133,29 @@ def test_prompts_writes_a_report_for_every_dataset(tmp_path: Path) -> None:
         "WalmartAmazonBlockMatch",
     ):
         assert signature in document
+
+
+def test_train_help() -> None:
+    """Training exposes the student, the teacher, the budget and the caps."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["train", "--help"])
+    assert result.exit_code == 0
+    assert "--dataset" in result.output
+    assert "--all-datasets" in result.output
+    assert "--student-model" in result.output
+    assert "--teacher-model" in result.output
+    assert "--auto" in result.output
+    assert "--train-blocks" in result.output
+    assert "--val-blocks" in result.output
+    assert "walmart-amazon" in result.output
+
+
+def test_train_requires_a_dataset() -> None:
+    """Training every dataset by accident would be an expensive default."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["train"])
+    assert result.exit_code != 0
+    assert "--dataset" in result.output
 
 
 def test_blocking_sweep_help() -> None:

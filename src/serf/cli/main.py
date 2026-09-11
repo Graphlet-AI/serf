@@ -716,6 +716,103 @@ def download(dataset: str, output_path: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# blocking-sweep  (compare embedding models on blocking recall)
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="blocking-sweep")
+@click.option(
+    "--dataset",
+    "-d",
+    "datasets",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    multiple=True,
+    help="Benchmark to sweep. Repeatable. Defaults to every benchmark",
+)
+@click.option(
+    "--model",
+    "-m",
+    "models",
+    type=str,
+    multiple=True,
+    help="Embedding model to test. Repeatable. Defaults to the config candidates",
+)
+@click.option(
+    "--prompt",
+    type=str,
+    required=False,
+    help="Instruction prefix applied to every --model given on the command line",
+)
+@click.option(
+    "--sample",
+    type=int,
+    default=0,
+    help="Record budget per dataset, or 0 for the whole dataset",
+)
+@click.option("--seed", type=int, default=42, help="Sampling seed")
+@click.option("--target-block-size", type=int, required=False, help="Target entities per block")
+@click.option("--max-block-size", type=int, required=False, help="Maximum entities per block")
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Path to write the sweep results as JSON",
+)
+def blocking_sweep(
+    datasets: tuple[str, ...],
+    models: tuple[str, ...],
+    prompt: str | None,
+    sample: int,
+    seed: int,
+    target_block_size: int | None,
+    max_block_size: int | None,
+    output_path: str | None,
+) -> None:
+    """Compare embedding models on name-only blocking recall.
+
+    Blocking recall is the share of gold pairs whose two records land in the same
+    block, which caps the recall any matcher can reach. No LLM calls are made.
+    """
+    from serf.eval.blocking_sweep import sweep_dataset
+
+    if models:
+        candidates = [(name, prompt or "") for name in models]
+    else:
+        configured = cast(
+            list[dict[str, str]], serf_config.get("benchmarks.embedding_candidates", [])
+        )
+        candidates = [(entry["model"], entry.get("prompt", "")) for entry in configured]
+
+    targets = list(datasets) if datasets else BENCHMARK_DATASETS
+
+    results = []
+    for name in targets:
+        click.echo(f"\n{name}")
+        for result in sweep_dataset(
+            dataset=name,
+            candidates=candidates,
+            sample=sample,
+            seed=seed,
+            target_block_size=target_block_size,
+            max_block_size=max_block_size,
+        ):
+            results.append(result.as_dict())
+            label = result.model + (f" + {result.prompt!r}" if result.prompt else "")
+            click.echo(
+                f"  {label:>72}  recall {result.blocking_recall:.4f}"
+                f"  ({result.co_blocked}/{result.gold_pairs})"
+                f"  {result.blocks} blocks  {result.elapsed_seconds:.0f}s"
+            )
+
+    if output_path:
+        with open(output_path, "w") as handle:
+            json.dump(results, handle, indent=2)
+        click.echo(f"\nResults saved to {output_path}")
+
+
+# ---------------------------------------------------------------------------
 # optimize  (GEPA student/teacher prompt optimization)
 # ---------------------------------------------------------------------------
 

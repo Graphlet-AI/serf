@@ -200,6 +200,12 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 
 ## Lessons
 
+- **Benchmark with `--max-iterations 3`, always.** Standing instruction from the planner. The earlier
+  prompt A/B arms used `--max-iterations 1` to keep the six runs affordable, which measures a
+  single-pass pipeline rather than the shipping one and makes those F1 numbers incomparable to the
+  README and `experiments/` figures. Three is also the `er.max_iterations` config default and the
+  CLI default, so the flag is belt-and-braces rather than an override.
+
 - **`config.get(key)` raises `KeyError` for a missing key; it does not return `None`.** It returns a
   default only when one is passed as the second argument. A test that a config key is gone has to use
   `pytest.raises(KeyError)`, not `assert config.get(key) is None`.

@@ -44,6 +44,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 - **LLM Integration**: DSPy signatures with `dspy.XMLAdapter` for structured output
 - **DSPy**: Programming—not prompting—LMs - a framework for building and optimizing LLM pipelines. See the Project's @assets/DSPy.md [DSPy Programming Guide](assets/DSPy.md) and read the docs at [DSPy Documentation](https://dspy.ai/api/).
+- **GEPA**: The reflective prompt optimizer behind `serf optimize`. See the Project's @assets/DSPy-GEPA.md [DSPy GEPA Guide](assets/DSPy-GEPA.md) before changing anything under `serf.dspy.optimize`, the `er_metric` feedback function, or the optimizer budget in `config.yml`.
 - **Sentence Transformers**: A library for state-of-the-art sentence embeddings
 - **BGE Embeddings**: `BAAI/bge-small-en-v1.5`, the winner of `serf blocking-sweep` on blocking recall per unit of CPU. Needs its instruction prefix, held in `models.embedding_prompt`.
 - **Gemini Models**: Advanced models for matching and merging entities
@@ -152,6 +153,7 @@ logger.error(f"Failed to process: {error}")
 - Integration tests: Test with real services (Redis, S3, etc.)
 - Cache mode tests: Test different caching strategies
 - DSPy tests: Test DSPy signatures with mock LM calls
+- Benchmark runs: always pass `--max-iterations 3` to `serf benchmark`. One matching pass can only pair records blocking already put together, so a single iteration measures a different pipeline than the one that ships and its scores are not comparable to anything recorded in the README or `experiments/`.
 
 ### Spark Development
 

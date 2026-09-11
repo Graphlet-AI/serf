@@ -65,6 +65,9 @@ Recall 0.4748 / F1 0.6299.
 - [x] `dspy.XMLAdapter` block loss found and fixed: 6 of 33 blocks parsed, now 29 of 33
 - [x] 1K abt-buy sample run on both tiers; LOW F1 0.9038, HIGH F1 0.8963
 - [x] Public ER leaderboard located and SERF placed against it in the README
+- [x] Magellan and DeepMatcher technical reports converted to Markdown under `docs/papers/`
+- [x] `serf profile-benchmark` added: Spark SQL EDA over the five benchmarks
+- [x] `BENCHMARKS.md` written: lessons from both reports plus a page per dataset
 
 ## Executor's Feedback or Assistance Requests
 
@@ -242,3 +245,29 @@ Recall 0.4748 / F1 0.6299.
   classification: the candidate pairs are given and the model labels them. SERF resolves end to end,
   so its recall carries the pairs blocking never proposed. The numbers belong side by side with that
   caveat attached, not in a rank.
+- **Two of the five benchmarks cannot be scored fairly at face value.** Amazon-Google and
+  Walmart-Amazon ship a *labelled candidate set*, not a complete mapping: 11,460 of 4,397,038
+  possible pairs (0.26%) and 10,242 of 56,376,996 (0.018%). A pair outside the gold set is usually
+  a pair nobody looked at, so a correct match there is scored as a false positive. Of the hardest
+  non-gold pairs we surface, only 20.8% and 10.8% are confirmed negatives. Abt-Buy, DBLP-ACM and
+  DBLP-Scholar ship complete Leipzig mappings and do not have this problem.
+- **Measure an attribute on matches *and* on near misses, or the number means nothing.** Brand
+  agrees on 86.5% of Walmart-Amazon matches, which sounds decisive until you see it agrees on 41.5%
+  of the hardest non-matches. `modelno` agrees on 67.8% against 0.26%. The gap is the signal, not
+  the level.
+- **Normalise before comparing or every attribute looks useless.** DBLP-ACM venue agrees on 0% of
+  matches as a string and 100% through a five-row crosswalk. DBLP-Scholar year agrees on 0% as a
+  string, because Scholar stores it as a float and writes `2002.0`, and 99.96% as a number. Abt-Buy
+  model codes agree on 47.3% exactly and 82.0% by substring containment after stripping every
+  separator, which beats the entire product name as a discriminator.
+- **`pymupdf4llm` via `uvx` converts these PDFs well.** `uvx --from pymupdf4llm --with pymupdf`
+  keeps figure text in `<!-- Start of picture text -->` blocks and reconstructs tables. Strip
+  `\ufffd`, trailing whitespace and runs of blank lines afterwards.
+- **Cache a Spark view before asking it more than one question.** The near-miss token self-join in
+  `serf profile-benchmark` was recomputed for each of eight downstream queries and ran the 64K-row
+  dblp-scholar side out of heap. One `.cache()` fixed it and cut the dataset's runtime from 24.3s
+  to 13.1s.
+- **Do not alias a pair-view column `a_name` when a table has a column called `name`.** Abt-Buy
+  does, so the name projection and the shared-column projection collided and Spark raised
+  `AMBIGUOUS_REFERENCE`. The aliases are `left_key` and `right_key` now, which cannot collide with
+  anything `a_`- or `b_`-prefixed.

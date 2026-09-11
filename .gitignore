@@ -31,3 +31,7 @@ uv.lock
 .vscode/
 *.swp
 *.swo
+
+# MLflow local artifact store
+mlartifacts
+mlruns

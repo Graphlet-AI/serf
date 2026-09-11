@@ -1104,6 +1104,18 @@ def optimize(
     default=None,
     help="Random seed for record sampling (from config.yml optimize.seed)",
 )
+@click.option(
+    "--embedding-tier",
+    type=click.Choice(["low", "high"], case_sensitive=False),
+    default="low",
+    help="Blocking embedding: the small default or the large alternative",
+)
+@click.option(
+    "--blocking-strategy",
+    type=click.Choice(["name", "json"], case_sensitive=False),
+    default=None,
+    help="Embed the name alone or every field as JSON with field names inline",
+)
 def benchmark(
     dataset: str,
     output_path: str | None,
@@ -1116,6 +1128,8 @@ def benchmark(
     signature_mode: str,
     sample_records: int | None,
     seed: int | None,
+    embedding_tier: str,
+    blocking_strategy: str | None,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
 
@@ -1133,9 +1147,15 @@ def benchmark(
     setup_mlflow()
 
     model = model or serf_config.get("models.llm")
+    tier = embedding_tier.lower()
+    embedding_model = str(serf_config.get(f"models.embedding_{tier}"))
+    embedding_prompt = str(serf_config.get(f"models.embedding_{tier}_prompt", ""))
+    strategy = (blocking_strategy or str(serf_config.get("er.blocking.strategy", "name"))).lower()
+
     click.echo(f"Running benchmark: {dataset}")
     click.echo(f"  Model: {model}")
     click.echo(f"  Signature mode: {signature_mode}")
+    click.echo(f"  Embedding: {embedding_model} ({tier} tier, {strategy} blocking)")
     start = time.time()
 
     benchmark_data = BenchmarkDataset.download(dataset, output_path)
@@ -1202,6 +1222,9 @@ def benchmark(
             dataset=dataset,
             signature_mode=signature_mode,
             iteration=iteration,
+            embedding_model=embedding_model,
+            embedding_prompt=embedding_prompt,
+            blocking_strategy=strategy,
         )
         all_predicted_pairs.update(expand_pairs(pairs, entity_members(current_entities)))
         iterations_run = iteration
@@ -1379,6 +1402,9 @@ def _benchmark_llm_matching(
     dataset: str | None = None,
     signature_mode: str = SIGNATURE_MODE_GENERIC,
     iteration: int = 1,
+    embedding_model: str | None = None,
+    embedding_prompt: str | None = None,
+    blocking_strategy: str | None = None,
 ) -> tuple[set[tuple[int, int]], list[Any]]:
     """Run LLM-based matching for benchmarks.
 
@@ -1405,6 +1431,12 @@ def _benchmark_llm_matching(
     iteration : int
         Current ER iteration, which tightens the target block size when
         ``er.blocking.auto_scale_by_iteration`` is on
+    embedding_model : str | None
+        Blocking embedding to use. Defaults to config.
+    embedding_prompt : str | None
+        Instruction prefix for that model. Defaults to config.
+    blocking_strategy : str | None
+        ``name`` or ``json``. Defaults to config.
 
     Returns
     -------
@@ -1420,10 +1452,13 @@ def _benchmark_llm_matching(
     )
     auto_scale = bool(serf_config.get("er.blocking.auto_scale_by_iteration", True))
     pipeline = SemanticBlockingPipeline(
+        model_name=embedding_model,
         target_block_size=target_block_size,
         max_block_size=max_block,
         iteration=iteration,
         auto_scale=auto_scale,
+        embedding_prompt=embedding_prompt,
+        blocking_strategy=blocking_strategy,
     )
     click.echo(
         f"\n  Blocking (target={target_block_size}, max={max_block}, "

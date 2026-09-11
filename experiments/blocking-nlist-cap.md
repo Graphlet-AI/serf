@@ -87,10 +87,10 @@ round reaches 0.9205, which makes the question moot.
   committed.
 - **e5 and bge embeddings ran without their instruction prefix.** Both families are trained
   with a required prefix on every input. `models.embedding_prompt` now threads one through
-  `EntityEmbedder` and the blocking subprocess. This is a smaller effect than expected and is
-  dataset dependent rather than a straight bug: `query: ` on `multilingual-e5-base` gained
-  +0.0200 on abt-buy and +0.0728 on amazon-google but lost 0.0611 on dblp-acm and 0.0117 on
-  dblp-scholar, a mean of +0.0023.
+  `EntityEmbedder` and the blocking subprocess. The effect is far smaller than expected: with
+  the cap removed, `query: ` on `multilingual-e5-base` averages −0.0011 across the five
+  datasets. Both sides of a blocking comparison carry the same prefix, so a constant offset
+  largely cancels. See [embedding-blocking-sweep.md](embedding-blocking-sweep.md).
 
 ## Consequence for the recorded baselines
 

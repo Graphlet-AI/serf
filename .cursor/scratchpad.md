@@ -44,24 +44,24 @@ Recall 0.4748 / F1 0.6299.
 
 `BENCHMARKS.md` records measured discriminativeness, agreement-on-matches against
 agreement-on-near-misses, and real match/mismatch examples per dataset. The per-dataset DSPy
-signatures in `serf.dspy.dataset_signatures` were written from the *literature* before that
+signatures in `serf.dspy.dataset_signatures` were written from the _literature_ before that
 profiling existed, so several of their instructions are now contradicted by measurement. The
 task is to move the measured findings into the signature docstrings and field descriptions and
 prove the F1 change with an A/B on identical samples.
 
 Contradictions found by reading the two side by side:
 
-| Dataset | Signature currently says | BENCHMARKS.md measured |
-|---|---|---|
-| dblp-acm | year within one year | year agrees on 100% of matches, 12.8% of near misses; the headline mismatch is a conference paper and its journal version, differing only in year |
-| dblp-acm | judge venue semantically | venue is a five-row bijection; the crosswalk is known exactly |
-| abt-buy | compare model numbers for equality | equality finds 47% of matches, containment after stripping all separators finds 82% at a 2.5% false positive rate |
-| abt-buy | price cannot decide a match | 61.5% of matches within 25% against 20.1% of near misses, when both sides have one |
-| amazon-google | price cannot decide a match | 79.9% within 25% against 24.0%; the most useful non-title attribute of any product dataset here |
-| amazon-google | (nothing about codes) | only 15% of pairs carry a code, so looking for one is wasted effort |
-| walmart-amazon | different model numbers are evidence against | true, but Amazon's `modelno` is often descriptive text (`high power`, `with csr`), so the value has to be checked first |
-| walmart-amazon | an incompatible category matters | category agrees on 4.4% of matches against 2.2% of near misses and Walmart's is frequently wrong; it is noise |
-| dblp-scholar | years should agree within a year | Scholar writes `2002.0`, so string comparison agrees on 0% and numeric comparison on 99.96% |
+| Dataset        | Signature currently says                     | BENCHMARKS.md measured                                                                                                                            |
+| -------------- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| dblp-acm       | year within one year                         | year agrees on 100% of matches, 12.8% of near misses; the headline mismatch is a conference paper and its journal version, differing only in year |
+| dblp-acm       | judge venue semantically                     | venue is a five-row bijection; the crosswalk is known exactly                                                                                     |
+| abt-buy        | compare model numbers for equality           | equality finds 47% of matches, containment after stripping all separators finds 82% at a 2.5% false positive rate                                 |
+| abt-buy        | price cannot decide a match                  | 61.5% of matches within 25% against 20.1% of near misses, when both sides have one                                                                |
+| amazon-google  | price cannot decide a match                  | 79.9% within 25% against 24.0%; the most useful non-title attribute of any product dataset here                                                   |
+| amazon-google  | (nothing about codes)                        | only 15% of pairs carry a code, so looking for one is wasted effort                                                                               |
+| walmart-amazon | different model numbers are evidence against | true, but Amazon's `modelno` is often descriptive text (`high power`, `with csr`), so the value has to be checked first                           |
+| walmart-amazon | an incompatible category matters             | category agrees on 4.4% of matches against 2.2% of near misses and Walmart's is frequently wrong; it is noise                                     |
+| dblp-scholar   | years should agree within a year             | Scholar writes `2002.0`, so string comparison agrees on 0% and numeric comparison on 99.96%                                                       |
 
 Protocol: `serf benchmark --signature-mode per-dataset --sample-records 1000 --seed 42
 --max-iterations 1`, all five datasets, baseline arm measured before the edit and improved arm
@@ -73,14 +73,14 @@ merge cascade.
 Five arms, same sample and seed throughout. Where an arm left a prompt byte-identical the DSPy
 completion cache replayed it exactly, which is what makes the arms comparable at all.
 
-| Dataset | baseline | vetoes | +coverage | +condensed | +additive-only | adopted |
-|---|---|---|---|---|---|---|
-| dblp-acm | 0.9568 | 0.9799 | **0.9883** | 0.9883 | 0.9883 | rewrite |
-| dblp-scholar | **0.9192** | 0.8893 | 0.9026 | 0.8966 | 0.8811 | literature |
-| abt-buy | 0.8038 | 0.7747 | **0.8226** | 0.8226 | 0.8226 | rewrite |
-| amazon-google | 0.7521 | 0.6971 | **0.7661** | 0.7661 | 0.7661 | rewrite |
-| walmart-amazon | **0.8921** | 0.8000 | 0.8507 | 0.8696 | 0.8551 | literature |
-| mean | 0.8648 | 0.8282 | 0.8661 | 0.8686 | 0.8626 | **0.8777** |
+| Dataset        | baseline | vetoes | +coverage | +condensed | +additive | adopted    | delta   |
+| -------------- | -------- | ------ | --------- | ---------- | --------- | ---------- | ------- |
+| dblp-acm       | 0.9568   | 0.9799 | 0.9883    | 0.9883     | 0.9883    | **0.9788** | +0.0220 |
+| dblp-scholar   | 0.9192   | 0.8893 | 0.9026    | 0.8966     | 0.8811    | **0.9189** | -0.0003 |
+| abt-buy        | 0.8038   | 0.7747 | 0.8226    | 0.8226     | 0.8226    | **0.8413** | +0.0375 |
+| amazon-google  | 0.7521   | 0.6971 | 0.7661    | 0.7661     | 0.7661    | **0.7619** | +0.0098 |
+| walmart-amazon | 0.8921   | 0.8000 | 0.8507    | 0.8696     | 0.8551    | **0.8905** | -0.0016 |
+| mean           | 0.8648   | 0.8282 | 0.8661    | 0.8686     | 0.8626    | **0.8783** | +0.0135 |
 
 The first arm wrote each measured agreement rate in as a hard rule and lost 3.7 F1 points,
 almost all of it recall, because an agreement rate is not a coverage rate. `modelno` decides
@@ -88,7 +88,7 @@ Walmart-Amazon when present and is unusable on 31.8% of its gold pairs; Amazon-G
 `manufacturer` is unusable on 82.2%; Abt-Buy's price on 79.4%; Scholar omits the year on 54.1%
 of rows. Stating the first number without the second turns a decider into a vetoer, and the
 matcher rejects every pair that could not take the test. DBLP-ACM was the one dataset that
-improved on the first arm, and it is the one whose constraint holds on *every* gold pair.
+improved on the first arm, and it is the one whose constraint holds on _every_ gold pair.
 
 Two prompts also contradicted themselves, which is the same bug twice: Abt-Buy called code
 containment near-decisive and then told the matcher to reject a code differing by a trailing
@@ -99,7 +99,12 @@ with `cb40` against `cb400a`, a truncation only containment resolves.
 DBLP-Scholar and Walmart-Amazon never recovered across four framings, so they keep the shorter
 literature prompt with a note in the docstring saying why. Their quirks are mostly corruption an
 LLM reads through unaided — mojibake, `2002.0`, collapsed whitespace — so naming them buys no
-capability and costs length and rejection pressure.
+capability and costs length and rejection pressure. The last arm also moved the
+one-attribute-difference rule out of the shared block rules and into the three docstrings that
+gained from it, which is what finally returned those two datasets to parity.
+
+Adopted: three datasets up, two at parity, precision up on all five, mean **+0.0135 F1**. Recorded
+in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 
 ## Project Status Board
 
@@ -135,6 +140,10 @@ capability and costs length and rejection pressure.
 - [x] `--blocking-strategy union` added: name and JSON blockings kept together, not swapped
 - [x] Distinct blocked-pair accounting so overlapping blocks do not double-bill the matcher
 - [x] Union measured on all five datasets: 0.8765 to 0.9284 mean recall for 1.76x the pairs
+- [x] BENCHMARKS.md findings moved into the per-dataset signatures and typed field descriptions
+- [x] Six-arm prompt A/B on identical samples: mean F1 0.8648 to 0.8783, precision up on all five
+- [x] Findings adopted only where they beat the prompt they replaced; the other two say why in-prompt
+- [x] Regression tests pin each adopted instruction to the measurement that forced it
 
 ## Executor's Feedback or Assistance Requests
 
@@ -146,7 +155,7 @@ capability and costs length and rejection pressure.
   model", change one line in `config.yml`.
 - **Nothing large beats LOW by enough to matter.** mxbai is the only large model ahead of the 33M
   default, by 0.0077 mean blocking recall for six times the CPU. Two of the four large models are
-  behind it. The LOW default should stay the default. *(Superseded below.)*
+  behind it. The LOW default should stay the default. _(Superseded below.)_
 
 - **The HIGH tier now has a clear answer.** Selecting candidates on MTEB PairClassification instead
   of clustering surfaced `avsolatorio/GIST-large-Embedding-v0`, which beats the configured
@@ -181,6 +190,33 @@ capability and costs length and rejection pressure.
 
 ## Lessons
 
+- **An agreement rate is not a coverage rate, and only the pair of them licenses a veto.** Writing
+  every measured "agrees on X% of matches against Y% of near misses" into the prompts as a rule cost
+  3.7 mean F1, almost all of it recall, because the attribute is frequently missing: `modelno` is
+  unusable on 31.8% of Walmart-Amazon's gold pairs, `manufacturer` on 82.2% of Amazon-Google's,
+  price on 79.4% of Abt-Buy's. DBLP-ACM improved on that arm and is the only dataset whose
+  constraint holds on 100% of gold pairs with 0% missing. Always pair a discriminativeness claim in
+  a prompt with "and here is what to do when it is absent".
+- **Read a new prompt rule against the example that is supposed to prove it.** Two signatures
+  contradicted themselves on their own worked examples: Abt-Buy called code containment
+  near-decisive and then said to reject codes differing by a trailing character, which is
+  `MDREX55WH` inside `MDREX55WHI`; Walmart-Amazon said to compare title codes character by character
+  and illustrated it with the truncation `cb40` against `cb400a`. Both were measured findings turned
+  into rules that fight each other.
+- **A rule true of every dataset can still belong in only some of the prompts.** The
+  one-attribute-difference finding holds on all five, but "so compare that field exactly" is only
+  safe where the field is present. Shared, it cost DBLP-Scholar and Walmart-Amazon recall; moved
+  into the three docstrings that gained from it, it returned those two to parity.
+- **More measured detail is not monotonically better.** DBLP-Scholar and Walmart-Amazon lost F1
+  under four framings of their own profiling and kept the shorter literature prompt. Their quirks
+  are corruption an LLM reads through unaided, so naming them adds length and rejection pressure
+  without adding capability. Record why a prompt was left alone, in the prompt, or the next reader
+  reads it as unfinished work.
+- **The DSPy completion cache makes prompt A/Bs both safe and cheap.** It is keyed by the full
+  prompt, so a changed docstring is always a cache miss and no arm can contaminate another, while an
+  unchanged one replays byte for byte: three datasets reproduced 0.9883 / 0.8226 / 0.7661 exactly in
+  16 seconds across three arms. The corollary is that editing a signature while a run is in flight
+  silently changes the arm of any dataset that imports afterwards, so finish edits first.
 - **Blocking recall is a hard ceiling, so measure it before blaming the LLM.** 2,060 of 3,479 missed
   gold pairs across four full runs were pairs never placed in the same block, against 594 the matcher
   actually looked at and rejected. A blocking-only sweep needs no LLM calls, so it costs CPU time
@@ -188,7 +224,7 @@ capability and costs length and rejection pressure.
 - **Check that a cap cannot swallow the parameter it guards.** `nlist = min(n // target, sqrt(n))`
   makes `target_block_size` silently unreachable above n = target squared, which is 900 records at
   the default. Removing it was a strict improvement on both axes at once: dblp-scholar recall 0.2469
-  to 0.9205 *and* blocks shrinking from 84.2 to 29.9 records. A knob that stops responding above a
+  to 0.9205 _and_ blocks shrinking from 84.2 to 29.9 records. A knob that stops responding above a
   threshold is worse than no knob.
 - **A measurement taken over a bug ranks the bug.** The embedding sweep was run once before the
   cluster-count fix and once after, and the ranking did not survive: `all-mpnet-base-v2` led the
@@ -234,11 +270,11 @@ capability and costs length and rejection pressure.
 
 - **A lazily imported module is only safe if one thread reaches it first.** The generic matcher lost
   27 of 33 blocks on `dblp-acm` to `partially initialized module 'litellm' has no attribute
-  'completion'`. DSPy resolves litellm through `dspy.utils.lazy_import.require`, which returns
+'completion'`. DSPy resolves litellm through `dspy.utils.lazy_import.require`, which returns
   whatever `sys.modules` already holds, and MLflow's tracing hook runs a plain `import litellm` from
   inside a traced call. While that import was part way through, `sys.modules["litellm"]` held a
   module whose spec was still `_initializing`, so every other matcher thread's first touch raised.
-  `EntityMatcher` made this easy to hit by building its LM and predictor lazily *inside* the thread
+  `EntityMatcher` made this easy to hit by building its LM and predictor lazily _inside_ the thread
   pool, so ~8 threads took their first litellm touch at once and each minted its own Vertex token.
   Two fixes, both needed: import litellm at the top of `serf.dspy.lm` so it is executed once
   single-threaded, and `warm_up()` the LM and predictor on the calling thread before
@@ -248,7 +284,7 @@ capability and costs length and rejection pressure.
 - **One matching pass cannot beat its own blocking.** Recall of 0.52 / 0.48 / 0.14 against precision
   above 0.9 is the signature of gold pairs that were never co-blocked, not of a weak matcher. The
   benchmark now defaults to `er.max_iterations: 3`, and each round re-blocks the entities the
-  previous round merged. The loop used to feed the *matcher's* resolved entities forward, which the
+  previous round merged. The loop used to feed the _matcher's_ resolved entities forward, which the
   per-dataset matcher returns unchanged, so `--max-iterations 3` was a no-op for the typed arm; it
   now merges connected components of predicted pairs itself, uniformly for both arms.
 - **`auto_scale_by_iteration` does nothing at benchmark scale.** `FAISS_SCRIPT` caps the IVF cell
@@ -296,7 +332,7 @@ capability and costs length and rejection pressure.
 - **An adapter error naming the wrong adapter means a silent fallback fired.** The matcher is
   configured with `dspy.XMLAdapter` and logged `Adapter JSONAdapter failed to parse`, because
   `ChatAdapter.__call__` catches any parse failure, re-runs the request through `JSONAdapter` and
-  raises the *fallback's* error. Only 6 of 33 abt-buy blocks were parsing on the first call; the
+  raises the _fallback's_ error. Only 6 of 33 abt-buy blocks were parsing on the first call; the
   other 27 were paying for two inferences and the ones whose fallback also failed were lost
   outright. Replay real blocks with `XMLAdapter(use_json_adapter_fallback=False)` to see the real
   error - a synthetic four-entity block looks like a success from the outside because the fallback
@@ -311,7 +347,7 @@ capability and costs length and rejection pressure.
   This supersedes the harmony-envelope lesson above: the envelope only appears in the JSON fallback,
   so keeping the XML parse working avoids it almost entirely.
 - **MTEB clustering rank does not predict blocking recall.** `codefuse-ai/F2LLM-0.6B` tops MTEB(eng,
-  v2) clustering among models within 3B parameters and 1024 dimensions at 0.6036 and finishes *last*
+  v2) clustering among models within 3B parameters and 1024 dimensions at 0.6036 and finishes _last_
   on blocking recall at 0.7888. `BAAI/bge-small-en-v1.5` has the second-lowest clustering score in
   the same candidate list and the second-best blocking recall. Choosing embeddings from the
   leaderboard alone would have made the pipeline worse; sweep them on the actual task.
@@ -326,12 +362,12 @@ capability and costs length and rejection pressure.
   so its recall carries the pairs blocking never proposed. The numbers belong side by side with that
   caveat attached, not in a rank.
 - **Two of the five benchmarks cannot be scored fairly at face value.** Amazon-Google and
-  Walmart-Amazon ship a *labelled candidate set*, not a complete mapping: 11,460 of 4,397,038
+  Walmart-Amazon ship a _labelled candidate set_, not a complete mapping: 11,460 of 4,397,038
   possible pairs (0.26%) and 10,242 of 56,376,996 (0.018%). A pair outside the gold set is usually
   a pair nobody looked at, so a correct match there is scored as a false positive. Of the hardest
   non-gold pairs we surface, only 20.8% and 10.8% are confirmed negatives. Abt-Buy, DBLP-ACM and
   DBLP-Scholar ship complete Leipzig mappings and do not have this problem.
-- **Measure an attribute on matches *and* on near misses, or the number means nothing.** Brand
+- **Measure an attribute on matches _and_ on near misses, or the number means nothing.** Brand
   agrees on 86.5% of Walmart-Amazon matches, which sounds decisive until you see it agrees on 41.5%
   of the hardest non-matches. `modelno` agrees on 67.8% against 0.26%. The gap is the signal, not
   the level.
@@ -352,18 +388,18 @@ capability and costs length and rejection pressure.
   `AMBIGUOUS_REFERENCE`. The aliases are `left_key` and `right_key` now, which cannot collide with
   anything `a_`- or `b_`-prefixed.
 - **Pick the benchmark category by the decision, not by the mechanism.** Blocking runs k-means, so
-  MTEB *clustering* looked like the matching category. It correlates with measured blocking recall
+  MTEB _clustering_ looked like the matching category. It correlates with measured blocking recall
   at Spearman +0.0165 over thirteen models, which is nothing, and it would have picked the two worst
   models in the list first and second. `PairClassification` correlates at +0.5714, because its tasks
   ask whether two short texts denote the same thing — the decision blocking has to preserve, not the
   algorithm blocking happens to use. Selecting on it found a model 0.0366 better than the configured
   HIGH tier and faster. There is no MTEB task type named "matching"; `PairClassification` is it.
 - **A 0.57 correlation chooses the pool, not the winner.** PairClassification's own top scorer among
-  the new candidates, `llmrails/ember-v1` at 87.37, measured *last* of the five, because it collapses
+  the new candidates, `llmrails/ember-v1` at 87.37, measured _last_ of the five, because it collapses
   to 0.7953 on abt-buy while the others sit near 0.89. Use the leaderboard to decide what to sweep,
   then sweep it.
 - **Test an augmentation as an augmentation before writing it off.** JSON blocking lost on 27 of 30
-  cells as a *replacement* for name blocking, by up to 0.34, and that looked conclusive. Kept
+  cells as a _replacement_ for name blocking, by up to 0.34, and that looked conclusive. Kept
   alongside name blocking instead of instead of it, the same JSON view gains +0.0520 mean recall and
   wins on all five datasets, including dblp-acm where JSON alone scores 0.2070. Two weak-but-
   uncorrelated views beat one strong view; the question "does A beat B" is not the question "does
@@ -383,5 +419,5 @@ capability and costs length and rejection pressure.
   and `subset == "default"` and take the max score per model and task across revisions.
 - **Some leaderboard leaders will not load.** `KiteFishAI/Nano-Em1-0.6B-v2.1` tops
   PairClassification at 89.9 and raises `Cannot use chat template functions because
-  tokenizer.chat_template is not set`, because it is an LLM-based embedder. Load-test a candidate
+tokenizer.chat_template is not set`, because it is an LLM-based embedder. Load-test a candidate
   before planning a sweep around it.

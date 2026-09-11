@@ -17,7 +17,7 @@
   change the protocol between arms.
 - **MLflow:** experiment `SERF-Entity-Resolution` at `http://127.0.0.1:5001`.
 - **CLI:** `serf benchmark --dataset <ds> --signature-mode <generic|per-dataset>
-  --sample-records 1000 --seed 42 --target-block-size 30 --concurrency 10 --max-iterations 1`
+--sample-records 1000 --seed 42 --target-block-size 30 --concurrency 10 --max-iterations 1`
 
 ## Verdict
 
@@ -34,13 +34,13 @@ Sampling by match group is what makes a 1,000-record sample scoreable: naive uni
 The blocking recall ceiling below is the fraction of retained gold pairs whose two records land in
 the same block, measured offline with the same sample and blocking config. No matcher can exceed it.
 
-| Dataset | Records sampled | Gold pairs retained | Blocks | Gold pairs co-blocked | Blocking recall ceiling |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| dblp-acm | 1001 | 476 | 33 | 454 | 0.9538 |
-| dblp-scholar | 1000 | 320 | 33 | 291 | 0.9094 |
-| abt-buy | 1000 | 508 | 31 | 435 | 0.8563 |
-| amazon-google | 1002 | 345 | 31 | 193 | 0.5594 |
-| walmart-amazon | 1000 | 75 | 31 | 65 | 0.8667 |
+| Dataset        | Records sampled | Gold pairs retained | Blocks | Gold pairs co-blocked | Blocking recall ceiling |
+| -------------- | --------------: | ------------------: | -----: | --------------------: | ----------------------: |
+| dblp-acm       |            1001 |                 476 |     33 |                   454 |                  0.9538 |
+| dblp-scholar   |            1000 |                 320 |     33 |                   291 |                  0.9094 |
+| abt-buy        |            1000 |                 508 |     31 |                   435 |                  0.8563 |
+| amazon-google  |            1002 |                 345 |     31 |                   193 |                  0.5594 |
+| walmart-amazon |            1000 |                  75 |     31 |                    65 |                  0.8667 |
 
 Every sample retained hundreds of gold pairs except `walmart-amazon`, which retained 75 because the
 full DeepMatcher packaging only has 1,154 matches over 24,628 records. 75 pairs is enough to score
@@ -48,29 +48,29 @@ but coarse: one pair is worth 1.3 points of recall there.
 
 ## Head to head
 
-| Dataset | Arm | Precision | Recall | F1 | TP | FP | Predicted | Elapsed |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| dblp-acm | generic | 0.9645 | 0.8571 | **0.9077** | 408 | 15 | 423 | 13s |
-| dblp-acm | per-dataset | 0.9956 | 0.9538 | **0.9742** | 454 | 2 | 456 | 13s |
-| dblp-scholar | generic | 0.9346 | 0.6250 | **0.7491** | 200 | 14 | 214 | 420s |
-| dblp-scholar | per-dataset | 1.0000 | 0.7719 | **0.8713** | 247 | 0 | 247 | 336s |
-| abt-buy | generic | 0.9044 | 0.6516 | **0.7574** | 331 | 35 | 366 | 15s |
-| abt-buy | per-dataset | 1.0000 | 0.7244 | **0.8402** | 368 | 0 | 368 | 14s |
-| amazon-google | generic | 0.7016 | 0.3884 | **0.5000** | 134 | 57 | 191 | 113s |
-| amazon-google | per-dataset | 0.9184 | 0.5217 | **0.6654** | 180 | 16 | 196 | 94s |
-| walmart-amazon | generic | 0.8929 | 0.6667 | **0.7634** | 50 | 6 | 56 | 725s |
-| walmart-amazon | per-dataset | 0.9839 | 0.8133 | **0.8905** | 61 | 1 | 62 | 75s |
+| Dataset        | Arm         | Precision | Recall |         F1 |  TP |  FP | Predicted | Elapsed |
+| -------------- | ----------- | --------: | -----: | ---------: | --: | --: | --------: | ------: |
+| dblp-acm       | generic     |    0.9645 | 0.8571 | **0.9077** | 408 |  15 |       423 |     13s |
+| dblp-acm       | per-dataset |    0.9956 | 0.9538 | **0.9742** | 454 |   2 |       456 |     13s |
+| dblp-scholar   | generic     |    0.9346 | 0.6250 | **0.7491** | 200 |  14 |       214 |    420s |
+| dblp-scholar   | per-dataset |    1.0000 | 0.7719 | **0.8713** | 247 |   0 |       247 |    336s |
+| abt-buy        | generic     |    0.9044 | 0.6516 | **0.7574** | 331 |  35 |       366 |     15s |
+| abt-buy        | per-dataset |    1.0000 | 0.7244 | **0.8402** | 368 |   0 |       368 |     14s |
+| amazon-google  | generic     |    0.7016 | 0.3884 | **0.5000** | 134 |  57 |       191 |    113s |
+| amazon-google  | per-dataset |    0.9184 | 0.5217 | **0.6654** | 180 |  16 |       196 |     94s |
+| walmart-amazon | generic     |    0.8929 | 0.6667 | **0.7634** |  50 |   6 |        56 |    725s |
+| walmart-amazon | per-dataset |    0.9839 | 0.8133 | **0.8905** |  61 |   1 |        62 |     75s |
 
 Elapsed times are not comparable across rows: arms whose exact prompts had already been sent in an
 earlier attempt replayed from the DSPy on-disk cache. Token counts below are the honest cost signal.
 
-| Dataset | F1 generic | F1 per-dataset | F1 delta | Precision delta | Recall delta |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| dblp-acm | 0.9077 | 0.9742 | **+0.0666** | +0.0311 | +0.0966 |
-| dblp-scholar | 0.7491 | 0.8713 | **+0.1222** | +0.0654 | +0.1469 |
-| abt-buy | 0.7574 | 0.8402 | **+0.0827** | +0.0956 | +0.0728 |
-| amazon-google | 0.5000 | 0.6654 | **+0.1654** | +0.2168 | +0.1333 |
-| walmart-amazon | 0.7634 | 0.8905 | **+0.1272** | +0.0910 | +0.1467 |
+| Dataset        | F1 generic | F1 per-dataset |    F1 delta | Precision delta | Recall delta |
+| -------------- | ---------: | -------------: | ----------: | --------------: | -----------: |
+| dblp-acm       |     0.9077 |         0.9742 | **+0.0666** |         +0.0311 |      +0.0966 |
+| dblp-scholar   |     0.7491 |         0.8713 | **+0.1222** |         +0.0654 |      +0.1469 |
+| abt-buy        |     0.7574 |         0.8402 | **+0.0827** |         +0.0956 |      +0.0728 |
+| amazon-google  |     0.5000 |         0.6654 | **+0.1654** |         +0.2168 |      +0.1333 |
+| walmart-amazon |     0.7634 |         0.8905 | **+0.1272** |         +0.0910 |      +0.1467 |
 
 Mean F1 delta **+0.1128** across 5 datasets.
 
@@ -90,18 +90,18 @@ are pure recall loss. The generic `BlockResolution` output requires the model to
 the block, so a 90-record block means a very long structured response; the typed output is just the
 list of matched pairs. Shorter outputs are less likely to trip the parser.
 
-| Dataset | Arm | Failed blocks | Gold pairs in failed blocks | Recall over answered blocks |
-| --- | --- | ---: | ---: | ---: |
-| dblp-acm | generic | 1 | 37 | 0.9784 |
-| dblp-acm | per-dataset | 0 | 0 | 1.0000 |
-| dblp-scholar | generic | 4 | 67 | 0.8929 |
-| dblp-scholar | per-dataset | 1 | 10 | 0.8790 |
-| abt-buy | generic | 4 | 54 | 0.8688 |
-| abt-buy | per-dataset | 0 | 0 | 0.8460 |
-| amazon-google | generic | 2 | 22 | 0.7836 |
-| amazon-google | per-dataset | 0 | 0 | 0.9326 |
-| walmart-amazon | generic | 1 | 7 | 0.8621 |
-| walmart-amazon | per-dataset | 0 | 0 | 0.9385 |
+| Dataset        | Arm         | Failed blocks | Gold pairs in failed blocks | Recall over answered blocks |
+| -------------- | ----------- | ------------: | --------------------------: | --------------------------: |
+| dblp-acm       | generic     |             1 |                          37 |                      0.9784 |
+| dblp-acm       | per-dataset |             0 |                           0 |                      1.0000 |
+| dblp-scholar   | generic     |             4 |                          67 |                      0.8929 |
+| dblp-scholar   | per-dataset |             1 |                          10 |                      0.8790 |
+| abt-buy        | generic     |             4 |                          54 |                      0.8688 |
+| abt-buy        | per-dataset |             0 |                           0 |                      0.8460 |
+| amazon-google  | generic     |             2 |                          22 |                      0.7836 |
+| amazon-google  | per-dataset |             0 |                           0 |                      0.9326 |
+| walmart-amazon | generic     |             1 |                           7 |                      0.8621 |
+| walmart-amazon | per-dataset |             0 |                           0 |                      0.9385 |
 
 "Recall over answered blocks" divides true positives by the co-blocked gold pairs that were not
 sitting in a block whose call failed. It isolates matching quality from parse robustness, and it is
@@ -130,21 +130,21 @@ MLflow trace metadata (`mlflow.trace.tokenUsage`) and attributed per arm by proc
 window, and input field names, so concurrent unrelated runs in the same experiment are excluded.
 Cache replays emit a trace with no token usage and correctly count as zero.
 
-| Dataset | Arm | Billed LLM calls | Input tokens | Output tokens | Cost |
-| --- | --- | ---: | ---: | ---: | ---: |
-| dblp-acm | generic | 99 | 359,650 | 321,738 | $0.1482 |
-| dblp-acm | per-dataset | 93 | 193,080 | 225,726 | $0.0986 |
-| dblp-scholar | generic | 33 | 384,101 | 348,683 | $0.1601 |
-| dblp-scholar | per-dataset | 23 | 151,587 | 142,256 | $0.0649 |
-| abt-buy | generic | 123 | 444,085 | 468,819 | $0.2087 |
-| abt-buy | per-dataset | 62 | 186,888 | 211,758 | $0.0931 |
-| amazon-google | generic | 59 | 320,441 | 352,794 | $0.1558 |
-| amazon-google | per-dataset | 30 | 111,247 | 92,696 | $0.0434 |
-| walmart-amazon | generic | 31 | 422,380 | 418,781 | $0.1888 |
-| walmart-amazon | per-dataset | 27 | 123,297 | 50,518 | $0.0293 |
-| **all** | **generic** | 345 | **1,930,657** | **1,910,815** | **$0.8617** |
-| **all** | **per-dataset** | 235 | **766,099** | **722,954** | **$0.3292** |
-| **all** | **both** | 580 | **2,696,756** | **2,633,769** | **$1.1909** |
+| Dataset        | Arm             | Billed LLM calls |  Input tokens | Output tokens |        Cost |
+| -------------- | --------------- | ---------------: | ------------: | ------------: | ----------: |
+| dblp-acm       | generic         |               99 |       359,650 |       321,738 |     $0.1482 |
+| dblp-acm       | per-dataset     |               93 |       193,080 |       225,726 |     $0.0986 |
+| dblp-scholar   | generic         |               33 |       384,101 |       348,683 |     $0.1601 |
+| dblp-scholar   | per-dataset     |               23 |       151,587 |       142,256 |     $0.0649 |
+| abt-buy        | generic         |              123 |       444,085 |       468,819 |     $0.2087 |
+| abt-buy        | per-dataset     |               62 |       186,888 |       211,758 |     $0.0931 |
+| amazon-google  | generic         |               59 |       320,441 |       352,794 |     $0.1558 |
+| amazon-google  | per-dataset     |               30 |       111,247 |        92,696 |     $0.0434 |
+| walmart-amazon | generic         |               31 |       422,380 |       418,781 |     $0.1888 |
+| walmart-amazon | per-dataset     |               27 |       123,297 |        50,518 |     $0.0293 |
+| **all**        | **generic**     |              345 | **1,930,657** | **1,910,815** | **$0.8617** |
+| **all**        | **per-dataset** |              235 |   **766,099** |   **722,954** | **$0.3292** |
+| **all**        | **both**        |              580 | **2,696,756** | **2,633,769** | **$1.1909** |
 
 Call counts include the retries and the repeated attempts described under "Run history", so the
 per-dataset totals are not one clean run each. `dblp-scholar` and `walmart-amazon` each ran exactly
@@ -213,3 +213,102 @@ which is also a determinism check on the whole pipeline.
 - Per-arm CLI logs: `/opt/cursor/artifacts/abp_<dataset>_<mode>.log`
 - Driver log: `/opt/cursor/artifacts/abp_driver.log`
 - This log: `/opt/cursor/artifacts/per-dataset-signature-baseline.md`
+
+---
+
+# Follow-up: applying the BENCHMARKS.md profiling to the same signatures
+
+- **Run label:** per-dataset signature prompt A/B (profiling-derived instructions)
+- **Run id:** `signature-benchmarks-lessons-2026-09-11`
+- **Started (UTC):** 2026-09-11T19:10:44Z
+- **Finished (UTC):** 2026-09-11T22:16:05Z
+- **Student / matching LM:** `openai/gpt-oss-120b-maas` (Vertex AI MaaS, `us-central1`)
+- **Prompts:** unoptimized in every arm. Only the per-dataset signature docstrings and the typed
+  schema field descriptions differ between arms.
+- **Blocking:** identical in every arm, so `gold_pairs_retained` is constant per dataset.
+- **Matching:** 1 ER iteration, concurrency 20, `max_tokens=65536`, temperature 0.
+- **Sampling:** 1,000 records per dataset, seed 42, sampled by ground-truth match group.
+- **CLI:** `serf benchmark --dataset <ds> --signature-mode per-dataset --sample-records 1000
+--seed 42 --max-iterations 1 --concurrency 20`
+
+## Verdict
+
+Mean F1 over the five datasets rises from **0.8648 to 0.8783 (+0.0135)**. Three datasets improve
+(Abt-Buy +0.0375, DBLP-ACM +0.0220, Amazon-Google +0.0098) and two finish at parity within a
+fifth of a point (DBLP-Scholar -0.0003, Walmart-Amazon -0.0016). Precision improves on all five.
+
+The useful result is not the gain but what it took to get it. The first arm, which wrote each
+measured agreement rate into the prompt as a rule, **lost 3.7 F1 points**.
+
+## Arms
+
+| Dataset        | baseline | vetoes | +coverage | +condensed | +additive | reverted | **adopted** |
+| -------------- | -------- | ------ | --------- | ---------- | --------- | -------- | ----------- |
+| dblp-acm       | 0.9568   | 0.9799 | 0.9883    | 0.9883     | 0.9883    | 0.9883   | **0.9788**  |
+| dblp-scholar   | 0.9192   | 0.8893 | 0.9026    | 0.8966     | 0.8811    | 0.9063   | **0.9189**  |
+| abt-buy        | 0.8038   | 0.7747 | 0.8226    | 0.8226     | 0.8226    | 0.8226   | **0.8413**  |
+| amazon-google  | 0.7521   | 0.6971 | 0.7661    | 0.7661     | 0.7661    | 0.7661   | **0.7619**  |
+| walmart-amazon | 0.8921   | 0.8000 | 0.8507    | 0.8696     | 0.8551    | 0.8657   | **0.8905**  |
+| **mean**       | 0.8648   | 0.8282 | 0.8661    | 0.8686     | 0.8626    | 0.8710   | **0.8783**  |
+
+## An agreement rate is not a coverage rate
+
+Every finding in BENCHMARKS.md is reported as agreement on matches against agreement on near
+misses. That says how well an attribute _discriminates_ when you can compare it. It says nothing
+about how often you can compare it, and the `unusable_` column right beside it does:
+
+| Dataset        | attribute the finding turns on | agrees on matches | unusable on matches |
+| -------------- | ------------------------------ | ----------------- | ------------------- |
+| walmart-amazon | `modelno`                      | 0.6784            | **0.3181**          |
+| amazon-google  | `manufacturer`                 | 0.8029            | **0.8218**          |
+| abt-buy        | price comparable               | 0.6150            | **0.7940**          |
+| dblp-scholar   | `year`                         | 0.9996            | **0.5410**          |
+| dblp-acm       | `year`                         | **1.0000**        | **0.0000**          |
+
+Writing the first number into the prompt without the second turns a decider into a vetoer, and the
+matcher then rejects every true pair that could not take the test. Walmart-Amazon lost 0.16 recall
+against an unusable rate of 0.32; Amazon-Google lost 0.10. DBLP-ACM was the only dataset to improve
+on the first arm, and it is the only one whose constraint holds on every gold pair.
+
+The fix is a shared rule stating that an attribute can only rule a pair out when both records carry
+it, that a missing value is not a disagreement, and that whole-field equality is never required.
+That single change recovered recall on all four regressed datasets at once.
+
+## Two prompts contradicted themselves
+
+Both are the same mistake: a rule measured on the _columns_ illustrated with an example from the
+_titles_, where the string is truncated.
+
+- Abt-Buy called code containment near-decisive (0.8195 of matches against 0.0246 of near misses)
+  and then told the matcher to reject a code differing by a trailing character. Containment's own
+  worked example, `MDREX55WH` inside `MDREX55WHI`, is exactly that case.
+- Walmart-Amazon said to compare title-extracted codes character by character and illustrated it
+  with `cb40` against `cb400a`, a truncation that only containment resolves.
+
+## Where the findings did not survive contact
+
+DBLP-Scholar and Walmart-Amazon lost F1 under four successive framings and now keep their original
+literature prompts, each with a docstring note recording the measurement so the gap is not mistaken
+for unfinished work. Scholar's quirks are corruption an LLM already reads through — `â??`, `2002.0`,
+collapsed whitespace — so naming them buys no capability while adding length and rejection pressure.
+
+The one-attribute-difference finding ("the hardest non-matches differ on exactly one short
+attribute, so compare that field exactly") is true of all five datasets, but as a _shared_ rule it
+cost those two recall: it is only safe advice where the field is present. It now sits in the three
+docstrings that measured a gain from it.
+
+## Determinism
+
+DSPy's on-disk completion cache is keyed by the full prompt, so an unchanged docstring replays byte
+for byte. Three datasets were untouched between the `+coverage`, `+condensed` and `+additive` arms
+and reproduced 0.9883 / 0.8226 / 0.7661 exactly in 16 seconds each. That is both a determinism check
+and the reason the arms are comparable: a changed docstring is always a cache miss, so no arm can
+contaminate another.
+
+## Artifacts
+
+- Per-arm result JSON: `data/benchmarks/sig_<arm>/<dataset>_per-dataset_results.json`
+- Per-arm CLI logs: `/opt/cursor/artifacts/sig_<arm>_<dataset>.log`
+- Driver logs: `/opt/cursor/artifacts/sig_<arm>_driver.log`
+- Charts: `/opt/cursor/artifacts/signature_f1_by_arm.png`,
+  `/opt/cursor/artifacts/signature_precision_recall_shift.png`

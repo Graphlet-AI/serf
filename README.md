@@ -440,6 +440,27 @@ full-table row above. Full protocol and cost in
 The typed signatures also improved precision on all five datasets and used less than half the tokens,
 because their output is the list of matched pairs rather than an echo of every entity in the block.
 
+### Profiling-Derived Prompts
+
+The per-dataset signatures above were written from the ER literature. The Spark SQL profiling in
+[BENCHMARKS.md](BENCHMARKS.md) later measured what actually separates matches from near misses, and
+it contradicts the literature in several places. Moving those findings into the signature docstrings
+and typed field descriptions raises mean F1 from 0.8648 to 0.8783 on the same samples.
+
+| Dataset            | F1 before  | F1 after   | Delta   | What the profiling changed                                |
+| ------------------ | ---------- | ---------- | ------- | --------------------------------------------------------- |
+| **Abt-Buy**        | 0.8038     | **0.8413** | +0.0375 | Model-code containment instead of equality                 |
+| **DBLP-ACM**       | 0.9568     | **0.9788** | +0.0220 | Year equality instead of a year of slack; venue crosswalk  |
+| **Amazon-Google**  | 0.7521     | **0.7619** | +0.0098 | Price as real evidence; expand Google's abbreviations      |
+| **DBLP-Scholar**   | **0.9192** | 0.9189     | -0.0003 | Prompt retained: every rewrite scored lower                |
+| **Walmart-Amazon** | **0.8921** | 0.8905     | -0.0016 | Prompt retained: every rewrite scored lower                |
+
+A measured agreement rate is not a licence to reject. Writing the rates in as hard rules first cost
+3.7 F1 points, almost all recall, because the attribute a finding turns on is often missing: Abt-Buy
+has no comparable price on 79.4% of its gold pairs, Amazon-Google no `manufacturer` on 82.2%, and
+Walmart-Amazon no usable `modelno` on 31.8%. Each finding is only adopted where it beat the prompt it
+replaced, and the two signatures that kept their original instructions say so in their docstrings.
+
 ## Project Structure
 
 ```

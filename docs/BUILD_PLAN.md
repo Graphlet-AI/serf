@@ -119,7 +119,7 @@ class BlockingMetrics(TypedDict, total=False): ...
 
 ## Phase 4: Blocking Module (~1.5 hr)
 
-### Task 4.1: src/serf/block/embeddings.py — `EntityEmbedder` (sentence-transformers, Qwen3 default)
+### Task 4.1: src/serf/block/embeddings.py — `EntityEmbedder` (sentence-transformers, bge-small-en-v1.5 default)
 
 ### Task 4.2: src/serf/block/faiss_blocker.py — `FAISSBlocker` (IndexIVFFlat, auto-scale)
 

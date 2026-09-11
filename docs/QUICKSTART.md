@@ -78,7 +78,7 @@ serf run --input data/companies.csv --output data/resolved/ --config er_config.y
 SERF will:
 
 - Load your data
-- Embed entity names using `multilingual-e5-base` (runs in a subprocess to avoid memory conflicts)
+- Embed entity names using `bge-small-en-v1.5` (runs in a subprocess to avoid memory conflicts)
 - Cluster entities into blocks using FAISS
 - Send each block to Gemini Flash for matching
 - Merge matched entities (lowest ID becomes master, others tracked in `source_ids`)
@@ -162,7 +162,8 @@ All settings live in `config.yml`:
 
 ```yaml
 models:
-  embedding: "intfloat/multilingual-e5-base" # Embedding model for blocking
+  embedding: "BAAI/bge-small-en-v1.5" # Embedding model for blocking
+  embedding_prompt: "Represent this sentence for searching relevant passages: " # Prefix the bge/e5 families expect
   student: "openai/gpt-oss-120b-maas" # Student/task LM for matching
   teacher: "gemini/gemini-3.5-flash-lite" # Teacher/reflection LM for GEPA
   llm: "${models.student}" # LLM for matching
@@ -268,7 +269,7 @@ Input Data (CSV/Parquet/Iceberg)
         │
         ▼
 ┌─────────────────┐
-│  Embed Names    │  multilingual-e5-base (subprocess)
+│  Embed Names    │  bge-small-en-v1.5 (subprocess)
 │  (blocking only)│  Only the name/title field is embedded
 └────────┬────────┘
          │

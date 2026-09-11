@@ -45,7 +45,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - **LLM Integration**: DSPy signatures with `dspy.XMLAdapter` for structured output
 - **DSPy**: Programming—not prompting—LMs - a framework for building and optimizing LLM pipelines. See the Project's @assets/DSPy.md [DSPy Programming Guide](assets/DSPy.md) and read the docs at [DSPy Documentation](https://dspy.ai/api/).
 - **Sentence Transformers**: A library for state-of-the-art sentence embeddings
-- **Qwen3 Embeddings**: Top MTEB leaderboard embedding across most categories.
+- **BGE Embeddings**: `BAAI/bge-small-en-v1.5`, the winner of `serf blocking-sweep` on blocking recall per unit of CPU. Needs its instruction prefix, held in `models.embedding_prompt`.
 - **Gemini Models**: Advanced models for matching and merging entities
 - **Data Processing**: Apache Spark (PySpark) for ETL and graph operations
 

@@ -20,7 +20,7 @@ DSPy ReAct agents dynamically orchestrate the entire pipeline, adjusting blockin
 
 ### Phase 1 — Semantic Blocking
 
-Clusters records using **Qwen3 sentence embeddings** and **FAISS IVF** to create efficient blocks for comparison. Auto-scales block size across iterations.
+Clusters records using **bge-small-en-v1.5 sentence embeddings** and **FAISS IVF** to create efficient blocks for comparison. Auto-scales block size across iterations.
 
 ### Phase 2 — Schema Alignment, Matching and Merging
 
@@ -37,7 +37,7 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 | Package Manager    | **uv**                                             |
 | Data Processing    | **PySpark 4.x**                                    |
 | LLM Framework      | **DSPy 3.x** with `XMLAdapter`                     |
-| Embeddings         | **multilingual-e5-base** via sentence-transformers |
+| Embeddings         | **bge-small-en-v1.5** via sentence-transformers    |
 | Vector Search      | **FAISS IndexIVFFlat**                             |
 | Linting/Formatting | **Ruff**                                           |
 | Type Checking      | **zuban** (mypy-compatible)                        |
@@ -114,6 +114,10 @@ serf benchmark --dataset dblp-acm --max-iterations 1 --output data/results/
 serf benchmark --dataset dblp-acm --signature-mode per-dataset \
   --sample-records 1000 --seed 42 --output data/results/
 
+# Compare embedding models on blocking recall alone, no LLM calls and no cost.
+# Candidates default to benchmarks.embedding_candidates in config.yml
+serf blocking-sweep --dataset dblp-acm --output data/blocking_sweep.json
+
 # Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
 # Randomly samples 2000 train / 1000 val / 1000 holdout records, keeping
 # ground-truth match groups whole so gold pairs survive, then blocks within
@@ -172,13 +176,36 @@ resolutions = await DatasetMatcher("walmart-amazon").resolve_blocks(blocks)
 
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.5 Flash-Lite as the teacher/reflection LM for GEPA.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.5 Flash-Lite as the teacher/reflection LM for GEPA.
+
+These rows were measured with the former multilingual-e5-base default and before the FAISS cluster-count fix, so they understate what the current blocking config reaches — see [Blocking Recall](#blocking-recall) for the gap and `experiments/embedding-blocking-sweep.md` for the measurements.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
 | **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8849    | 0.5809 | **0.7014** |
 
 Blocking uses name-only embeddings for tighter semantic clusters. All matching decisions are made by the LLM — no embedding similarity thresholds.
+
+### Blocking Recall
+
+Blocking recall is the share of ground-truth pairs whose two records land in the same block. Matching
+never sees the rest, so this is a hard ceiling on end-to-end recall. Measured with `serf blocking-sweep`
+on the full tables, one pass, `target_block_size: 30`. Full results and the two blocking bugs this
+uncovered are in [experiments/embedding-blocking-sweep.md](experiments/embedding-blocking-sweep.md).
+
+| Embedding                         | DBLP-ACM | DBLP-Scholar | Abt-Buy | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
+| --------------------------------- | -------- | ------------ | ------- | ------------- | -------------- | ---------- | ---------- |
+| **bge-small-en-v1.5** *(default)* | 0.9654   | 0.9048       | 0.8952  | 0.6512        | 0.8545         | **0.8542** | **273**    |
+| gte-base                          | 0.9708   | 0.9211       | 0.8724  | 0.6821        | 0.8514         | 0.8595     | 661        |
+| gte-small                         | 0.9604   | 0.9233       | 0.8824  | 0.6410        | 0.8410         | 0.8496     | 228        |
+| bge-base-en-v1.5                  | 0.9856   | 0.9020       | 0.8569  | 0.6461        | 0.8545         | 0.8490     | 898        |
+| all-MiniLM-L6-v2                  | 0.9717   | 0.9205       | 0.8551  | 0.6435        | 0.7775         | 0.8337     | 133        |
+| all-mpnet-base-v2                 | 0.9793   | 0.9278       | 0.8323  | 0.6590        | 0.7391         | 0.8275     | 697        |
+| multilingual-e5-base *(former)*   | 0.9735   | 0.8898       | 0.8724  | 0.5047        | 0.8025         | 0.8086     | 718        |
+
+`gte-base` edges out the default by 0.005 mean recall for 2.4x the embedding time. Blocking re-embeds
+every record on every ER round, so the smaller model is the better default; set `models.embedding` to
+trade back.
 
 ### Generic vs Per-Dataset Signatures
 

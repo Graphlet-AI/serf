@@ -154,7 +154,7 @@ logger.error(f"Failed to process: {error}")
 - Integration tests: Test with real services (Redis, S3, etc.)
 - Cache mode tests: Test different caching strategies
 - DSPy tests: Test DSPy signatures with mock LM calls
-- Benchmark runs: always pass `--max-iterations 3` to `serf benchmark`. One matching pass can only pair records blocking already put together, so a single iteration measures a different pipeline than the one that ships and its scores are not comparable to anything recorded in the README or `experiments/`.
+- Benchmark runs: always pass `--max-iterations 3` to `serf benchmark`. One matching pass can only pair records blocking already put together, so a single iteration measures a different pipeline than the one that ships and its scores are not comparable to anything recorded in the README or `experiments/`. Three iterations is for comparability, not because it is better: measured across all five datasets it raises recall everywhere and lowers precision everywhere, only two datasets gain F1, and the mean falls 0.0895. DBLP-Scholar loses 0.4846 F1 because merging collapses connected components and scoring asserts every cross pair between them. Never quote a DBLP-Scholar number without naming that effect.
 
 ### Spark Development
 

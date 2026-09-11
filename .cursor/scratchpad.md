@@ -145,6 +145,17 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Findings adopted only where they beat the prompt they replaced; the other two say why in-prompt
 - [x] Regression tests pin each adopted instruction to the measurement that forced it
 - [x] LOW / HIGH tiers removed; one blocking embedding, `BAAI/bge-small-en-v1.5`, always
+- [x] `assets/DSPy-Flex.md` written from four sources, every API claim checked against dspy 3.3.1
+- [x] `serf prompts` added: renders each signature's instructions, fields and XML skeleton, no LLM call
+- [x] Pre-GEPA prompt report captured for all five signatures plus the shared one
+- [x] `serf train` added: GEPA over the per-dataset signature with an enumerating feedback metric
+- [x] `DatasetMatcher` loads a trained program; `serf benchmark --trained-prompts` measures it
+- [x] Empty-block scoring hole fixed in both `er_metric` and the new dataset metric
+- [x] 517 tests pass; ruff, ruff format and zuban clean
+- [x] Remaining three datasets rerun at `--max-iterations 3`; all five now measured at 1 vs 3
+- [x] Iteration finding written up: recall up on all five, precision down on all five, mean F1 -0.0895
+- [x] Merge/expansion closure identified as the cause and demonstrated with the repo's own functions
+- [ ] Live `serf train` smoke run on DBLP-ACM finishes and reports a validation score
 
 ## Executor's Feedback or Assistance Requests
 
@@ -204,7 +215,42 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   prompt A/B arms used `--max-iterations 1` to keep the six runs affordable, which measures a
   single-pass pipeline rather than the shipping one and makes those F1 numbers incomparable to the
   README and `experiments/` figures. Three is also the `er.max_iterations` config default and the
-  CLI default, so the flag is belt-and-braces rather than an override.
+  CLI default, so the flag is belt-and-braces rather than an override. It is for comparability, not
+  because it scores better: measured on all five datasets it costs 0.0895 mean F1 against one
+  iteration.
+
+- **A later ER round is priced in precision, and the price scales with what already merged.**
+  Three iterations raised recall on all five datasets and lowered precision on all five; only
+  Abt-Buy and DBLP-ACM come out ahead on F1. `merge_matched_entities` collapses each connected
+  component, and `expand_pairs` then asserts every cross pair between two merged components, so one
+  wrong pair between components of a and b records costs a x b false record pairs. DBLP-Scholar
+  loses 0.4846 F1 because Google Scholar holds several records per publication, so its components
+  are large: 299 round-3 decisions were scored as 1,080 record pairs, 776 of them false. Merging a
+  lot is not the problem — DBLP-ACM sheds 46.6% of its entities in one round and amplifies 1.01x.
+  Merging into large components is.
+
+- **Pick the baseline arm by its prompts, not by its label.** The first version of the 1-vs-3
+  iteration chart compared the three-iteration runs against the per-dataset arm of the original
+  signature A/B, which ran the pre-profiling prompts. That mixes a prompt change into an iteration
+  comparison and it flipped a conclusion: Amazon-Google looked like a +0.0664 gain and is actually a
+  -0.0301 loss. The correct baseline is `sig_final2`, the adopted-prompt arm, and it is verifiable
+  rather than assumed — because DSPy's cache is prompt-keyed, each three-iteration run's round-1
+  predicted-pair count reproduces the one-iteration arm exactly (466 / 374 / 243 / 62 / 272).
+
+- **`f1_score` returns 0.0 when both sets are empty, which is wrong for a feedback metric.**
+  `precision` returns 0.0 on an empty prediction, so a block with no true pair scored zero for
+  emitting nothing — the only correct answer available. Both `er_metric` and the per-dataset metric
+  now special-case that as 1.0. Left alone it teaches GEPA to guess.
+
+- **Extracting a shared module can be cheaper than breaking an import cycle.** `serf.dspy.train`
+  needs `typed_sides` from `serf.match.dataset_matcher`, and the matcher needs to load what training
+  saved. Putting the loader in `train` would cycle, so the path and loader live in
+  `serf.dspy.trained`, which depends only on `dataset_signatures` and `config`.
+
+- **Pre-commit silently skips untracked files.** `pre-commit run --files <new file>` reports nothing
+  and passes until the file is `git add`ed. A new Markdown file will look prettier-clean when it is
+  not. Also: `pre-commit run --all-files` reformats long-committed Markdown that predates the hook,
+  so check `git status` afterwards and revert files the change did not touch.
 
 - **`config.get(key)` raises `KeyError` for a missing key; it does not return `None`.** It returns a
   default only when one is passed as the second argument. A test that a config key is gone has to use

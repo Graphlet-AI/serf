@@ -143,6 +143,22 @@ serf benchmark --dataset amazon-google --blocking-strategy union \
 # ground-truth match groups whole so gold pairs survive, then blocks within
 # each split to build the BlockMatch examples. Val is filled first.
 serf optimize --dataset dblp-acm --signature block-match
+
+# Show the signatures and prompts matching actually sends, before any tuning.
+# A signature's docstring is its prompt, so this prints the instructions, the
+# field list and the XML skeleton the answer has to fill. Makes no LLM call
+serf prompts --dataset abt-buy
+serf prompts --output data/signatures.md
+
+# Optimize the per-dataset signature with GEPA, which is the prompt the
+# benchmark runs. `serf optimize` covers the shared BlockMatch, EntityMerge and
+# EdgeResolve signatures instead. Writes to optimize.trained_dir
+serf train --dataset dblp-acm --auto light
+
+# Then measure the trained prompt end to end, and read what GEPA wrote
+serf benchmark --dataset dblp-acm --signature-mode per-dataset --trained-prompts \
+  --sample-records 1000 --seed 42
+serf prompts --dataset dblp-acm --trained --instructions-only
 ```
 
 ### Python API
@@ -470,6 +486,32 @@ A measured agreement rate is not a licence to reject. Writing the rates in as ha
 has no comparable price on 79.4% of its gold pairs, Amazon-Google no `manufacturer` on 82.2%, and
 Walmart-Amazon no usable `modelno` on 31.8%. Each finding is only adopted where it beat the prompt it
 replaced, and the two signatures that kept their original instructions say so in their docstrings.
+
+### How Many ER Iterations
+
+Each ER iteration re-blocks what the previous one merged, so later rounds can pair records that
+blocking never put together on the first pass. That is a recall instrument, and it is priced in
+precision. Same samples, same prompts, only the iteration count differs:
+
+| Dataset            | F1 @1      | F1 @3      | Delta   | Recall @1 -> @3  | Precision @1 -> @3 |
+| ------------------ | ---------- | ---------- | ------- | ---------------- | ------------------ |
+| **Abt-Buy**        | 0.8413     | **0.9249** | +0.0837 | 0.7303 -> 0.9094 | 0.9920 -> 0.9409   |
+| **DBLP-ACM**       | 0.9788     | **0.9853** | +0.0066 | 0.9685 -> 0.9874 | 0.9893 -> 0.9833   |
+| **Walmart-Amazon** | **0.8905** | 0.8675     | -0.0230 | 0.8133 -> 0.9600 | 0.9839 -> 0.7912   |
+| **Amazon-Google**  | **0.7619** | 0.7318     | -0.0301 | 0.6493 -> 0.8580 | 0.9218 -> 0.6379   |
+| **DBLP-Scholar**   | **0.9189** | 0.4343     | -0.4846 | 0.8500 -> 0.9500 | 1.0000 -> 0.2815   |
+
+Recall rose on all five and precision fell on all five, but only two datasets come out ahead, and
+the mean falls 0.0895. The reason is that merging collapses each connected component of the
+predicted pairs, and scoring then asserts every cross pair between two merged components: one wrong
+pair between components of a and b records costs a x b false record pairs. DBLP-Scholar is worst
+affected because Google Scholar legitimately holds several records per publication, so its
+components are large. Its 299 third-round decisions were scored as 1,080 record pairs, 776 of them
+false.
+
+The default stays three iterations for comparability, but it is not free. Quote DBLP-Scholar at one
+iteration or name this effect. Details in
+[experiments/per-dataset-signature-baseline.md](experiments/per-dataset-signature-baseline.md).
 
 ## Project Structure
 

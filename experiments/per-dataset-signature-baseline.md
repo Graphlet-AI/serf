@@ -305,34 +305,113 @@ and reproduced 0.9883 / 0.8226 / 0.7661 exactly in 16 seconds each. That is both
 and the reason the arms are comparable: a changed docstring is always a cache miss, so no arm can
 contaminate another.
 
-## Confirming the adopted prompts at three ER iterations
+## The adopted prompts at three ER iterations, on all five datasets
 
 Every arm above ran `--max-iterations 1` to keep six arms across five datasets affordable. One pass
 is not the pipeline, though: it can only pair records blocking already put together, so the arm
-scores understate the shipping configuration and are comparable only to each other. Re-running the
-adopted prompts at the default three iterations, same 1,000-record samples at seed 42:
+scores understate what a full run reaches and are comparable only to each other. Re-running the
+adopted prompts at the default three iterations, same 1,000-record samples at seed 42, same
+blocking, same prompts, so the iteration count is the only difference:
 
-| Dataset  | 1 iteration | 3 iterations | Delta   | Precision | Recall | Seconds |
-| -------- | ----------- | ------------ | ------- | --------- | ------ | ------- |
-| dblp-acm | 0.9788      | **0.9853**   | +0.0065 | 0.9833    | 0.9874 | 44      |
-| abt-buy  | 0.8413      | **0.9249**   | +0.0836 | 0.9409    | 0.9094 | 149     |
+| Dataset        | 1 iteration | 3 iterations |   Delta | P @1   | P @3       | R @1   | R @3       | Seconds |
+| -------------- | ----------- | ------------ | ------: | ------ | ---------- | ------ | ---------- | ------: |
+| abt-buy        | 0.8413      | **0.9249**   | +0.0837 | 0.9920 | 0.9409     | 0.7303 | **0.9094** |     149 |
+| dblp-acm       | 0.9788      | **0.9853**   | +0.0066 | 0.9893 | 0.9833     | 0.9685 | **0.9874** |      44 |
+| walmart-amazon | **0.8905**  | 0.8675       | -0.0230 | 0.9839 | 0.7912     | 0.8133 | **0.9600** |      79 |
+| amazon-google  | **0.7619**  | 0.7318       | -0.0301 | 0.9218 | 0.6379     | 0.6493 | **0.8580** |     109 |
+| dblp-scholar   | **0.9189**  | 0.4343       | -0.4846 | 1.0000 | **0.2815** | 0.8500 | **0.9500** |     377 |
+| **mean**       | **0.8783**  | 0.7888       | -0.0895 |        |            |        |            |         |
 
-Abt-Buy is where iteration earns its keep, and the mechanism is visible in the entity counts: the
-run contracts 560 entities to 527, a 5.9% reduction, because each round re-blocks what the previous
-round merged. Its end-to-end recall of 0.9094 is above the 0.8912 single-pass blocking recall
-measured for the same dataset, which is only paradoxical if you read that figure as a ceiling. It
-caps a single pass, not a run. DBLP-ACM gains little for the same reason it was already near the
-top: one pass merges only 2 of its 528 entities, so there is almost nothing for a second round to
-re-block.
+**Three iterations is not a uniform win. Two of five datasets gain and the mean F1 falls 0.0895.**
+The earlier two-dataset table in this log read as a win because Abt-Buy and DBLP-ACM happen to be
+the two datasets that gain; extending it to all five reverses the conclusion.
 
-All benchmarking from here uses `--max-iterations 3`.
+The direction is the same everywhere even where the net result is not. **Recall rose on all five
+datasets and precision fell on all five.** Iteration is a recall instrument, and whether it pays
+depends entirely on how much precision the closure step spends to buy that recall.
+
+### The comparison is exact, not approximate
+
+Each three-iteration run's first round reproduced the one-iteration arm's predicted-pair count
+exactly: 466 for DBLP-ACM, 374 for Abt-Buy, 243 for Amazon-Google, 62 for Walmart-Amazon and 272 for
+DBLP-Scholar, against 466 / 374 / 243 / 62 / 272 in `sig_final2`. DSPy's on-disk cache is keyed by
+the full prompt, so identical round-1 counts confirm the two arms ran the same prompts over the same
+blocks. Everything that differs after round 1 is the iteration count and nothing else.
+
+### Why a later round can lose more precision than it gains
+
+`merge_matched_entities` collapses each **connected component** of the predicted pairs into one
+entity, and `expand_pairs` then asserts every cross pair between two merged components. So a pair
+predicted in round 2 or 3 is not worth one record pair, it is worth a x b of them, where a and b are
+the sizes of the two components being joined. Demonstrated with the repo's own functions in
+`/opt/cursor/artifacts/iteration_closure_mechanism.log`:
+
+- Round 1 expansion is the identity, because every entity is still a single record.
+- Ten records with five predicted pairs merge to five entities of sizes `[4, 3, 1, 1, 1]`, since a
+  component is not a pair.
+- One round-2 pair between the size-4 and size-3 entities asserts **12** record pairs.
+- Two components of 2 / 4 / 8 / 16 records cost **4 / 16 / 64 / 256** false pairs per wrong decision.
+
+That amplification is visible directly in the run logs as the gap between what the matcher decided
+and what got scored:
+
+| Dataset        | Entities after round 1 | Round-3 decisions | Scored record pairs | Amplification |
+| -------------- | ---------------------: | ----------------: | ------------------: | ------------: |
+| dblp-acm       |           535 (-46.6%) |               475 |                 478 |         1.01x |
+| abt-buy        |           626 (-37.4%) |               476 |                 491 |         1.03x |
+| walmart-amazon |            938 (-6.2%) |                78 |                  91 |         1.17x |
+| amazon-google  |           759 (-24.3%) |               336 |                 464 |         1.38x |
+| dblp-scholar   |           732 (-26.8%) |               299 |            **1080** |     **3.61x** |
+
+Note that DBLP-ACM merges the most aggressively of all five (46.6% of entities gone after one round)
+and still amplifies almost nothing. Merging a lot is not the problem. Merging into **large**
+components is, and that is a property of the data.
+
+### DBLP-Scholar is the failure case, and it is structural
+
+DBLP-Scholar loses 0.4846 F1, falling from 0.9189 to 0.4343 on precision alone: 1.0000 to 0.2815,
+with 776 false pairs against 304 true ones. Its 299 round-3 decisions were scored as 1,080 record
+pairs.
+
+The cause is that Google Scholar legitimately holds several records for one publication — reprints,
+preprints, differently-cited versions — so correct merges there produce components of five, ten or
+more records rather than the clean 1:1 pairs DBLP-ACM produces. Once components are that large, one
+wrong join is worth dozens of false record pairs, and the matcher does not have to be much worse to
+be scored far worse. The one-iteration arm's perfect 1.0000 precision on this dataset is evidence
+the matcher itself is not the problem.
+
+This is a scoring-and-closure interaction, not a prompt problem, so GEPA cannot fix it. The
+candidate fixes are to cap iterations per dataset, to require more than one predicted pair before
+joining two multi-record components, or to score against the component structure rather than its
+full cross product. None is attempted here.
+
+### Reading the recall numbers
+
+Abt-Buy's end-to-end recall of 0.9094 is above the 0.8912 single-pass blocking recall measured for
+the same dataset, which is only paradoxical if that figure is read as a ceiling. It caps a single
+pass, not a run: each round re-blocks what the previous round merged, so pairs blocking missed the
+first time can be found later. That is exactly the mechanism, and on Abt-Buy it is worth +0.1791
+recall for -0.0511 precision, which is a good trade. On DBLP-Scholar it is worth +0.1000 recall for
+-0.7185 precision, which is not.
+
+### What this means for the standing protocol
+
+Benchmarking continues to use `--max-iterations 3` so results stay comparable to each other and to
+the shipping default. The cost of that choice is now recorded rather than assumed: it is worth
+0.0895 mean F1 against one iteration on this sample, almost all of it DBLP-Scholar. Any headline
+figure for DBLP-Scholar should be quoted at one iteration or with this effect named.
 
 ## Artifacts
 
-- Per-arm result JSON: `data/benchmarks/sig_<arm>/<dataset>_per-dataset_results.json`
+- Per-arm result JSON: `data/benchmarks/sig_<arm>/<dataset>_per-dataset_results.json`; the adopted
+  arm is `sig_final2`
 - Per-arm CLI logs: `/opt/cursor/artifacts/sig_<arm>_<dataset>.log`
 - Driver logs: `/opt/cursor/artifacts/sig_<arm>_driver.log`
-- Three-iteration runs: `data/benchmarks/tier_removal/<dataset>_per-dataset_results.json`,
-  logs at `/opt/cursor/artifacts/bench_<dataset>_iter3.log`
+- Three-iteration runs: `data/benchmarks/tier_removal/<dataset>_per-dataset_results.json` for
+  DBLP-ACM and Abt-Buy, `data/benchmarks/iter3_rerun/<dataset>/<dataset>_per-dataset_results.json`
+  for the other three, logs at `/opt/cursor/artifacts/bench_<dataset>_iter3.log`
+- Closure mechanism demonstration: `/opt/cursor/artifacts/iteration_closure_mechanism.log`
 - Charts: `/opt/cursor/artifacts/signature_f1_by_arm.png`,
-  `/opt/cursor/artifacts/signature_precision_recall_shift.png`
+  `/opt/cursor/artifacts/signature_precision_recall_shift.png`,
+  `/opt/cursor/artifacts/iterations_all_five.png` from
+  `/opt/cursor/artifacts/iterations_chart.py`

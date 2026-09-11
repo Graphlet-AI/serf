@@ -223,16 +223,17 @@ the before/after are in [experiments/xml-adapter-block-loss.md](experiments/xml-
 The standard entity resolution scoreboard is the Papers With Code [Entity Resolution](https://paperswithcode.com/task/entity-resolution)
 task. Papers With Code was sunset in 2025 and now redirects to Hugging Face, so the live mirror of
 those boards is [OpenCodePapers](https://opencodepapers-b7572d.gitlab.io/benchmarks/entity-resolution-on-abt-buy.html).
-SERF is a 1,000-record sample at seed 42, three ER iterations, `gpt-oss-120b` matching, no training.
+SERF is a 1,000-record sample at seed 42, three ER iterations, `--signature-mode per-dataset`,
+`gpt-oss-120b` matching, no training.
 
 | Model                  | Abt-Buy F1 | Task                      | Trained on the benchmark |
 | ---------------------- | ---------- | ------------------------- | ------------------------ |
 | gpt4-0613 zero-shot    | 95.78      | pair classification       | no                       |
 | RoBERTa-SupCon         | 94.29      | pair classification       | yes                      |
 | gpt-4o-mini fine-tuned | 94.09      | pair classification       | yes                      |
+| **SERF gpt-oss-120b**  | **92.49**  | **end-to-end resolution** | **no**                   |
 | gpt-4o-2024-08-06      | 92.20      | pair classification       | no                       |
 | RobEM                  | 90.90      | pair classification       | yes                      |
-| **SERF gpt-oss-120b**  | **90.38**  | **end-to-end resolution** | **no**                   |
 | HierGAT                | 89.80      | pair classification       | yes                      |
 | Ditto                  | 89.33      | pair classification       | yes                      |
 | gpt-4o-mini            | 87.68      | pair classification       | no                       |
@@ -240,9 +241,17 @@ SERF is a 1,000-record sample at seed 42, three ER iterations, `gpt-oss-120b` ma
 
 The comparison is indicative, not like-for-like. Every leaderboard entry scores pair classification:
 the candidate pairs are handed to the model and it labels each one. SERF does the whole task, so its
-recall carries the pairs blocking never proposed — an Abt-Buy blocking ceiling of 0.8912 on this
-sample — which a pair classifier never pays for. Read the row as "end-to-end, untrained, around
-fine-tuned Ditto", not as a rank.
+recall carries every pair blocking never proposed, which a pair classifier never pays for. Read the
+row as "end-to-end, untrained, in the neighbourhood of an unfine-tuned frontier model", not as a rank.
+
+The row moved up from 90.38, which was measured with the shared `BlockMatch` signature before the
+per-dataset signatures existed. Two changes account for the difference and both are recorded
+elsewhere in this README: the typed per-dataset signatures rewritten from the `BENCHMARKS.md`
+profiling, and running the three ER iterations the pipeline is designed around. A single pass scores
+0.8413 on the same sample, because one matching pass can only pair records blocking already put
+together — which is also why single-pass blocking recall of 0.8912 is not the ceiling it looks like.
+Re-blocking the entities merged by the previous round gives separated records another chance to meet,
+and end-to-end recall here reaches 0.9094.
 
 ### Blocking Recall
 

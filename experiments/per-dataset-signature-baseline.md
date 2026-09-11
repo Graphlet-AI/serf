@@ -305,10 +305,34 @@ and reproduced 0.9883 / 0.8226 / 0.7661 exactly in 16 seconds each. That is both
 and the reason the arms are comparable: a changed docstring is always a cache miss, so no arm can
 contaminate another.
 
+## Confirming the adopted prompts at three ER iterations
+
+Every arm above ran `--max-iterations 1` to keep six arms across five datasets affordable. One pass
+is not the pipeline, though: it can only pair records blocking already put together, so the arm
+scores understate the shipping configuration and are comparable only to each other. Re-running the
+adopted prompts at the default three iterations, same 1,000-record samples at seed 42:
+
+| Dataset  | 1 iteration | 3 iterations | Delta   | Precision | Recall | Seconds |
+| -------- | ----------- | ------------ | ------- | --------- | ------ | ------- |
+| dblp-acm | 0.9788      | **0.9853**   | +0.0065 | 0.9833    | 0.9874 | 44      |
+| abt-buy  | 0.8413      | **0.9249**   | +0.0836 | 0.9409    | 0.9094 | 149     |
+
+Abt-Buy is where iteration earns its keep, and the mechanism is visible in the entity counts: the
+run contracts 560 entities to 527, a 5.9% reduction, because each round re-blocks what the previous
+round merged. Its end-to-end recall of 0.9094 is above the 0.8912 single-pass blocking recall
+measured for the same dataset, which is only paradoxical if you read that figure as a ceiling. It
+caps a single pass, not a run. DBLP-ACM gains little for the same reason it was already near the
+top: one pass merges only 2 of its 528 entities, so there is almost nothing for a second round to
+re-block.
+
+All benchmarking from here uses `--max-iterations 3`.
+
 ## Artifacts
 
 - Per-arm result JSON: `data/benchmarks/sig_<arm>/<dataset>_per-dataset_results.json`
 - Per-arm CLI logs: `/opt/cursor/artifacts/sig_<arm>_<dataset>.log`
 - Driver logs: `/opt/cursor/artifacts/sig_<arm>_driver.log`
+- Three-iteration runs: `data/benchmarks/tier_removal/<dataset>_per-dataset_results.json`,
+  logs at `/opt/cursor/artifacts/bench_<dataset>_iter3.log`
 - Charts: `/opt/cursor/artifacts/signature_f1_by_arm.png`,
   `/opt/cursor/artifacts/signature_precision_recall_shift.png`

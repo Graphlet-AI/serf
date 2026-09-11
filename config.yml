@@ -78,6 +78,12 @@ er:
     edges: "data/iteration_{iteration}/edges"
     metrics: "data/iteration_{iteration}/metrics"
 
+analyze:
+  # `serf profile-benchmark` joins every left record against the right table on
+  # shared tokens, which is the widest shuffle in the project. The default 1g
+  # driver runs out of heap on dblp-scholar's 64K-row right table.
+  spark_driver_memory: "4g"
+
 mlflow:
   tracking_uri: "http://127.0.0.1:5001"
   experiment_name: "SERF-Entity-Resolution"

@@ -716,6 +716,87 @@ def download(dataset: str, output_path: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# profile-benchmark  (exploratory analysis of a benchmark dataset)
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="profile-benchmark", context_settings={"show_default": True})
+@click.option(
+    "--dataset",
+    "-d",
+    "datasets",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    multiple=True,
+    help="Benchmark to profile. Repeatable. Defaults to every benchmark",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Write the Markdown report here instead of printing it",
+)
+@click.option(
+    "--json",
+    "json_path",
+    type=click.Path(),
+    required=False,
+    help="Also write the structured profile as JSON here",
+)
+@click.option(
+    "--examples",
+    type=int,
+    default=6,
+    help="How many match and mismatch examples to report per dataset",
+)
+@click.option(
+    "--top-values",
+    type=int,
+    default=6,
+    help="How many frequent values to report per column",
+)
+def profile_benchmark_command(
+    datasets: tuple[str, ...],
+    output_path: str | None,
+    json_path: str | None,
+    examples: int,
+    top_values: int,
+) -> None:
+    """Run exploratory analysis over the benchmark datasets.
+
+    Reports per-column completeness and Magellan discriminativeness, the most
+    common values, gold pair cardinality, how often each attribute agrees on a
+    true match against the hardest non-matches a token blocker produces, and
+    worked examples of both a match and a non-match that string similarity
+    gets wrong. Everything is computed in Spark SQL.
+    """
+    from serf.analyze.benchmarks import format_profile, profile_benchmark
+
+    selected = list(datasets) if datasets else BENCHMARK_DATASETS
+    reports: list[str] = []
+    profiles: dict[str, Any] = {}
+    for name in selected:
+        click.echo(f"Profiling {name}...", err=True)
+        profile = profile_benchmark(name, examples=examples, top_values=top_values)
+        profiles[name] = profile
+        reports.append(format_profile(profile))
+
+    report = "\n".join(reports)
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(report)
+        click.echo(f"Wrote {output_path}", err=True)
+    else:
+        click.echo(report)
+
+    if json_path:
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(profiles, f, indent=2, default=str)
+        click.echo(f"Wrote {json_path}", err=True)
+
+
+# ---------------------------------------------------------------------------
 # blocking-sweep  (compare embedding models on blocking recall)
 # ---------------------------------------------------------------------------
 

@@ -25,6 +25,7 @@ def test_cli_help() -> None:
     assert "benchmark-all" in result.output
     assert "download" in result.output
     assert "optimize" in result.output
+    assert "profile-benchmark" in result.output
 
 
 def test_cli_version() -> None:
@@ -85,6 +86,19 @@ def test_benchmark_help() -> None:
     assert "amazon-google" in result.output
     assert "--embedding-tier" in result.output
     assert "--blocking-strategy" in result.output
+
+
+def test_profile_benchmark_help() -> None:
+    """The profiler exposes dataset selection and both output formats."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["profile-benchmark", "--help"])
+    assert result.exit_code == 0
+    assert "--dataset" in result.output
+    assert "--output" in result.output
+    assert "--json" in result.output
+    assert "--examples" in result.output
+    assert "--top-values" in result.output
+    assert "dblp-scholar" in result.output
 
 
 def test_embedding_tiers_are_configured() -> None:

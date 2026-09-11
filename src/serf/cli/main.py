@@ -837,9 +837,12 @@ def profile_benchmark_command(
 )
 @click.option(
     "--blocking-strategy",
-    type=click.Choice(["name", "json", "both"], case_sensitive=False),
+    type=click.Choice(["name", "json", "union", "both", "all"], case_sensitive=False),
     default="name",
-    help="Embed the name alone, every field as JSON, or score both",
+    help=(
+        "Embed the name alone, every field as JSON, the union of both blockings,"
+        " or score name and json separately (both) or all three (all)"
+    ),
 )
 @click.option(
     "--sample",
@@ -878,10 +881,12 @@ def blocking_sweep(
     rounds: int,
     output_path: str | None,
 ) -> None:
-    """Compare embedding models on name-only blocking recall.
+    """Compare embedding models on blocking recall.
 
     Blocking recall is the share of gold pairs whose two records land in the same
     block, which caps the recall any matcher can reach. No LLM calls are made.
+    Each row also reports the distinct pairs blocking would hand the matcher, so
+    recall bought with extra inference spend is visible as such.
 
     With --rounds above one, every gold pair that shares a block is merged before
     the next round, so the cumulative recall is the ceiling a multi-round run
@@ -910,9 +915,10 @@ def blocking_sweep(
         ]
 
     targets = list(datasets) if datasets else BENCHMARK_DATASETS
-    strategies = (
-        ["name", "json"] if blocking_strategy.lower() == "both" else [blocking_strategy.lower()]
-    )
+    strategies = {
+        "both": ["name", "json"],
+        "all": ["name", "json", "union"],
+    }.get(blocking_strategy.lower(), [blocking_strategy.lower()])
 
     results = []
     for name in targets:
@@ -941,13 +947,109 @@ def blocking_sweep(
                     f"  [{strategy}] {label:>34}{round_note}"
                     f"  recall {result.blocking_recall:.4f}"
                     f"  ({result.co_blocked}/{result.gold_pairs}){cumulative}"
-                    f"  {result.blocks} blocks  {result.elapsed_seconds:.0f}s"
+                    f"  {result.blocks} blocks"
+                    f"  {result.blocked_pairs} pairs  {result.elapsed_seconds:.0f}s"
                 )
 
     if output_path:
         with open(output_path, "w") as handle:
             json.dump(results, handle, indent=2)
         click.echo(f"\nResults saved to {output_path}")
+
+
+@cli.command(name="mteb-rank", context_settings={"show_default": True})
+@click.option(
+    "--category",
+    "categories",
+    type=str,
+    multiple=True,
+    help="MTEB category to score. Repeatable. Defaults to every configured category",
+)
+@click.option(
+    "--model",
+    "-m",
+    "models",
+    type=str,
+    multiple=True,
+    help="Model to score. Repeatable. Defaults to the config candidates",
+)
+@click.option(
+    "--candidate-set",
+    type=click.Choice(["small", "large", "all"], case_sensitive=False),
+    default="all",
+    help="Which configured candidate list to score, ignored when --model is given",
+)
+@click.option(
+    "--sweep",
+    "sweep_path",
+    type=click.Path(exists=True),
+    required=False,
+    help="Blocking sweep JSON to correlate each category against",
+)
+@click.option(
+    "--strategy",
+    type=click.Choice(["name", "json", "union"], case_sensitive=False),
+    default="name",
+    help="Blocking strategy to read from the sweep",
+)
+def mteb_rank(
+    categories: tuple[str, ...],
+    models: tuple[str, ...],
+    candidate_set: str,
+    sweep_path: str | None,
+    strategy: str,
+) -> None:
+    """Rank candidate embeddings by their published MTEB scores.
+
+    Given a blocking sweep with --sweep, also reports how well each category
+    orders the candidates the way measured blocking recall does. A category
+    that cannot beat a coin flip there is not worth selecting candidates on.
+    """
+    from serf.eval.mteb_scores import (
+        configured_categories,
+        correlate_categories,
+        measured_recall,
+        score_models,
+    )
+
+    if models:
+        wanted = list(models)
+    else:
+        keys = {
+            "small": ["benchmarks.embedding_candidates"],
+            "large": ["benchmarks.embedding_candidates_large"],
+            "all": ["benchmarks.embedding_candidates", "benchmarks.embedding_candidates_large"],
+        }[candidate_set.lower()]
+        configured: list[dict[str, object]] = []
+        for key in keys:
+            configured.extend(cast(list[dict[str, object]], serf_config.get(key, [])))
+        wanted = sorted({str(entry["model"]) for entry in configured})
+
+    targets = list(categories) if categories else configured_categories()
+
+    for category in targets:
+        click.echo(f"\n{category}")
+        for entry in score_models(wanted, category):
+            note = "" if entry.complete else f"  ({entry.tasks_found}/{entry.tasks_expected} tasks)"
+            click.echo(f"  {entry.score:>6.2f}  {entry.model}{note}")
+
+    if not sweep_path:
+        return
+
+    with open(sweep_path) as handle:
+        sweep = json.load(handle)
+    recalls = measured_recall(sweep, strategy=strategy)
+    if not recalls:
+        click.echo(f"\nNo {strategy} results in {sweep_path}")
+        return
+
+    click.echo(f"\nMeasured {strategy} blocking recall, mean over datasets")
+    for model, recall in sorted(recalls.items(), key=lambda item: item[1], reverse=True):
+        click.echo(f"  {recall:.4f}  {model}")
+
+    click.echo("\nDoes an MTEB category predict blocking recall? (Spearman)")
+    for category, correlation, count in correlate_categories(recalls, targets):
+        click.echo(f"  {correlation:>7.4f}  {category}  (n={count})")
 
 
 # ---------------------------------------------------------------------------
@@ -1193,9 +1295,12 @@ def optimize(
 )
 @click.option(
     "--blocking-strategy",
-    type=click.Choice(["name", "json"], case_sensitive=False),
+    type=click.Choice(["name", "json", "union"], case_sensitive=False),
     default=None,
-    help="Embed the name alone or every field as JSON with field names inline",
+    help=(
+        "Embed the name alone, every field as JSON with field names inline,"
+        " or block on both and keep the blocks from each"
+    ),
 )
 def benchmark(
     dataset: str,

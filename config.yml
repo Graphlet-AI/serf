@@ -52,7 +52,10 @@ er:
     method: semantic
     # What text gets embedded. "name" uses the name or title alone, which keeps
     # clusters tight. "json" uses every field as a JSON object with the field
-    # names inline, which helps where names alone are ambiguous.
+    # names inline, which helps where names alone are ambiguous. "union" blocks
+    # twice, once each way, and keeps the blocks from both, so a pair only has
+    # to be caught by one view. The union roughly doubles the pairs the matcher
+    # is asked to judge, which is why it is not the default.
     strategy: name
     target_block_size: 30
     max_block_size: 100
@@ -144,6 +147,63 @@ benchmarks:
       prompt: "Represent this sentence for searching relevant passages: "
     - model: "BAAI/bge-large-en-v1.5"
       prompt: "Represent this sentence for searching relevant passages: "
+  # MTEB(eng, v2) task names per category, read by `serf mteb-rank` to score
+  # candidate embeddings straight from the `mteb/results` dataset.
+  #
+  # PairClassification is the matching category: every task asks whether two
+  # short texts denote the same thing, scored by average precision over cosine
+  # similarity, which is the entity matching decision. It is the category to
+  # rank blocking candidates by. Clustering is kept for comparison because it
+  # is the category the large candidates were originally chosen on, and the
+  # rest are here so the comparison covers the whole benchmark rather than the
+  # two categories that happened to be interesting.
+  mteb_tasks:
+    PairClassification:
+      - "SprintDuplicateQuestions"
+      - "TwitterSemEval2015"
+      - "TwitterURLCorpus"
+    Clustering:
+      - "ArXivHierarchicalClusteringP2P"
+      - "ArXivHierarchicalClusteringS2S"
+      - "BiorxivClusteringP2P.v2"
+      - "MedrxivClusteringP2P.v2"
+      - "MedrxivClusteringS2S.v2"
+      - "StackExchangeClustering.v2"
+      - "StackExchangeClusteringP2P.v2"
+      - "TwentyNewsgroupsClustering.v2"
+    STS:
+      - "BIOSSES"
+      - "SICK-R"
+      - "STS12"
+      - "STS13"
+      - "STS14"
+      - "STS15"
+      - "STS17"
+      - "STS22.v2"
+      - "STSBenchmark"
+    Retrieval:
+      - "ArguAna"
+      - "CQADupstackGamingRetrieval"
+      - "CQADupstackUnixRetrieval"
+      - "ClimateFEVERHardNegatives"
+      - "FEVERHardNegatives"
+      - "FiQA2018"
+      - "HotpotQAHardNegatives"
+      - "SCIDOCS"
+      - "TRECCOVID"
+      - "Touche2020Retrieval.v3"
+    Classification:
+      - "AmazonCounterfactualClassification"
+      - "Banking77Classification"
+      - "ImdbClassification"
+      - "MTOPDomainClassification"
+      - "MassiveIntentClassification"
+      - "MassiveScenarioClassification"
+      - "ToxicConversationsClassification"
+      - "TweetSentimentExtractionClassification"
+    Reranking:
+      - "AskUbuntuDupQuestions"
+      - "MindSmallReranking"
   datasets:
     walmart-amazon:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"

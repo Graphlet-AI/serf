@@ -26,6 +26,8 @@ def test_cli_help() -> None:
     assert "download" in result.output
     assert "optimize" in result.output
     assert "profile-benchmark" in result.output
+    assert "blocking-sweep" in result.output
+    assert "mteb-rank" in result.output
 
 
 def test_cli_version() -> None:
@@ -86,6 +88,27 @@ def test_benchmark_help() -> None:
     assert "amazon-google" in result.output
     assert "--embedding-tier" in result.output
     assert "--blocking-strategy" in result.output
+
+
+def test_blocking_sweep_help() -> None:
+    """The sweep offers each single strategy and the union of both."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["blocking-sweep", "--help"])
+    assert result.exit_code == 0
+    assert "--blocking-strategy" in result.output
+    assert "union" in result.output
+    assert "--candidate-set" in result.output
+    assert "--rounds" in result.output
+
+
+def test_mteb_rank_help() -> None:
+    """The MTEB ranking exposes category selection and sweep correlation."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["mteb-rank", "--help"])
+    assert result.exit_code == 0
+    assert "--category" in result.output
+    assert "--candidate-set" in result.output
+    assert "--sweep" in result.output
 
 
 def test_profile_benchmark_help() -> None:

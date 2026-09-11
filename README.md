@@ -124,12 +124,18 @@ serf profile-benchmark --dataset abt-buy --output data/abt_buy_profile.md
 # Candidates default to benchmarks.embedding_candidates in config.yml
 serf blocking-sweep --dataset dblp-acm --output data/blocking_sweep.json
 
-# Sweep the large candidates instead, scoring name-only against JSON blocking
-serf blocking-sweep --candidate-set large --blocking-strategy both --sample 2000 \
+# Sweep the large candidates instead, scoring name blocking, JSON blocking and
+# the union of the two, with the pair count each would hand the matcher
+serf blocking-sweep --candidate-set large --blocking-strategy all --sample 2000 \
   --output data/blocking_sweep_large.json
 
-# Block with the large embedding and embed every field as JSON, not just the name
-serf benchmark --dataset amazon-google --embedding-tier high --blocking-strategy json \
+# Rank candidate embeddings by their published MTEB scores, and check which
+# category actually orders them the way measured blocking recall does
+serf mteb-rank --candidate-set all --sweep data/blocking_sweep_large.json
+
+# Block twice, on the name and on the whole record as JSON, and keep both sets
+# of blocks so a pair only has to be caught by one of them
+serf benchmark --dataset amazon-google --embedding-tier high --blocking-strategy union \
   --sample-records 1000 --output data/results/
 
 # Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)

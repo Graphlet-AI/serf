@@ -186,13 +186,45 @@ resolutions = await DatasetMatcher("walmart-amazon").resolve_blocks(blocks)
 
 Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.5 Flash-Lite as the teacher/reflection LM for GEPA.
 
-These rows were measured with the former multilingual-e5-base default and before the FAISS cluster-count fix, so they understate what the current blocking config reaches — see [Blocking Recall](#blocking-recall) for the gap and `experiments/embedding-blocking-sweep.md` for the measurements.
+These rows were measured with the former multilingual-e5-base default, before the FAISS cluster-count fix and before the XML adapter fix, so they understate what the current config reaches — see [Blocking Recall](#blocking-recall) for the gap and `experiments/embedding-blocking-sweep.md` for the measurements.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
 | **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8849    | 0.5809 | **0.7014** |
 
 Blocking uses name-only embeddings for tighter semantic clusters. All matching decisions are made by the LLM — no embedding similarity thresholds.
+
+Every number below the full-table row is post-fix. Until recently `dspy.XMLAdapter` rejected 27 of every
+33 blocks over unescaped ampersands and XML's missing null literal, which sent them through DSPy's JSON
+fallback at double the inference cost and lost the ones the fallback also failed. The investigation and
+the before/after are in [experiments/xml-adapter-block-loss.md](experiments/xml-adapter-block-loss.md).
+
+### Against the Public Leaderboard
+
+The standard entity resolution scoreboard is the Papers With Code [Entity Resolution](https://paperswithcode.com/task/entity-resolution)
+task. Papers With Code was sunset in 2025 and now redirects to Hugging Face, so the live mirror of
+those boards is [OpenCodePapers](https://opencodepapers-b7572d.gitlab.io/benchmarks/entity-resolution-on-abt-buy.html).
+SERF is a 1,000-record sample at seed 42, three ER iterations, `gpt-oss-120b` matching, no training.
+
+| Model                                | Abt-Buy F1 | Task                     | Trained on the benchmark |
+| ------------------------------------ | ---------- | ------------------------ | ------------------------ |
+| gpt4-0613 zero-shot                  | 95.78      | pair classification      | no                       |
+| RoBERTa-SupCon                       | 94.29      | pair classification      | yes                      |
+| gpt-4o-mini fine-tuned               | 94.09      | pair classification      | yes                      |
+| gpt-4o-2024-08-06                    | 92.20      | pair classification      | no                       |
+| RobEM                                | 90.90      | pair classification      | yes                      |
+| **SERF gpt-oss-120b, LOW**           | **90.38**  | **end-to-end resolution**| **no**                   |
+| HierGAT                              | 89.80      | pair classification      | yes                      |
+| **SERF gpt-oss-120b, HIGH**          | **89.63**  | **end-to-end resolution**| **no**                   |
+| Ditto                                | 89.33      | pair classification      | yes                      |
+| gpt-4o-mini                          | 87.68      | pair classification      | no                       |
+| Llama-3.1-70B                        | 79.12      | pair classification      | no                       |
+
+The comparison is indicative, not like-for-like. Every leaderboard entry scores pair classification:
+the candidate pairs are handed to the model and it labels each one. SERF does the whole task, so its
+recall carries the pairs blocking never proposed — an Abt-Buy blocking ceiling of 0.8912 on this
+sample — which a pair classifier never pays for. Read the row as "end-to-end, untrained, around
+fine-tuned Ditto", not as a rank.
 
 ### Blocking Recall
 
@@ -256,6 +288,15 @@ this project has reached:
 Short, abbreviated product names that share a manufacturer token leave the name alone ambiguous, and
 the side fields carry signal it does not. Only models large enough to read structure out of a JSON blob
 benefit; the smaller ones lose on Amazon-Google too. JSON blocking stays off by default.
+
+End to end on Abt-Buy, 1,000-record sample at seed 42, three ER iterations, the ordering holds:
+
+| Tier     | Embedding            | Precision  | Recall     | F1         | Seconds |
+| -------- | -------------------- | ---------- | ---------- | ---------- | ------- |
+| **LOW**  | bge-small-en-v1.5    | 0.9204     | **0.8878** | **0.9038** | 410     |
+| HIGH     | bge-large-en-v1.5    | **0.9265** | 0.8681     | 0.8963     | 508     |
+
+Matching cannot recover a pair blocking never proposed, so the tier that blocks better finishes better.
 
 ### Generic vs Per-Dataset Signatures
 

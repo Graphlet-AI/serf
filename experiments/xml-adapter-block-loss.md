@@ -28,6 +28,19 @@ Six of 33. The fallback was not an edge case, it was the main path: 82% of block
 inferences instead of one, and the ones whose fallback response was also malformed contributed no
 matches at all.
 
+## What it was costing end to end
+
+Same command before and after, `abt-buy`, 1,000-record sample at seed 42, LOW embedding tier, three
+ER iterations:
+
+| | Precision | Recall | F1 | Blocks lost |
+|---|---|---|---|---|
+| Before | 0.9425 | 0.8386 | 0.8875 | 22 of 137 |
+| After | 0.9204 | 0.8878 | **0.9038** | 1 of 128 |
+
+Recall gains 0.0492 and precision gives back 0.0221, which is what recovering 21 blocks of matches
+should look like: the pairs those blocks were holding are mostly right, and a few are not.
+
 ## Three causes
 
 **Dicts arrive as strings.** `XMLAdapter` renders a `dict` output field as one flat

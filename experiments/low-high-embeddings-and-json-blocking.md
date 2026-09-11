@@ -94,6 +94,24 @@ So JSON blocking stays available and stays off by default. It is the right setti
 amazon-google-shaped data — many short, ambiguous names plus discriminative side fields — paired
 with a large model, and the wrong setting everywhere else.
 
+## End to end, not just blocking
+
+Blocking recall is a ceiling, not a score. Running both tiers all the way through matching on
+`abt-buy`, 1,000-record sample at seed 42, three ER iterations, `gpt-oss-120b` as the matcher:
+
+| Tier | Embedding | Precision | Recall | F1 | Seconds |
+|---|---|---|---|---|---|
+| **LOW** | `bge-small-en-v1.5` | 0.9204 | **0.8878** | **0.9038** | 410 |
+| HIGH | `bge-large-en-v1.5` | **0.9265** | 0.8681 | 0.8963 | 508 |
+
+LOW wins by 0.0075 F1, which tracks the blocking sweep: HIGH's 2K blocking recall on abt-buy is
+0.8813 against LOW's 0.8912, and matching cannot recover a pair that blocking never proposed. The
+ordering holds end to end, so the default is the right default.
+
+Both of these runs are post-fix; the pipeline was losing whole blocks to an adapter bug until
+[xml-adapter-block-loss.md](xml-adapter-block-loss.md), and any earlier end-to-end number here is not
+comparable.
+
 ## What is configured
 
 ```yaml

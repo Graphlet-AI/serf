@@ -123,6 +123,23 @@ def test_signature_instructions_warn_about_the_one_attribute_difference(dataset:
     assert "differ from true matches on exactly one attribute" in instructions
 
 
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_signature_instructions_bound_every_veto_by_coverage(dataset: str) -> None:
+    """A discriminative attribute may only rule a pair out when it is present.
+
+    Stating the agreement rates without the coverage rates turns each of them
+    into a veto the data does not support: `modelno` decides Walmart-Amazon but
+    is unusable on 31.8% of its gold pairs, `manufacturer` is unusable on 82.2%
+    of Amazon-Google's, and price on 79.4% of Abt-Buy's. Measured over all five
+    datasets, the vetoing phrasing cost 3.7 F1 points against the prompts it
+    replaced, almost all of it recall.
+    """
+    instructions = " ".join(get_dataset_spec(dataset).signature.instructions.split())
+
+    assert "A value that is missing on either side is not a disagreement" in instructions
+    assert "Never reject a pair for failing a test it had no way to take" in instructions
+
+
 # One measured finding per dataset that the profiler in `serf profile-benchmark`
 # established and that the signature used to contradict. Each phrase is the
 # instruction the measurement forced; losing one is a silent regression back to
@@ -163,7 +180,10 @@ MEASURED_FINDINGS: dict[str, tuple[str, ...]] = {
     "walmart-amazon": (
         # Amazon's modelno holds descriptive text often enough that inequality
         # cannot be trusted before the value is checked.
-        "check that the Amazon value is really a code",
+        "A value with no digits and more than one word is prose, not a code",
+        # modelno is unusable on 31.8% of gold pairs, so treating its absence as
+        # a rejection costs a third of the recall on this task.
+        "Blank or prose on either side means the model number is silent, not negative",
         # Category agrees on 4.4% of gold pairs against 2.2% of near misses, and
         # the Walmart label is frequently wrong outright.
         "Ignore the category field completely",

@@ -47,6 +47,18 @@ _BLOCK_RULES = """
       capacity digit, a publication year. Whatever field carries that
       distinction has to be compared exactly, even when everything else about
       the two records is compared loosely.
+    - That only applies to a field both records actually carry. Every attribute
+      below is empty, placeholder or nonsense on some share of the true pairs,
+      and on several tasks that share is large. A value that is missing on
+      either side is not a disagreement, and neither is a value that fails to
+      repeat something the other side states. Never reject a pair for failing a
+      test it had no way to take: drop back to the evidence that is present and
+      judge the pair on that.
+    - Do not require whole fields to be equal. Full titles and names are
+      identical on only a few per cent of true pairs in the product tasks, so
+      demanding string equality anywhere outside the rules given below rejects
+      nearly every real match. Accept a pair once the evidence identifies the
+      same real-world entity, however differently the two sources describe it.
     - Compare every record on the first side against every record on the second
       side. A match always crosses the two sources; two records from the same
       source are never a match, no matter how similar they look.
@@ -148,8 +160,10 @@ class DblpScholarBlockMatch(dspy.Signature):
       Scholar writes 2002.0, so string comparison agrees on *none* of the true
       pairs while numeric comparison agrees on essentially all of them. Allow one
       year of slack, because Scholar may have crawled a preprint or a reprint.
-      Scholar omits the year on more than half of its rows, and a missing year is
-      not evidence against a match.
+      Scholar omits the year on more than half of its rows and mis-extracts it
+      on more, which makes it the weakest attribute in any of these five tasks.
+      A missing or unrelated year on the Scholar side is not evidence against a
+      match.
     - Compare titles by their characters, not by their words. Scholar sometimes
       loses the spaces, so "Database Architecture Optimized for the New
       Bottleneck: Memory Access" appears as "Databasearchitecture
@@ -161,7 +175,11 @@ class DblpScholarBlockMatch(dspy.Signature):
       OptimalXMLPatternMatching", where the title starts at "Holistic".
     - After repair, titles are identical for about half the true pairs and for
       under two in a hundred near misses, so an exact title plus a compatible
-      year is decisive.
+      year is decisive. The other half of the true pairs are *not* identical,
+      and they are matches all the same: the average true pair still shares
+      about six of every seven words while the hardest non-pairs share under a
+      fifth. Accept a pair on strong title overlap alone when nothing
+      contradicts it.
     - Scholar's author field often holds a scraper artefact rather than authors:
       "ACMS Anthology", "portal.acm.org", "P Geographer, T Geography". Treat
       those as missing. Real author lists are initials plus surname on both sides
@@ -170,16 +188,20 @@ class DblpScholarBlockMatch(dspy.Signature):
     - Venue is free text on the Scholar side, often a publisher name, and agrees
       on about a quarter of true pairs. It is weak evidence in both directions.
       One DBLP venue value is truncated to "ecord", which is "SIGMOD Record".
-    - Reject any Scholar record whose title is page furniture rather than a
-      paper: "Source ACM SIGMOD Record archive", "Terms of Usage Privacy Policy
-      Code of Ethics Contact Us". These are never matches.
+    - A few dozen Scholar rows hold page furniture instead of a paper title:
+      "Source ACM SIGMOD Record archive", "Terms of Usage Privacy Policy Code of
+      Ethics Contact Us". Those are never matches. This covers boilerplate
+      scraped off the page around the citation, not a real title that happens to
+      be short or oddly punctuated.
     - Scholar holds several records for the same publication, so one DBLP record
       legitimately matches more than one Scholar record: only about a fifth of
       matched DBLP rows have a single counterpart and the rest average two. Emit
       every such pair, and never stop after finding one partner for a record.
     - The dangerous false positive is a recurring column title decades apart, as
       in "Reminiscences on Influential Papers" from 2002 against the same title
-      from 1976. When the title is generic, the year decides.
+      from 1976. Where the title is one of those short recurring editorial ones
+      and both sides state a year, the year decides. A full, specific paper
+      title is not generic and carries the pair on its own.
 
     Fields of every dblp_records item:
 {field_guide(DblpScholarPublication)}
@@ -234,12 +256,17 @@ class AbtBuyBlockMatch(dspy.Signature):
     - Both sides carry some code on about the same share of true pairs and of
       near misses, so the mere presence of a code on each side is worth nothing.
       Only the containment relation between them is evidence.
-    - Before accepting a contained code, compare the codes character by
-      character. One changed character is a different colour, capacity or
-      revision, not a match: "CCH1B" is the black mount and "CCH1P" the platinum
-      one; "DVPFX820" and "DVPFX820/L" are different players. Reject the pair
-      when the only difference is a trailing variant letter or a single digit,
-      even when the rest of the two names is word-for-word identical.
+    - Containment settles the pair. Do not then reject it because the two codes
+      are not identical: "MDREX55WH" inside "MDREX55WHI" is the normal shape of
+      a true pair here, not a variant clash.
+    - Apply the variant check only where containment does *not* hold, which is
+      where one changed character means a different colour, capacity or
+      revision: "CCH1B" is the black mount and "CCH1P" the platinum one. Two
+      codes of the same length differing in one character are different
+      products, even when the rest of the two names is word-for-word identical.
+      The one case worth overriding containment for is an explicit conflict
+      spelled out in the names themselves, such as one side naming a colour or
+      capacity that the other side contradicts.
     - When neither side yields a code, or the codes are unrelated part numbers
       for the same-looking product, fall back to brand plus the specific product
       type plus any capacity, size or colour in the name. Two sides may use
@@ -258,10 +285,12 @@ class AbtBuyBlockMatch(dspy.Signature):
       within a quarter of each other are three times more common among true pairs
       than among near misses, so use price as a tie-breaker and never as the
       reason for a decision.
-    - Some Buy rows are byte-identical to one another and map to different Abt
-      colour variants, so at most one of those pairings can be right. When
-      several identical records on one side compete for the same partner, emit
-      one pair, not all of them.
+    - Three Buy rows are byte-identical to one another and map to different Abt
+      colour variants, so at most one of those pairings can be right. That is
+      the only case of its kind: when two records on one side are identical in
+      every field and cannot be told apart, pair just one of them. It is not a
+      reason to hold back a pair anywhere else, and a record that already has a
+      partner may still match another.
 
     Fields of every abt_records item:
 {field_guide(AbtProduct)}
@@ -321,15 +350,21 @@ class AmazonGoogleBlockMatch(dspy.Signature):
       ("sony-pictures-digital-entertainment") where Amazon spaces it. So a blank
       Google manufacturer is not evidence against a match, but a publisher named
       in the Google title that contradicts the Amazon manufacturer is.
-    - Compare version numbers, edition years, platforms (windows, mac), licence
-      types (oem, upgrade, academic, retail) and seat or pack counts exactly.
-      This is the most common reason a near-identical pair is not a match: "photo
-      explosion deluxe 3.0" and "photo explosion deluxe ( r ) 2.0" are different
-      products at the same price.
+    - Where both titles state a version number, edition year, platform (windows,
+      mac), licence type (oem, upgrade, academic, retail) or seat and pack count,
+      compare them exactly. This is the most common reason a near-identical pair
+      is not a match: "photo explosion deluxe 3.0" and "photo explosion deluxe
+      ( r ) 2.0" are different products at the same price. But Google abbreviates
+      hard and drops detail, so a version or platform named on one side and
+      simply absent from the other is not a conflict. Only two stated values that
+      differ are.
     - Price is the most useful attribute here after the title. Four true pairs in
       five are within a quarter of each other, against fewer than one in four of
-      the hardest non-pairs, and it is comparable on nine pairs in ten. Use it as
-      a tie-breaker with roughly a quarter tolerance whenever both sides have one.
+      the hardest non-pairs, and it is comparable on nine pairs in ten. Let a
+      close price carry a pair you would otherwise be unsure of. The remaining
+      fifth of true pairs fall outside that tolerance, though, because merchants
+      discount and bundle, so a price gap on its own is never a reason to reject
+      a pair the titles agree on.
     - Titles are identical for about one true pair in twenty, so match on the
       product the two titles denote rather than on shared words. A short merchant
       listing can name the same product as a long catalog title.
@@ -378,24 +413,30 @@ class WalmartAmazonBlockMatch(dspy.Signature):
       for roughly one in four hundred of the hardest non-pairs, which makes it
       the sharpest exact-equality signal in any of these tasks. Equality is
       decisive: accept the pair.
-    - Before treating two *different* model numbers as evidence against a match,
-      check that the Amazon value is really a code. Amazon leaves it blank on
-      more than a quarter of its rows and often fills it with leftover
-      descriptive text instead: "high power", "with csr", "high contrast matte
-      white", "with keystone eliminator", "cosmopolitan electrol". A value with
-      no digits and more than one word is prose, not a model number, and tells
-      you nothing. Only two values that both look like codes and disagree are
-      evidence against a match.
-    - When the codes disagree, compare them character by character, because one
-      changed character is the dominant false positive on this task and it always
-      means a different product: "nud-00001" against "mfc-00001" for two
-      keyboards with near-identical titles, "hd-lb1 .5 tu2" against
-      "hd-lb1 .0 tu2" for a 1.5 TB drive against a 1 TB drive whose titles are
-      otherwise word-for-word identical, "21118" against "21218".
-    - Require brand agreement as a gate and read nothing more into it. Brand
-      agrees on most true pairs but also on two fifths of near misses, so it can
-      only rule a pair out, never rule one in. Brand and model number are
-      sometimes blank in their own column while present in the title.
+    - A third of the true pairs cannot take that test, because one side leaves
+      the model number blank or fills it with leftover descriptive text instead:
+      "high power", "with csr", "high contrast matte white", "with keystone
+      eliminator", "cosmopolitan electrol". A value with no digits and more than
+      one word is prose, not a code. Blank or prose on either side means the
+      model number is silent, not negative.
+    - Decide those pairs on the title, and accept them. Walmart and Amazon write
+      the same product in very different registers, so full titles are equal on
+      about one true pair in sixteen and requiring more than that throws away
+      most of the recall on this task. The average true pair shares about three
+      fifths of its words where the hardest non-pairs share about a fifth, so a
+      title naming the same product kind, brand and capacity is enough on its
+      own.
+    - Two model numbers that are *both* real codes and clearly different are
+      strong evidence against a match, and worth checking character by
+      character, because one changed character means a different product:
+      "hd-lb1 .5 tu2" against "hd-lb1 .0 tu2" is a 1.5 TB drive against a 1 TB
+      drive whose titles are otherwise word-for-word identical, and "21118"
+      against "21218" is a different product again.
+    - Read brand as a gate, not as evidence for a match: it agrees on two fifths
+      of near misses too. Treat a brand clash as evidence against, but not as
+      decisive on its own, because brand is blank or spelled differently on
+      roughly one true pair in seven. Brand and model number are sometimes blank
+      in their own column while present in the title.
     - Ignore the category field completely. The two taxonomies agree on under
       five per cent of true pairs, barely above the rate at which they agree on
       non-pairs, and the Walmart label is frequently wrong rather than merely

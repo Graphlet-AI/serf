@@ -104,7 +104,9 @@ class WalmartProduct(EntitySide):
             "decides the pair. Compare case-insensitively, ignoring dashes and "
             "spaces, and when two codes disagree compare them character by "
             "character, because one changed character always means a different "
-            "capacity, colour or revision."
+            "capacity, colour or revision. One true pair in three has no usable "
+            "code on one side or the other, so an absent model number is not "
+            "evidence against a match; decide those pairs on the title."
         ),
     )
     price: SourcePrice = Field(
@@ -183,7 +185,9 @@ class AmazonElectronicsProduct(EntitySide):
             "match once you have checked that this one is really a code: it is blank "
             "on more than a quarter of rows and often holds leftover descriptive "
             "text instead ('high power', 'with csr', 'high contrast matte white'). A "
-            "multi-word value with no digits is prose and tells you nothing."
+            "multi-word value with no digits is prose and tells you nothing. When "
+            "this value is blank or prose the pair has to be decided on the title, "
+            "not rejected."
         ),
     )
     price: SourcePrice = Field(

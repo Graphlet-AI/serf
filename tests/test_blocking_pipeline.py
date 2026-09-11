@@ -5,6 +5,7 @@ from unittest.mock import patch
 import numpy as np
 
 from serf.block.pipeline import SemanticBlockingPipeline
+from serf.block.subprocess_embed import cluster_in_subprocess
 from serf.dspy.types import Entity
 
 
@@ -43,6 +44,17 @@ def test_pipeline_prompt_defaults_to_config() -> None:
     """Omitting the prefix falls back to the config value rather than None."""
     pipeline = SemanticBlockingPipeline(model_name="test-model")
     assert isinstance(pipeline.embedding_prompt, str)
+
+
+def test_clustering_handles_more_ids_than_argv_allows() -> None:
+    """Entity ids go through a file, so the 128 KB argv cap does not bind."""
+    count = 20000
+    ids = [str(i) for i in range(count)]
+    embeddings = np.random.randn(count, 8).astype(np.float32)
+
+    blocks = cluster_in_subprocess(embeddings, ids, target_block_size=30)
+
+    assert sum(len(members) for members in blocks.values()) == count
 
 
 def test_pipeline_embeds_names_only() -> None:

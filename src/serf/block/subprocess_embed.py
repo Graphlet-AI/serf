@@ -60,8 +60,11 @@ def main():
     args = json.loads(sys.argv[1])
     embeddings_file = args["embeddings_file"]
     output_file = args["output_file"]
-    ids = args["ids"]
+    ids_file = args["ids_file"]
     target_block_size = args["target_block_size"]
+
+    with open(ids_file) as f:
+        ids = json.load(f)
 
     import faiss
 
@@ -189,15 +192,21 @@ def cluster_in_subprocess(
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         embeddings_file = str(Path(tmpdir) / "embeddings.npy")
+        ids_file = str(Path(tmpdir) / "ids.json")
         output_file = str(Path(tmpdir) / "blocks.json")
 
         np.save(embeddings_file, embeddings)
+
+        # The ids go through a file rather than argv: a single argument is capped
+        # at 128 KB on Linux, which one id list exceeds past ~13,000 entities.
+        with open(ids_file, "w") as f:
+            json.dump(ids, f)
 
         args = json.dumps(
             {
                 "embeddings_file": embeddings_file,
                 "output_file": output_file,
-                "ids": ids,
+                "ids_file": ids_file,
                 "target_block_size": target_block_size,
             }
         )

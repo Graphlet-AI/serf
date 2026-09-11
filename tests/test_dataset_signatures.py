@@ -110,17 +110,38 @@ def test_signature_instructions_forbid_same_source_pairs(dataset: str) -> None:
     assert "two records from the same source are never a match" in instructions
 
 
-@pytest.mark.parametrize("dataset", DATASETS)
+# DBLP-Scholar and Walmart-Amazon keep the shorter literature-derived prompt.
+# The profiling holds for them too, but writing it into the instructions cost
+# recall in four successive framings (0.889/0.903/0.897/0.881 against 0.919, and
+# 0.800/0.851/0.870/0.855 against 0.892), because the attribute each finding
+# turns on is missing on a large share of their gold pairs. Their findings stay
+# in BENCHMARKS.md as documentation of the data.
+RETAINED_LITERATURE_PROMPTS = frozenset({"dblp-scholar", "walmart-amazon"})
+
+REWRITTEN_PROMPTS = sorted(set(DATASETS) - RETAINED_LITERATURE_PROMPTS)
+
+
+@pytest.mark.parametrize("dataset", REWRITTEN_PROMPTS)
 def test_signature_instructions_warn_about_the_one_attribute_difference(dataset: str) -> None:
-    """The cross-dataset finding from BENCHMARKS.md reaches every prompt.
+    """The cross-dataset finding from BENCHMARKS.md reaches the prompts it helps.
 
     The hardest non-match differs from a true match on one short attribute in all
-    five tasks, so the rule belongs in the shared block rules rather than in five
-    separate docstrings.
+    five tasks, but "so compare that field exactly" is only safe where the field
+    is there to compare. Carried in the shared block rules it cost DBLP-Scholar
+    and Walmart-Amazon recall, so it sits in the three docstrings that measured a
+    gain from it instead.
     """
     instructions = " ".join(get_dataset_spec(dataset).signature.instructions.split())
 
     assert "differ from true matches on exactly one attribute" in instructions
+
+
+@pytest.mark.parametrize("dataset", sorted(RETAINED_LITERATURE_PROMPTS))
+def test_retained_prompts_do_not_carry_the_one_attribute_rule(dataset: str) -> None:
+    """The two datasets it hurt must not pick it back up through the shared rules."""
+    instructions = " ".join(get_dataset_spec(dataset).signature.instructions.split())
+
+    assert "differ from true matches on exactly one attribute" not in instructions
 
 
 @pytest.mark.parametrize("dataset", DATASETS)
@@ -154,14 +175,6 @@ MEASURED_FINDINGS: dict[str, tuple[str, ...]] = {
         # Venue agrees on 0% of gold pairs as a string and is a five-row bijection.
         "Never compare venue as a string",
     ),
-    "dblp-scholar": (
-        # Scholar writes 2002.0, so string equality fires on 0% of gold pairs
-        # and numeric comparison on 99.96%.
-        "Compare the year as a number, never as a string",
-        # Whitespace is dropped in ~1% of Scholar titles, which zeroes word-token
-        # overlap on pairs that are the same paper.
-        "Compare titles by their characters, not by their words",
-    ),
     "abt-buy": (
         # Containment finds 82% of gold pairs against 47% for exact equality, at
         # a 2.5% near-miss rate. This is the strongest single finding measured.
@@ -177,27 +190,35 @@ MEASURED_FINDINGS: dict[str, tuple[str, ...]] = {
         # and is comparable on 89.6% of them.
         "most useful attribute here after the title",
     ),
-    "walmart-amazon": (
-        # Amazon's modelno holds descriptive text often enough that inequality
-        # cannot be trusted before the value is checked.
-        "A value with no digits and more than one word is prose, not a code",
-        # modelno is unusable on 31.8% of gold pairs, so treating its absence as
-        # a rejection costs a third of the recall on this task.
-        "Blank or prose on either side means the model number is silent, not negative",
-        # Category agrees on 4.4% of gold pairs against 2.2% of near misses, and
-        # the Walmart label is frequently wrong outright.
-        "Ignore the category field completely",
-    ),
 }
 
 
-@pytest.mark.parametrize("dataset", DATASETS)
+@pytest.mark.parametrize("dataset", sorted(MEASURED_FINDINGS))
 def test_signature_instructions_carry_the_measured_findings(dataset: str) -> None:
-    """Each dataset's prompt states what profiling measured, not what was assumed."""
+    """Each rewritten prompt states what profiling measured, not what was assumed."""
     instructions = " ".join(get_dataset_spec(dataset).signature.instructions.split())
 
     for finding in MEASURED_FINDINGS[dataset]:
         assert finding in instructions, f"{dataset} lost the measured finding: {finding}"
+
+
+@pytest.mark.parametrize("dataset", sorted(RETAINED_LITERATURE_PROMPTS))
+def test_retained_prompts_say_why_the_measured_rewrite_was_dropped(dataset: str) -> None:
+    """Keeping the shorter prompt is a measured decision, so the prompt records it.
+
+    Without the note the next reader sees two datasets whose instructions ignore
+    BENCHMARKS.md and reasonably assumes nobody got to them.
+    """
+    doc = get_dataset_spec(dataset).signature.__doc__ or ""
+
+    assert "Measured rewrite deliberately not applied here" in doc
+    assert "BENCHMARKS.md" in doc
+
+
+def test_measured_findings_and_retained_prompts_cover_every_dataset() -> None:
+    """Every dataset is either rewritten from the profiling or knowingly left alone."""
+    assert set(MEASURED_FINDINGS) | RETAINED_LITERATURE_PROMPTS == set(DATASETS)
+    assert not set(MEASURED_FINDINGS) & RETAINED_LITERATURE_PROMPTS
 
 
 def test_dblp_acm_no_longer_tolerates_a_year_of_slack() -> None:
@@ -211,8 +232,9 @@ def test_dblp_acm_no_longer_tolerates_a_year_of_slack() -> None:
     acm = " ".join(DblpAcmBlockMatch.instructions.split())
     scholar = " ".join(DblpScholarBlockMatch.instructions.split())
 
-    assert "Allow one year of slack" not in acm
-    assert "Allow one year of slack" in scholar
+    assert "Require the years to be equal" in acm
+    assert "Do not allow a year of slack" in acm
+    assert "agree within about a year" in scholar
 
 
 def test_price_guidance_matches_how_useful_price_measured_per_dataset() -> None:

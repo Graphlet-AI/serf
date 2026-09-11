@@ -40,6 +40,67 @@ Recall 0.4748 / F1 0.6299.
 8. Commit each logical change, push, document the failed run, update PR 21.
 9. Start a fresh GEPA run and confirm non-zero val scores early.
 
+## Current task: apply BENCHMARKS.md lessons to the per-dataset signatures
+
+`BENCHMARKS.md` records measured discriminativeness, agreement-on-matches against
+agreement-on-near-misses, and real match/mismatch examples per dataset. The per-dataset DSPy
+signatures in `serf.dspy.dataset_signatures` were written from the *literature* before that
+profiling existed, so several of their instructions are now contradicted by measurement. The
+task is to move the measured findings into the signature docstrings and field descriptions and
+prove the F1 change with an A/B on identical samples.
+
+Contradictions found by reading the two side by side:
+
+| Dataset | Signature currently says | BENCHMARKS.md measured |
+|---|---|---|
+| dblp-acm | year within one year | year agrees on 100% of matches, 12.8% of near misses; the headline mismatch is a conference paper and its journal version, differing only in year |
+| dblp-acm | judge venue semantically | venue is a five-row bijection; the crosswalk is known exactly |
+| abt-buy | compare model numbers for equality | equality finds 47% of matches, containment after stripping all separators finds 82% at a 2.5% false positive rate |
+| abt-buy | price cannot decide a match | 61.5% of matches within 25% against 20.1% of near misses, when both sides have one |
+| amazon-google | price cannot decide a match | 79.9% within 25% against 24.0%; the most useful non-title attribute of any product dataset here |
+| amazon-google | (nothing about codes) | only 15% of pairs carry a code, so looking for one is wasted effort |
+| walmart-amazon | different model numbers are evidence against | true, but Amazon's `modelno` is often descriptive text (`high power`, `with csr`), so the value has to be checked first |
+| walmart-amazon | an incompatible category matters | category agrees on 4.4% of matches against 2.2% of near misses and Walmart's is frequently wrong; it is noise |
+| dblp-scholar | years should agree within a year | Scholar writes `2002.0`, so string comparison agrees on 0% and numeric comparison on 99.96% |
+
+Protocol: `serf benchmark --signature-mode per-dataset --sample-records 1000 --seed 42
+--max-iterations 1`, all five datasets, baseline arm measured before the edit and improved arm
+after, same samples and same blocking. One iteration isolates the signature from the multi-round
+merge cascade.
+
+### Result: the findings help on three datasets and hurt on two
+
+Five arms, same sample and seed throughout. Where an arm left a prompt byte-identical the DSPy
+completion cache replayed it exactly, which is what makes the arms comparable at all.
+
+| Dataset | baseline | vetoes | +coverage | +condensed | +additive-only | adopted |
+|---|---|---|---|---|---|---|
+| dblp-acm | 0.9568 | 0.9799 | **0.9883** | 0.9883 | 0.9883 | rewrite |
+| dblp-scholar | **0.9192** | 0.8893 | 0.9026 | 0.8966 | 0.8811 | literature |
+| abt-buy | 0.8038 | 0.7747 | **0.8226** | 0.8226 | 0.8226 | rewrite |
+| amazon-google | 0.7521 | 0.6971 | **0.7661** | 0.7661 | 0.7661 | rewrite |
+| walmart-amazon | **0.8921** | 0.8000 | 0.8507 | 0.8696 | 0.8551 | literature |
+| mean | 0.8648 | 0.8282 | 0.8661 | 0.8686 | 0.8626 | **0.8777** |
+
+The first arm wrote each measured agreement rate in as a hard rule and lost 3.7 F1 points,
+almost all of it recall, because an agreement rate is not a coverage rate. `modelno` decides
+Walmart-Amazon when present and is unusable on 31.8% of its gold pairs; Amazon-Google's
+`manufacturer` is unusable on 82.2%; Abt-Buy's price on 79.4%; Scholar omits the year on 54.1%
+of rows. Stating the first number without the second turns a decider into a vetoer, and the
+matcher rejects every pair that could not take the test. DBLP-ACM was the one dataset that
+improved on the first arm, and it is the one whose constraint holds on *every* gold pair.
+
+Two prompts also contradicted themselves, which is the same bug twice: Abt-Buy called code
+containment near-decisive and then told the matcher to reject a code differing by a trailing
+character, which is exactly what containment matches (`MDREX55WH` in `MDREX55WHI`);
+Walmart-Amazon said to compare title-extracted codes character by character and illustrated it
+with `cb40` against `cb400a`, a truncation only containment resolves.
+
+DBLP-Scholar and Walmart-Amazon never recovered across four framings, so they keep the shorter
+literature prompt with a note in the docstring saying why. Their quirks are mostly corruption an
+LLM reads through unaided — mojibake, `2002.0`, collapsed whitespace — so naming them buys no
+capability and costs length and rejection pressure.
+
 ## Project Status Board
 
 - [x] Tests for block-partitioned splits and token refresh

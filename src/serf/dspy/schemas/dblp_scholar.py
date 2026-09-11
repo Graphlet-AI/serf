@@ -115,43 +115,33 @@ class GoogleScholarPublication(EntitySide):
     title: SourceText = Field(
         default="",
         description=(
-            "Extracted title, and the primary matching signal. May be truncated, "
-            "misspelled, lower-cased, double-encoded so that 'â??' stands for a "
-            "quotation mark, stripped of its spaces "
-            "('Databasearchitecture optimizedforthenewbottleneck: memoryaccess'), "
-            "prefixed with the tail of the preceding citation "
-            "('andD. Srivastava. HolisticTwigJoins: ...'), page furniture rather "
-            "than a paper ('Terms of Usage Privacy Policy Code of Ethics Contact "
-            "Us'), or a pure extraction error such as a street address. Compare by "
-            "characters, not by words, because the word boundaries are unreliable."
+            "Extracted title. Usually recognisable but may be truncated, "
+            "misspelled, lower-cased, carry a trailing publisher fragment, or be a "
+            "pure extraction error such as an address. Still the primary matching "
+            "signal: judge titles by semantic equivalence, not string distance."
         ),
     )
     authors: SourceText = Field(
         default="",
         description=(
-            "Extracted author list, typically initials plus surname. Often a "
-            "scraper artefact instead: 'ACMS Anthology', 'portal.acm.org', "
-            "'P Geographer, T Geography'. Read those as missing. Overlap of one or "
-            "two real surnames with the DBLP side is normal for a true pair, and "
-            "the full strings agree on under a third of them."
+            "Extracted author list, typically initials plus surname and sometimes "
+            "truncated, an organization name, or empty. Overlap of one or two "
+            "surnames with the DBLP side is normal for a true match."
         ),
     )
     venue: SourceText = Field(
         default="",
         description=(
             "Free-text venue string, for example 'Phil. Mag,' or a publisher name, "
-            "and often empty, HTML-entity-encoded or wrong. Agrees on about a "
-            "quarter of true pairs, so it is weak evidence in both directions."
+            "and often empty or wrong. Weak evidence in both directions."
         ),
     )
     year: SourceYear = Field(
         default=None,
         description=(
-            "Publication year, missing on more than half of this side's rows "
-            "because extraction failed, which is not evidence against a match. "
-            "Written as a float, so Scholar's '2002.0' is DBLP's '2002': compare "
-            "as numbers, never as strings, and allow one year of slack since "
-            "Scholar may record a preprint or reprint year."
+            "Publication year, frequently missing because extraction failed. When "
+            "both sides have a year they should agree within a year, since Scholar "
+            "may record a preprint or reprint year."
         ),
     )
 

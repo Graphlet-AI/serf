@@ -16,9 +16,55 @@ def test_escapes_bare_ampersand() -> None:
 
 
 def test_leaves_existing_entities_alone() -> None:
-    """Named, decimal and hex character references survive untouched."""
-    text = "<name>A&amp;B &#38; C &#x26; D</name>"
+    """XML's predefined names and numeric character references survive untouched."""
+    text = "<name>A&amp;B &#38; C &#x26; D &lt;E&gt; &quot;F&quot; &apos;G&apos;</name>"
     assert escape_stray_metacharacters(text) == text
+
+
+def test_escapes_html_entities_xml_does_not_define() -> None:
+    """XML predefines five names, so every other named entity is undefined in it.
+
+    ACM titles carry raw HTML entities, and ElementTree rejects the whole
+    document with "undefined entity" rather than passing them through.
+    """
+    assert escape_stray_metacharacters("<title>The VLDB Journal &mdash; Volume 6</title>") == (
+        "<title>The VLDB Journal &amp;mdash; Volume 6</title>"
+    )
+    assert escape_stray_metacharacters("<name>Oliver G&uuml;nther</name>") == (
+        "<name>Oliver G&amp;uuml;nther</name>"
+    )
+
+
+def test_parses_completion_with_an_html_entity() -> None:
+    """A block whose echoed text carries an HTML entity must not be lost."""
+    completion = (
+        "<resolution>"
+        "<block_key>block_0</block_key>"
+        "<matches></matches>"
+        "<resolved_entities><item>"
+        "<id>0</id><uuid>null</uuid>"
+        "<name>The VLDB Journal &mdash; Volume 6</name>"
+        "<description>Oliver G&uuml;nther</description>"
+        "<entity_type>entity</entity_type>"
+        "<attributes>{}</attributes>"
+        "<source_ids><item>1</item></source_ids>"
+        "<source_uuids></source_uuids>"
+        "<match_skip>null</match_skip>"
+        "<match_skip_reason></match_skip_reason>"
+        "<match_skip_history></match_skip_history>"
+        "</item></resolved_entities>"
+        "<was_resolved>true</was_resolved>"
+        "<original_count>1</original_count>"
+        "<resolved_count>1</resolved_count>"
+        "</resolution>"
+    )
+
+    with pytest.raises(AdapterParseError):
+        dspy.XMLAdapter().parse(BlockMatch, completion)
+
+    entity = RepairingXMLAdapter().parse(BlockMatch, completion)["resolution"].resolved_entities[0]
+    assert entity.name == "The VLDB Journal &mdash; Volume 6"
+    assert entity.description == "Oliver G&uuml;nther"
 
 
 def test_escapes_bare_less_than_but_not_tags() -> None:

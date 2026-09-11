@@ -8,6 +8,10 @@ most blocks. DSPy answers a parse failure by re-running the block through
 ``JSONAdapter``, which doubles the LLM calls and introduces its own failures, so
 the cost of a bare ampersand is a second inference and sometimes a lost block.
 
+The same applies to HTML entities. XML predefines only ``amp``, ``lt``, ``gt``,
+``quot`` and ``apos``, so an ACM title containing ``&mdash;`` or ``&uuml;`` is an
+undefined entity and fails the parse exactly as a bare ``&`` does.
+
 Escaping stray metacharacters before the retry recovers those blocks without
 touching well-formed markup, since a repaired document is only ever parsed after
 the unrepaired one has already failed.
@@ -23,8 +27,11 @@ from serf.logs import get_logger
 
 logger = get_logger(__name__)
 
-# An ampersand that does not open a named, decimal or hex character reference.
-BARE_AMPERSAND = re.compile(r"&(?!(?:#[0-9]+|#x[0-9A-Fa-f]+|[A-Za-z][A-Za-z0-9]*);)")
+# An ampersand that does not open a character reference XML actually resolves.
+# XML predefines exactly five names, so `&mdash;` and `&uuml;` are undefined
+# entities in it even though they are valid HTML. ACM text carries them raw and
+# a model echoing a title back through an output field carries them with it.
+BARE_AMPERSAND = re.compile(r"&(?!(?:#[0-9]+|#x[0-9A-Fa-f]+|amp|lt|gt|quot|apos);)")
 
 # A less-than that does not open a tag, a closing tag, a comment or a PI.
 BARE_LESS_THAN = re.compile(r"<(?![/?!]?[A-Za-z_])")

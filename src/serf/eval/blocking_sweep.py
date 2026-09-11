@@ -16,6 +16,7 @@ from serf.dspy.types import Entity
 from serf.eval.benchmarks import BenchmarkDataset
 from serf.eval.sample import sample_records
 from serf.logs import get_logger
+from serf.match.run import entity_members, merge_matched_entities
 
 logger = get_logger(__name__)
 
@@ -50,6 +51,13 @@ class BlockingSweepResult:
         Share of all possible pairs that blocking eliminated
     elapsed_seconds : float
         Wall clock for embedding plus clustering
+    round_number : int
+        ER round this result describes, counting from one
+    cumulative_co_blocked : int
+        Gold pairs co-blocked in this round or any earlier one
+    cumulative_recall : float
+        ``cumulative_co_blocked / gold_pairs``, the ceiling a multi-round run
+        can reach with a perfect matcher
     """
 
     dataset: str
@@ -64,6 +72,9 @@ class BlockingSweepResult:
     max_block_size: int
     reduction_ratio: float
     elapsed_seconds: float
+    round_number: int = 1
+    cumulative_co_blocked: int = 0
+    cumulative_recall: float = 0.0
 
     def as_dict(self) -> dict[str, object]:
         """Return the result as a plain dict."""
@@ -144,7 +155,131 @@ def evaluate_blocking(
         max_block_size=metrics.max_block_size,
         reduction_ratio=metrics.reduction_ratio,
         elapsed_seconds=elapsed,
+        cumulative_co_blocked=co_blocked,
+        cumulative_recall=recall,
     )
+
+
+def evaluate_blocking_rounds(
+    entities: list[Entity],
+    ground_truth: set[tuple[int, int]],
+    dataset: str,
+    model_name: str,
+    prompt: str,
+    target_block_size: int,
+    max_block_size: int,
+    rounds: int,
+) -> list[BlockingSweepResult]:
+    """Measure how much blocking recall extra ER rounds recover.
+
+    Splitting an oversized block separates pairs that clustering had put
+    together, but a later round re-blocks the entities the previous round merged,
+    so a separated pair can still meet. This models a perfect matcher: every gold
+    pair that lands in a shared block is merged before the next round. The
+    cumulative recall is therefore the ceiling iteration can reach, and any
+    shortfall against a single unsplit round is recall that rounds cannot recover.
+
+    Parameters
+    ----------
+    entities : list[Entity]
+        Records to block, both sources concatenated
+    ground_truth : set[tuple[int, int]]
+        Gold pairs restricted to these records
+    dataset : str
+        Benchmark name, recorded on each result
+    model_name : str
+        Embedding model to test
+    prompt : str
+        Instruction prefix prepended to every text
+    target_block_size : int
+        Target entities per block
+    max_block_size : int
+        Oversized blocks are split at this size
+    rounds : int
+        ER rounds to simulate
+
+    Returns
+    -------
+    list[BlockingSweepResult]
+        One result per round, carrying both that round's recall and the
+        cumulative recall through it
+    """
+    current = entities
+    covered: set[tuple[int, int]] = set()
+    results: list[BlockingSweepResult] = []
+
+    for round_number in range(1, rounds + 1):
+        pipeline = SemanticBlockingPipeline(
+            model_name=model_name,
+            target_block_size=target_block_size,
+            max_block_size=max_block_size,
+            iteration=round_number,
+            embedding_prompt=prompt,
+        )
+
+        start = time.time()
+        blocks, metrics = pipeline.run(current)
+        elapsed = time.time() - start
+
+        members = entity_members(current)
+        owner = {record: entity for entity, records in members.items() for record in records}
+        block_of = {
+            int(entity.id): index for index, block in enumerate(blocks) for entity in block.entities
+        }
+
+        matched: set[tuple[int, int]] = set()
+        for left, right in ground_truth:
+            left_entity = owner.get(left)
+            right_entity = owner.get(right)
+            if left_entity is None or right_entity is None:
+                continue
+            if left_entity == right_entity:
+                covered.add((left, right))
+                continue
+            if block_of.get(left_entity, -1) == block_of.get(right_entity, -2):
+                covered.add((left, right))
+                matched.add((left_entity, right_entity))
+
+        this_round = sum(
+            1
+            for left, right in ground_truth
+            if block_of.get(owner.get(left, -1), -1) == block_of.get(owner.get(right, -2), -2)
+        )
+        recall = this_round / len(ground_truth) if ground_truth else 0.0
+        cumulative = len(covered) / len(ground_truth) if ground_truth else 0.0
+
+        logger.info(
+            f"{dataset} {model_name} round {round_number}: "
+            f"recall {recall:.4f}, cumulative {cumulative:.4f} "
+            f"({len(covered)}/{len(ground_truth)}) over {len(current)} entities in {elapsed:.1f}s"
+        )
+
+        results.append(
+            BlockingSweepResult(
+                dataset=dataset,
+                model=model_name,
+                prompt=prompt,
+                records=len(current),
+                gold_pairs=len(ground_truth),
+                co_blocked=this_round,
+                blocking_recall=recall,
+                blocks=metrics.total_blocks,
+                avg_block_size=metrics.avg_block_size,
+                max_block_size=metrics.max_block_size,
+                reduction_ratio=metrics.reduction_ratio,
+                elapsed_seconds=elapsed,
+                round_number=round_number,
+                cumulative_co_blocked=len(covered),
+                cumulative_recall=cumulative,
+            )
+        )
+
+        if not matched:
+            logger.info(f"{dataset} round {round_number} merged nothing; stopping early")
+            break
+        current = merge_matched_entities(current, matched)
+
+    return results
 
 
 def sweep_dataset(
@@ -155,6 +290,7 @@ def sweep_dataset(
     seed: int = 42,
     target_block_size: int | None = None,
     max_block_size: int | None = None,
+    rounds: int = 1,
 ) -> list[BlockingSweepResult]:
     """Score every candidate embedding model on one benchmark.
 
@@ -177,11 +313,13 @@ def sweep_dataset(
         Target entities per block. Defaults to config.
     max_block_size : int | None
         Split threshold. Defaults to config.
+    rounds : int
+        ER rounds to simulate per candidate. One means a single blocking pass.
 
     Returns
     -------
     list[BlockingSweepResult]
-        One result per candidate, in the order given
+        One result per candidate per round, in the order given
     """
     if target_block_size is None:
         target_block_size = int(config.get("er.blocking.target_block_size", 30))
@@ -205,15 +343,29 @@ def sweep_dataset(
 
     results: list[BlockingSweepResult] = []
     for model_name, prompt in candidates:
-        results.append(
-            evaluate_blocking(
-                entities=entities,
-                ground_truth=ground_truth,
-                dataset=dataset,
-                model_name=model_name,
-                prompt=prompt,
-                target_block_size=target_block_size,
-                max_block_size=max_block_size,
+        if rounds > 1:
+            results.extend(
+                evaluate_blocking_rounds(
+                    entities=entities,
+                    ground_truth=ground_truth,
+                    dataset=dataset,
+                    model_name=model_name,
+                    prompt=prompt,
+                    target_block_size=target_block_size,
+                    max_block_size=max_block_size,
+                    rounds=rounds,
+                )
             )
-        )
+        else:
+            results.append(
+                evaluate_blocking(
+                    entities=entities,
+                    ground_truth=ground_truth,
+                    dataset=dataset,
+                    model_name=model_name,
+                    prompt=prompt,
+                    target_block_size=target_block_size,
+                    max_block_size=max_block_size,
+                )
+            )
     return results

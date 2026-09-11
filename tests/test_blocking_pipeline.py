@@ -57,6 +57,23 @@ def test_clustering_handles_more_ids_than_argv_allows() -> None:
     assert sum(len(members) for members in blocks.values()) == count
 
 
+def test_cluster_count_tracks_the_target_block_size() -> None:
+    """Cluster count follows n / target rather than a sqrt(n) cap.
+
+    A sqrt(n) cap made target_block_size unreachable above n = target squared,
+    leaving blocks an order of magnitude larger than asked for.
+    """
+    count = 20000
+    target = 30
+    ids = [str(i) for i in range(count)]
+    embeddings = np.random.randn(count, 8).astype(np.float32)
+
+    blocks = cluster_in_subprocess(embeddings, ids, target_block_size=target)
+
+    assert len(blocks) > count**0.5 * 2
+    assert count / len(blocks) < target * 2
+
+
 def test_pipeline_embeds_names_only() -> None:
     """Blocking text is the bare entity name when no blocking fields are set."""
     entities = _entities()

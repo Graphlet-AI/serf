@@ -753,6 +753,12 @@ def download(dataset: str, output_path: str | None) -> None:
 @click.option("--target-block-size", type=int, required=False, help="Target entities per block")
 @click.option("--max-block-size", type=int, required=False, help="Maximum entities per block")
 @click.option(
+    "--rounds",
+    type=int,
+    default=1,
+    help="ER rounds to simulate, merging co-blocked gold pairs between them",
+)
+@click.option(
     "--output",
     "-o",
     "output_path",
@@ -768,12 +774,17 @@ def blocking_sweep(
     seed: int,
     target_block_size: int | None,
     max_block_size: int | None,
+    rounds: int,
     output_path: str | None,
 ) -> None:
     """Compare embedding models on name-only blocking recall.
 
     Blocking recall is the share of gold pairs whose two records land in the same
     block, which caps the recall any matcher can reach. No LLM calls are made.
+
+    With --rounds above one, every gold pair that shares a block is merged before
+    the next round, so the cumulative recall is the ceiling a multi-round run
+    could reach if the matcher never made a mistake.
     """
     from serf.eval.blocking_sweep import sweep_dataset
 
@@ -797,12 +808,20 @@ def blocking_sweep(
             seed=seed,
             target_block_size=target_block_size,
             max_block_size=max_block_size,
+            rounds=rounds,
         ):
             results.append(result.as_dict())
-            label = result.model + (f" + {result.prompt!r}" if result.prompt else "")
+            label = result.model.split("/")[-1] + (" +prefix" if result.prompt else "")
+            round_note = f" round {result.round_number}" if rounds > 1 else ""
+            cumulative = (
+                f"  cumulative {result.cumulative_recall:.4f}"
+                f" ({result.cumulative_co_blocked}/{result.gold_pairs})"
+                if rounds > 1
+                else ""
+            )
             click.echo(
-                f"  {label:>72}  recall {result.blocking_recall:.4f}"
-                f"  ({result.co_blocked}/{result.gold_pairs})"
+                f"  {label:>34}{round_note}  recall {result.blocking_recall:.4f}"
+                f"  ({result.co_blocked}/{result.gold_pairs}){cumulative}"
                 f"  {result.blocks} blocks  {result.elapsed_seconds:.0f}s"
             )
 

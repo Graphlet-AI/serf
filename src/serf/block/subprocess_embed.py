@@ -53,7 +53,6 @@ if __name__ == "__main__":
 # Inline Python script for FAISS clustering — runs in a fresh subprocess
 FAISS_SCRIPT = """
 import json
-import math
 import sys
 import numpy as np
 def main():
@@ -81,9 +80,11 @@ def main():
             json.dump({"block_0": ids}, f)
         return
 
+    # One cluster per target_block_size records. A sqrt(n) cap here used to make
+    # target_block_size unreachable above n = target^2: at 66,879 records it asked
+    # for 258 clusters of 259 instead of 2,229 of 30, and the oversized-block split
+    # then tore apart pairs that clustering had found.
     nlist = max(1, n // target_block_size)
-    nlist = min(nlist, int(math.sqrt(n)))
-    nlist = max(1, nlist)
 
     faiss.normalize_L2(embeddings)
     quantizer = faiss.IndexFlatIP(dim)

@@ -9,6 +9,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator
 
+# XML has no null literal, so a model filling in an optional tag writes a
+# placeholder word or leaves the tag empty. Pydantic sees those as strings.
+XML_NULL_PLACEHOLDERS = frozenset({"", "null", "none", "nil", "n/a", "undefined"})
+
 
 class Entity(BaseModel):
     """Generic entity for entity resolution.
@@ -53,6 +57,47 @@ class Entity(BaseModel):
     match_skip: bool | None = None
     match_skip_reason: str | None = None
     match_skip_history: list[int] | None = None
+
+    @field_validator(
+        "uuid",
+        "source_ids",
+        "source_uuids",
+        "match_skip",
+        "match_skip_reason",
+        "match_skip_history",
+        mode="before",
+    )
+    @classmethod
+    def _drop_xml_nulls(cls, value: Any) -> Any:
+        """Turn XML's null placeholders into real ``None``.
+
+        ``<match_skip>null</match_skip>`` and ``<uuid></uuid>`` are how a model
+        says "no value" in XML, and Pydantic rejects both for ``bool | None``
+        and friends. Every rejection sends the whole block through DSPy's JSON
+        fallback, so this is the difference between one LLM call per block and
+        two, and between a parsed block and a lost one.
+
+        Parameters
+        ----------
+        value : Any
+            Raw value from the adapter or the source data
+
+        Returns
+        -------
+        Any
+            ``None`` for a placeholder, a filtered list for a list of them,
+            otherwise the input unchanged
+        """
+        if isinstance(value, str):
+            return None if value.strip().lower() in XML_NULL_PLACEHOLDERS else value
+        if isinstance(value, list):
+            kept = [
+                item
+                for item in value
+                if not (isinstance(item, str) and item.strip().lower() in XML_NULL_PLACEHOLDERS)
+            ]
+            return kept or None
+        return value
 
     @field_validator("attributes", mode="before")
     @classmethod

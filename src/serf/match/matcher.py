@@ -9,6 +9,7 @@ import dspy
 from tqdm import tqdm
 
 from serf.config import config
+from serf.dspy.adapter import RepairingXMLAdapter
 from serf.dspy.lm import create_lm
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import BlockResolution, EntityBlock
@@ -58,7 +59,7 @@ class EntityMatcher:
         self.max_concurrent = max_concurrent or config.get("er.matching.max_concurrent", 20)
         self._predictor: dspy.Predict | None = None
         self._lm: dspy.LM | None = None
-        self._adapter = dspy.XMLAdapter()
+        self._adapter = RepairingXMLAdapter()
 
     def _ensure_lm(self) -> dspy.LM:
         """Get or create the student/task LM instance."""

@@ -12,6 +12,7 @@ from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 
 from serf.block.pipeline import SemanticBlockingPipeline
 from serf.config import config
+from serf.dspy.adapter import RepairingXMLAdapter
 from serf.dspy.lm import create_lm
 from serf.dspy.signatures import BlockMatch, EdgeResolve, EntityMerge
 from serf.dspy.types import BlockResolution, Entity, EntityBlock, MatchDecision
@@ -350,5 +351,5 @@ def optimize_module(
         track_stats=True,
         log_dir=log_dir,
     )
-    with dspy.context(lm=student_lm, adapter=dspy.XMLAdapter()):
+    with dspy.context(lm=student_lm, adapter=RepairingXMLAdapter()):
         return optimizer.compile(student=module, trainset=trainset, valset=valset)

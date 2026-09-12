@@ -155,7 +155,9 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Remaining three datasets rerun at `--max-iterations 3`; all five now measured at 1 vs 3
 - [x] Iteration finding written up: recall up on all five, precision down on all five, mean F1 -0.0895
 - [x] Merge/expansion closure identified as the cause and demonstrated with the repo's own functions
-- [ ] Live `serf train` smoke run on DBLP-ACM finishes and reports a validation score
+- [x] Live `serf train` smoke run on DBLP-ACM: validation 0.9848 -> 1.0000, program saved
+- [x] `serf prompts --trained` and `serf benchmark --trained-prompts` verified against the saved program
+- [x] HTML-entity parse failure found by the training run and fixed in `RepairingXMLAdapter`
 
 ## Executor's Feedback or Assistance Requests
 
@@ -246,6 +248,12 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   needs `typed_sides` from `serf.match.dataset_matcher`, and the matcher needs to load what training
   saved. Putting the loader in `train` would cycle, so the path and loader live in
   `serf.dspy.trained`, which depends only on `dataset_signatures` and `config`.
+
+- **GEPA's `auto` budget barely shrinks with the example count.** `auto=light` asked for 404 metric
+  calls on 8 train + 6 val examples and still 388 on 2 + 2, because the budget is driven by the
+  candidate count rather than the set size. What changes is the wall time per rollout: the 8/6 run
+  averaged 32s per rollout and projected 3.6 hours, the 2/2 run averaged 1.7s and finished in 11
+  minutes. Shrink the sets to make a smoke run affordable, not the preset.
 
 - **Pre-commit silently skips untracked files.** `pre-commit run --files <new file>` reports nothing
   and passes until the file is `git add`ed. A new Markdown file will look prettier-clean when it is

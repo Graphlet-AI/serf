@@ -247,7 +247,7 @@ SERF is a 1,000-record sample at seed 42, three ER iterations, `--signature-mode
 | gpt4-0613 zero-shot    | 95.78      | pair classification       | no                       |
 | RoBERTa-SupCon         | 94.29      | pair classification       | yes                      |
 | gpt-4o-mini fine-tuned | 94.09      | pair classification       | yes                      |
-| **SERF gpt-oss-120b**  | **92.49**  | **end-to-end resolution** | **no**                   |
+| **SERF gpt-oss-120b**  | **93.54**  | **end-to-end resolution** | **no**                   |
 | gpt-4o-2024-08-06      | 92.20      | pair classification       | no                       |
 | RobEM                  | 90.90      | pair classification       | yes                      |
 | HierGAT                | 89.80      | pair classification       | yes                      |
@@ -267,7 +267,7 @@ profiling, and running the three ER iterations the pipeline is designed around. 
 0.8413 on the same sample, because one matching pass can only pair records blocking already put
 together — which is also why single-pass blocking recall of 0.8912 is not the ceiling it looks like.
 Re-blocking the entities merged by the previous round gives separated records another chance to meet,
-and end-to-end recall here reaches 0.9094.
+and end-to-end recall here reaches 0.9114.
 
 ### Blocking Recall
 
@@ -496,21 +496,23 @@ differs:
 | Dataset            | F1 @1  | F1 @3      | Delta   | Recall @1 -> @3  | Precision @1 -> @3 |
 | ------------------ | ------ | ---------- | ------- | ---------------- | ------------------ |
 | **Amazon-Google**  | 0.7619 | **0.8655** | +0.1036 | 0.6493 -> 0.8580 | 0.9218 -> 0.8732   |
-| **Abt-Buy**        | 0.8413 | **0.9381** | +0.0968 | 0.7303 -> 0.9094 | 0.9920 -> 0.9686   |
+| **Abt-Buy**        | 0.8413 | **0.9354** | +0.0941 | 0.7303 -> 0.9114 | 0.9920 -> 0.9606   |
 | **DBLP-Scholar**   | 0.9244 | **0.9793** | +0.0549 | 0.8594 -> 0.9594 | 1.0000 -> 1.0000   |
 | **Walmart-Amazon** | 0.8905 | **0.9412** | +0.0507 | 0.8133 -> 0.9600 | 0.9839 -> 0.9231   |
 | **DBLP-ACM**       | 0.9693 | **0.9737** | +0.0044 | 0.9622 -> 0.9727 | 0.9765 -> 0.9747   |
-| **mean**           | 0.8775 | **0.9395** | +0.0621 |                  |                    |
+| **mean**           | 0.8775 | **0.9390** | +0.0615 |                  |                    |
 
-Iteration wins on all five, worth +0.0621 mean F1. Recall rises everywhere; precision gives back
+Iteration wins on all five, worth +0.0615 mean F1. Recall rises everywhere; precision gives back
 between 0.0018 and 0.0608 on four of the five.
 
 An earlier version of this table reported the opposite, with DBLP-Scholar losing 0.4846 F1. That was
 a scoring bug, not a pipeline result. These benchmarks state a bipartite ground truth, built as
 `(a_id, b_id + RIGHT_ID_OFFSET)`, so they never say whether two left records or two right records
-are the same thing. Expanding a merged entity asserts exactly that, and those same-source pairs were
-being counted as false positives — on DBLP-Scholar, all 783 of its false positives were same-source
-and none was a real error. `BenchmarkDataset.evaluate` now scores only cross-source pairs. Details in
+are the same thing. Merging entities asserts exactly that, and those same-source pairs were being
+counted as false positives — on DBLP-Scholar, all 783 of its false positives were same-source and
+none was a real error. `BenchmarkDataset.evaluate` now resolves the predicted pairs into the
+clusters they imply and scores the cross-source pairs those clusters claim, so the result no longer
+depends on which pairs of a cluster the matcher happened to write down. Details in
 [experiments/per-dataset-signature-baseline.md](experiments/per-dataset-signature-baseline.md).
 
 ## Project Structure

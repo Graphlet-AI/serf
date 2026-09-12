@@ -1712,6 +1712,10 @@ def benchmark(
             {"Metric": "Recall", "Value": f"{metrics['recall']:.4f}"},
             {"Metric": "F1 Score", "Value": f"{metrics['f1_score']:.4f}"},
             {"Metric": "Predicted Pairs", "Value": str(len(predicted_pairs))},
+            {
+                "Metric": "Scored Pairs",
+                "Value": str(int(metrics["true_positives"]) + int(metrics["false_positives"])),
+            },
             {"Metric": "Correct (TP)", "Value": str(metrics["true_positives"])},
             {"Metric": "Wrong (FP)", "Value": str(metrics["false_positives"])},
             {"Metric": "Iterations", "Value": str(iterations_run)},

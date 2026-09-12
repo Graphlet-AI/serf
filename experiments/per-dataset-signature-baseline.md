@@ -316,13 +316,13 @@ blocking, same prompts, so the iteration count is the only difference:
 | Dataset        | 1 iteration | 3 iterations |   Delta | P @1   | P @3   | R @1   | R @3       | FP @3 |
 | -------------- | ----------- | ------------ | ------: | ------ | ------ | ------ | ---------- | ----: |
 | dblp-acm       | 0.9693      | **0.9737**   | +0.0044 | 0.9765 | 0.9747 | 0.9622 | **0.9727** |    12 |
-| abt-buy        | 0.8413      | **0.9381**   | +0.0968 | 0.9920 | 0.9686 | 0.7303 | **0.9094** |    15 |
+| abt-buy        | 0.8413      | **0.9354**   | +0.0941 | 0.9920 | 0.9606 | 0.7303 | **0.9114** |    19 |
 | walmart-amazon | 0.8905      | **0.9412**   | +0.0507 | 0.9839 | 0.9231 | 0.8133 | **0.9600** |     6 |
 | amazon-google  | 0.7619      | **0.8655**   | +0.1036 | 0.9218 | 0.8732 | 0.6493 | **0.8580** |    43 |
 | dblp-scholar   | 0.9244      | **0.9793**   | +0.0549 | 1.0000 | 1.0000 | 0.8594 | **0.9594** |     0 |
-| **mean**       | 0.8775      | **0.9395**   | +0.0621 |        |        |        |            |       |
+| **mean**       | 0.8775      | **0.9390**   | +0.0615 |        |        |        |            |       |
 
-**Three iterations wins on all five datasets, and the mean F1 rises 0.0621.** Recall rose on all
+**Three iterations wins on all five datasets, and the mean F1 rises 0.0615.** Recall rose on all
 five. Precision fell modestly on four, by between 0.0018 and 0.0608, which is a real cost but a
 small one against what recall gains.
 
@@ -377,6 +377,42 @@ All 783 were same-source. The matcher made **zero** wrong cross-source calls. Th
 truth is defined over. The same-source claims may well be true — transitive closure does imply
 them — but this ground truth does not adjudicate them either way.
 
+### The other half of the same bug: pairs the matcher never wrote down
+
+Dropping same-source pairs fixed the false-positive side and left the false-negative side standing.
+`collect_pairs` reads a resolved entity and emits master-to-source pairs — a star, not the clique —
+so a group the LLM returned as one entity over two left and two right records reaches scoring as
+three pairs when it asserts six:
+
+```
+LLM said: one entity covering [1, 2, 100001, 100002]
+  as Abzu represents it: id = 1  source_ids = [2, 100001, 100002]
+
+collect_pairs produced 3 pairs (star, master to each source):
+  (1, 2)  LEFT-LEFT  same-source
+  (1, 100001)  LEFT-RIGHT  cross-source
+  (1, 100002)  LEFT-RIGHT  cross-source
+
+the cross-source pairs this entity actually claims (4):
+  (1, 100001)  recorded
+  (1, 100002)  recorded
+  (2, 100001)  MISSING from the scored set
+  (2, 100002)  MISSING from the scored set
+```
+
+Which pairs of a group get written down is an artifact of how the matcher happened to phrase its
+answer, so `evaluate` now resolves the predicted pairs into connected components first and scores
+the cross-source pairs those components claim. Scoring the clustering rather than the pair log also
+keeps the same-source restriction honest: a same-source merge that welds two gold entities together
+is still paid for, because the enlarged cluster goes on to claim cross-source pairs the gold
+contradicts.
+
+Measured over the same ten runs, this moves one number. Abt-Buy at three iterations goes from 477 to
+482 scored pairs, finding one more true pair and four more false ones: recall 0.9094 to 0.9114, F1
+0.9381 to 0.9354. The other nine runs are identical to four decimal places, because outside Abt-Buy
+the matcher's stars happened to already cover the cliques. The iteration conclusion is unchanged
+either way.
+
 ### Why DBLP-Scholar was hit hardest
 
 Its gold standard is the only one with large many-to-many groups, which is exactly the condition
@@ -400,15 +436,15 @@ though none appeared in this sample.
 
 ### Reading the recall numbers
 
-Abt-Buy's end-to-end recall of 0.9094 is above the 0.8912 single-pass blocking recall measured for
+Abt-Buy's end-to-end recall of 0.9114 is above the 0.8912 single-pass blocking recall measured for
 the same dataset, which is only paradoxical if that figure is read as a ceiling. It caps a single
 pass, not a run: each round re-blocks what the previous round merged, so pairs blocking missed the
-first time can be found later. That is the mechanism iteration buys, and it is worth +0.1791 recall
-on Abt-Buy for -0.0234 precision.
+first time can be found later. That is the mechanism iteration buys, and it is worth +0.1811 recall
+on Abt-Buy for -0.0314 precision.
 
 ### What this means for the standing protocol
 
-`--max-iterations 3` stays, and now on evidence rather than convention: it is worth +0.0621 mean F1
+`--max-iterations 3` stays, and now on evidence rather than convention: it is worth +0.0615 mean F1
 against one iteration, and it wins on every dataset. The earlier suggestion to cap iterations per
 dataset or to require more than one predicted pair before joining two multi-record components is
 withdrawn — both were solutions to a scoring bug.
@@ -424,10 +460,18 @@ are five to ten times that.
 - Per-arm CLI logs: `/opt/cursor/artifacts/sig_<arm>_<dataset>.log`
 - Driver logs: `/opt/cursor/artifacts/sig_<arm>_driver.log`
 - Corrected one- and three-iteration runs, all five datasets:
-  `data/benchmarks/fixed_iter{1,3}/<dataset>/<dataset>_per-dataset_results.json`, logs at
-  `/opt/cursor/artifacts/fixed_<dataset>_iter{1,3}.log`, driver at
-  `/opt/cursor/artifacts/rerun_fixed_driver.log`, table from
+  `data/benchmarks/closure_iter{1,3}/<dataset>/<dataset>_per-dataset_results.json`, logs at
+  `/opt/cursor/artifacts/closure_<dataset>_iter{1,3}.log`, driver at
+  `/opt/cursor/artifacts/rerun_closure_driver.log`, table from
   `/opt/cursor/artifacts/fixed_table.py`
+- The same runs scored before the clustering step, differing only on Abt-Buy at three iterations:
+  `/opt/cursor/artifacts/fixed_<dataset>_iter{1,3}.log`, driver at
+  `/opt/cursor/artifacts/rerun_fixed_driver.log`
+- Star versus clique projection of one resolved entity:
+  `/opt/cursor/artifacts/star_vs_clique.py`
+- Accumulated pairs against the clustering closure, all ten runs:
+  `/opt/cursor/artifacts/closure_consistency.log` and `closure_consistency.json` from
+  `/opt/cursor/artifacts/closure_consistency.py`
 - Superseded three-iteration runs scored before the fix:
   `data/benchmarks/tier_removal/<dataset>_per-dataset_results.json` for DBLP-ACM and Abt-Buy,
   `data/benchmarks/iter3_rerun/<dataset>/<dataset>_per-dataset_results.json` for the other three

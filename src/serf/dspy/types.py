@@ -4,9 +4,14 @@ Domain-agnostic Pydantic types used throughout the ER pipeline.
 Domain-specific fields live in the Entity `attributes` dict.
 """
 
+import json
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# XML has no null literal, so a model filling in an optional tag writes a
+# placeholder word or leaves the tag empty. Pydantic sees those as strings.
+XML_NULL_PLACEHOLDERS = frozenset({"", "null", "none", "nil", "n/a", "undefined"})
 
 
 class Entity(BaseModel):
@@ -53,6 +58,81 @@ class Entity(BaseModel):
     match_skip_reason: str | None = None
     match_skip_history: list[int] | None = None
 
+    @field_validator(
+        "uuid",
+        "source_ids",
+        "source_uuids",
+        "match_skip",
+        "match_skip_reason",
+        "match_skip_history",
+        mode="before",
+    )
+    @classmethod
+    def _drop_xml_nulls(cls, value: Any) -> Any:
+        """Turn XML's null placeholders into real ``None``.
+
+        ``<match_skip>null</match_skip>`` and ``<uuid></uuid>`` are how a model
+        says "no value" in XML, and Pydantic rejects both for ``bool | None``
+        and friends. Every rejection sends the whole block through DSPy's JSON
+        fallback, so this is the difference between one LLM call per block and
+        two, and between a parsed block and a lost one.
+
+        Parameters
+        ----------
+        value : Any
+            Raw value from the adapter or the source data
+
+        Returns
+        -------
+        Any
+            ``None`` for a placeholder, a filtered list for a list of them,
+            otherwise the input unchanged
+        """
+        if isinstance(value, str):
+            return None if value.strip().lower() in XML_NULL_PLACEHOLDERS else value
+        if isinstance(value, list):
+            kept = [
+                item
+                for item in value
+                if not (isinstance(item, str) and item.strip().lower() in XML_NULL_PLACEHOLDERS)
+            ]
+            return kept or None
+        return value
+
+    @field_validator("attributes", mode="before")
+    @classmethod
+    def _parse_attributes(cls, value: Any) -> Any:
+        """Accept the JSON-object string an XML tag body carries.
+
+        ``dspy.XMLAdapter`` renders a dict output field as a single
+        ``<attributes>...</attributes>`` tag with no nested structure, so the
+        model writes a JSON object into the tag body and the adapter hands the
+        text back as ``str``. Rejecting that makes every block fall through to
+        DSPy's JSON fallback, which doubles the LLM calls and loses the blocks
+        whose fallback response is malformed.
+
+        Parameters
+        ----------
+        value : Any
+            Raw value from the adapter or the source data
+
+        Returns
+        -------
+        Any
+            A dict when the input was a JSON object or an empty string,
+            otherwise the input unchanged so Pydantic reports the real error
+        """
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if not text:
+            return {}
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return value
+        return parsed if isinstance(parsed, dict) else value
+
     def text_for_embedding(self, blocking_fields: list[str] | None = None) -> str:
         """Return text for embedding-based blocking.
 
@@ -86,6 +166,46 @@ class Entity(BaseModel):
             if val and isinstance(val, str):
                 parts.append(val)
         return " ".join(parts)
+
+    def json_for_embedding(self) -> str:
+        """Return every populated field as a JSON object, field names inline.
+
+        The alternative to name-only blocking. Naming each value lets the model
+        read "brand" and "price" as different kinds of thing rather than as one
+        undifferentiated string, which matters most where the name alone is
+        ambiguous, as with product titles that share a manufacturer.
+
+        Two details keep the two sides of a join comparable. The ``l_`` and
+        ``r_`` prefixes that Leipzig-style benchmarks put on every column are
+        stripped, because every gold pair crosses sources and a field name that
+        encodes which source a record came from pushes the sides apart. Record
+        identifiers are dropped for the same reason: they are drawn from
+        unrelated namespaces, so they are noise at best.
+
+        Returns
+        -------
+        str
+            Compact JSON with keys sorted, so the text is stable across runs
+        """
+        record: dict[str, str] = {}
+        for key, value in self.attributes.items():
+            if value is None or value == "":
+                continue
+            field = key
+            for prefix in ("l_", "r_"):
+                if field.startswith(prefix):
+                    field = field[len(prefix) :]
+                    break
+            if field == "id":
+                continue
+            record[field] = str(value)
+
+        if self.name and self.name not in record.values():
+            record["name"] = self.name
+        if self.description and self.description not in record.values():
+            record["description"] = self.description
+
+        return json.dumps(record, ensure_ascii=False, sort_keys=True)
 
 
 class Publication(Entity):
@@ -306,6 +426,11 @@ class BlockingMetrics(BaseModel):
         Fraction of true pairs retained
     reduction_ratio : float
         1 - (pairs after blocking / total possible pairs)
+    blocked_pairs : int
+        Distinct record pairs sharing at least one block, which is the number
+        of comparisons the matcher is asked to make. Counted distinctly rather
+        than summed over blocks, because a record can sit in more than one
+        block and the same pair must not be billed twice.
     """
 
     total_blocks: int = 0
@@ -315,3 +440,4 @@ class BlockingMetrics(BaseModel):
     singleton_blocks: int = 0
     pair_completeness: float = 0.0
     reduction_ratio: float = 0.0
+    blocked_pairs: int = 0

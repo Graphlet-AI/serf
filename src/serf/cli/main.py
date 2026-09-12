@@ -5,18 +5,26 @@ import os
 import subprocess
 import sys
 import time
-from typing import Any
+from typing import Any, cast
 
 import click
 import pandas as pd
 
+from serf.config import config as serf_config
+from serf.dspy.dataset_signatures import (
+    SIGNATURE_MODE_GENERIC,
+    SIGNATURE_MODE_PER_DATASET,
+    SIGNATURE_MODES,
+)
+from serf.eval.benchmarks import DATASET_REGISTRY
 from serf.logs import get_logger, setup_logging
+from serf.match.run import entity_members, expand_pairs, merge_matched_entities
 from serf.tracking import setup_mlflow
 
 logger = get_logger(__name__)
 
 # Available benchmark dataset names for CLI help
-BENCHMARK_DATASETS = ["dblp-acm", "dblp-scholar", "abt-buy"]
+BENCHMARK_DATASETS = list(DATASET_REGISTRY.keys())
 
 
 @click.group(context_settings={"show_default": True})
@@ -56,8 +64,6 @@ def mlflow(host: str | None, port: int | None, backend_store_uri: str | None) ->
     Runs `mlflow server` with a SQLite backend for tracing DSPy operations.
     The UI will be available at http://<host>:<port>.
     """
-    from serf.config import config as serf_config
-
     host = host or serf_config.get("mlflow.host", "127.0.0.1")
     port = port or serf_config.get("mlflow.port", 5000)
     backend_store_uri = backend_store_uri or serf_config.get(
@@ -183,7 +189,8 @@ def run(
     (DSPy BlockMatch). Runs iterative rounds until convergence.
     Writes resolved entities as Parquet and CSV.
 
-    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
+    for Gemini 3.5 Flash-Lite (teacher/analyze).
     """
     from serf.pipeline import ERConfig, run_pipeline
 
@@ -713,6 +720,766 @@ def download(dataset: str, output_path: str | None) -> None:
 
 
 # ---------------------------------------------------------------------------
+# profile-benchmark  (exploratory analysis of a benchmark dataset)
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="profile-benchmark", context_settings={"show_default": True})
+@click.option(
+    "--dataset",
+    "-d",
+    "datasets",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    multiple=True,
+    help="Benchmark to profile. Repeatable. Defaults to every benchmark",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Write the Markdown report here instead of printing it",
+)
+@click.option(
+    "--json",
+    "json_path",
+    type=click.Path(),
+    required=False,
+    help="Also write the structured profile as JSON here",
+)
+@click.option(
+    "--examples",
+    type=int,
+    default=6,
+    help="How many match and mismatch examples to report per dataset",
+)
+@click.option(
+    "--top-values",
+    type=int,
+    default=6,
+    help="How many frequent values to report per column",
+)
+def profile_benchmark_command(
+    datasets: tuple[str, ...],
+    output_path: str | None,
+    json_path: str | None,
+    examples: int,
+    top_values: int,
+) -> None:
+    """Run exploratory analysis over the benchmark datasets.
+
+    Reports per-column completeness and Magellan discriminativeness, the most
+    common values, gold pair cardinality, how often each attribute agrees on a
+    true match against the hardest non-matches a token blocker produces, and
+    worked examples of both a match and a non-match that string similarity
+    gets wrong. Everything is computed in Spark SQL.
+    """
+    from serf.analyze.benchmarks import format_profile, profile_benchmark
+
+    selected = list(datasets) if datasets else BENCHMARK_DATASETS
+    reports: list[str] = []
+    profiles: dict[str, Any] = {}
+    for name in selected:
+        click.echo(f"Profiling {name}...", err=True)
+        profile = profile_benchmark(name, examples=examples, top_values=top_values)
+        profiles[name] = profile
+        reports.append(format_profile(profile))
+
+    report = "\n".join(reports)
+    if output_path:
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write(report)
+        click.echo(f"Wrote {output_path}", err=True)
+    else:
+        click.echo(report)
+
+    if json_path:
+        with open(json_path, "w", encoding="utf-8") as f:
+            json.dump(profiles, f, indent=2, default=str)
+        click.echo(f"Wrote {json_path}", err=True)
+
+
+# ---------------------------------------------------------------------------
+# blocking-sweep  (compare embedding models on blocking recall)
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="blocking-sweep")
+@click.option(
+    "--dataset",
+    "-d",
+    "datasets",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    multiple=True,
+    help="Benchmark to sweep. Repeatable. Defaults to every benchmark",
+)
+@click.option(
+    "--model",
+    "-m",
+    "models",
+    type=str,
+    multiple=True,
+    help="Embedding model to test. Repeatable. Defaults to the config candidates",
+)
+@click.option(
+    "--prompt",
+    type=str,
+    required=False,
+    help="Instruction prefix applied to every --model given on the command line",
+)
+@click.option(
+    "--candidate-set",
+    type=click.Choice(["small", "large", "all"], case_sensitive=False),
+    default="small",
+    help="Which configured candidate list to sweep, ignored when --model is given",
+)
+@click.option(
+    "--trust-remote-code",
+    is_flag=True,
+    help="Run the model repository's own modelling code, which some architectures require",
+)
+@click.option(
+    "--blocking-strategy",
+    type=click.Choice(["name", "json", "union", "both", "all"], case_sensitive=False),
+    default="name",
+    help=(
+        "Embed the name alone, every field as JSON, the union of both blockings,"
+        " or score name and json separately (both) or all three (all)"
+    ),
+)
+@click.option(
+    "--sample",
+    type=int,
+    default=0,
+    help="Record budget per dataset, or 0 for the whole dataset",
+)
+@click.option("--seed", type=int, default=42, help="Sampling seed")
+@click.option("--target-block-size", type=int, required=False, help="Target entities per block")
+@click.option("--max-block-size", type=int, required=False, help="Maximum entities per block")
+@click.option(
+    "--rounds",
+    type=int,
+    default=1,
+    help="ER rounds to simulate, merging co-blocked gold pairs between them",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Path to write the sweep results as JSON",
+)
+def blocking_sweep(
+    datasets: tuple[str, ...],
+    models: tuple[str, ...],
+    prompt: str | None,
+    candidate_set: str,
+    blocking_strategy: str,
+    trust_remote_code: bool,
+    sample: int,
+    seed: int,
+    target_block_size: int | None,
+    max_block_size: int | None,
+    rounds: int,
+    output_path: str | None,
+) -> None:
+    """Compare embedding models on blocking recall.
+
+    Blocking recall is the share of gold pairs whose two records land in the same
+    block, which caps the recall any matcher can reach. No LLM calls are made.
+    Each row also reports the distinct pairs blocking would hand the matcher, so
+    recall bought with extra inference spend is visible as such.
+
+    With --rounds above one, every gold pair that shares a block is merged before
+    the next round, so the cumulative recall is the ceiling a multi-round run
+    could reach if the matcher never made a mistake.
+    """
+    from serf.eval.blocking_sweep import EmbeddingCandidate, sweep_dataset
+
+    if models:
+        candidates = [EmbeddingCandidate(name, prompt or "", trust_remote_code) for name in models]
+    else:
+        keys = {
+            "small": ["benchmarks.embedding_candidates"],
+            "large": ["benchmarks.embedding_candidates_large"],
+            "all": ["benchmarks.embedding_candidates", "benchmarks.embedding_candidates_large"],
+        }[candidate_set.lower()]
+        configured: list[dict[str, object]] = []
+        for key in keys:
+            configured.extend(cast(list[dict[str, object]], serf_config.get(key, [])))
+        candidates = [
+            EmbeddingCandidate(
+                model=str(entry["model"]),
+                prompt=str(entry.get("prompt", "")),
+                trust_remote_code=bool(entry.get("trust_remote_code", False)),
+            )
+            for entry in configured
+        ]
+
+    targets = list(datasets) if datasets else BENCHMARK_DATASETS
+    strategies = {
+        "both": ["name", "json"],
+        "all": ["name", "json", "union"],
+    }.get(blocking_strategy.lower(), [blocking_strategy.lower()])
+
+    results = []
+    for name in targets:
+        click.echo(f"\n{name}")
+        for strategy in strategies:
+            for result in sweep_dataset(
+                dataset=name,
+                candidates=candidates,
+                sample=sample,
+                seed=seed,
+                target_block_size=target_block_size,
+                max_block_size=max_block_size,
+                rounds=rounds,
+                strategy=strategy,
+            ):
+                results.append(result.as_dict())
+                label = result.model.split("/")[-1] + (" +prefix" if result.prompt else "")
+                round_note = f" round {result.round_number}" if rounds > 1 else ""
+                cumulative = (
+                    f"  cumulative {result.cumulative_recall:.4f}"
+                    f" ({result.cumulative_co_blocked}/{result.gold_pairs})"
+                    if rounds > 1
+                    else ""
+                )
+                click.echo(
+                    f"  [{strategy}] {label:>34}{round_note}"
+                    f"  recall {result.blocking_recall:.4f}"
+                    f"  ({result.co_blocked}/{result.gold_pairs}){cumulative}"
+                    f"  {result.blocks} blocks"
+                    f"  {result.blocked_pairs} pairs  {result.elapsed_seconds:.0f}s"
+                )
+
+    if output_path:
+        with open(output_path, "w") as handle:
+            json.dump(results, handle, indent=2)
+        click.echo(f"\nResults saved to {output_path}")
+
+
+@cli.command(name="mteb-rank", context_settings={"show_default": True})
+@click.option(
+    "--category",
+    "categories",
+    type=str,
+    multiple=True,
+    help="MTEB category to score. Repeatable. Defaults to every configured category",
+)
+@click.option(
+    "--model",
+    "-m",
+    "models",
+    type=str,
+    multiple=True,
+    help="Model to score. Repeatable. Defaults to the config candidates",
+)
+@click.option(
+    "--candidate-set",
+    type=click.Choice(["small", "large", "all"], case_sensitive=False),
+    default="all",
+    help="Which configured candidate list to score, ignored when --model is given",
+)
+@click.option(
+    "--sweep",
+    "sweep_path",
+    type=click.Path(exists=True),
+    required=False,
+    help="Blocking sweep JSON to correlate each category against",
+)
+@click.option(
+    "--strategy",
+    type=click.Choice(["name", "json", "union"], case_sensitive=False),
+    default="name",
+    help="Blocking strategy to read from the sweep",
+)
+def mteb_rank(
+    categories: tuple[str, ...],
+    models: tuple[str, ...],
+    candidate_set: str,
+    sweep_path: str | None,
+    strategy: str,
+) -> None:
+    """Rank candidate embeddings by their published MTEB scores.
+
+    Given a blocking sweep with --sweep, also reports how well each category
+    orders the candidates the way measured blocking recall does. A category
+    that cannot beat a coin flip there is not worth selecting candidates on.
+    """
+    from serf.eval.mteb_scores import (
+        configured_categories,
+        correlate_categories,
+        measured_recall,
+        score_models,
+    )
+
+    if models:
+        wanted = list(models)
+    else:
+        keys = {
+            "small": ["benchmarks.embedding_candidates"],
+            "large": ["benchmarks.embedding_candidates_large"],
+            "all": ["benchmarks.embedding_candidates", "benchmarks.embedding_candidates_large"],
+        }[candidate_set.lower()]
+        configured: list[dict[str, object]] = []
+        for key in keys:
+            configured.extend(cast(list[dict[str, object]], serf_config.get(key, [])))
+        wanted = sorted({str(entry["model"]) for entry in configured})
+
+    targets = list(categories) if categories else configured_categories()
+
+    for category in targets:
+        click.echo(f"\n{category}")
+        for entry in score_models(wanted, category):
+            note = "" if entry.complete else f"  ({entry.tasks_found}/{entry.tasks_expected} tasks)"
+            click.echo(f"  {entry.score:>6.2f}  {entry.model}{note}")
+
+    if not sweep_path:
+        return
+
+    with open(sweep_path) as handle:
+        sweep = json.load(handle)
+    recalls = measured_recall(sweep, strategy=strategy)
+    if not recalls:
+        click.echo(f"\nNo {strategy} results in {sweep_path}")
+        return
+
+    click.echo(f"\nMeasured {strategy} blocking recall, mean over datasets")
+    for model, recall in sorted(recalls.items(), key=lambda item: item[1], reverse=True):
+        click.echo(f"  {recall:.4f}  {model}")
+
+    click.echo("\nDoes an MTEB category predict blocking recall? (Spearman)")
+    for category, correlation, count in correlate_categories(recalls, targets):
+        click.echo(f"  {correlation:>7.4f}  {category}  (n={count})")
+
+
+# ---------------------------------------------------------------------------
+# prompts  (show the signatures and prompts the matcher sends)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--dataset",
+    "-d",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    required=False,
+    help="Show one dataset instead of every one",
+)
+@click.option(
+    "--signature-mode",
+    type=click.Choice(list(SIGNATURE_MODES), case_sensitive=False),
+    default=SIGNATURE_MODE_PER_DATASET,
+    help="Show the shared BlockMatch signature or the typed per-dataset signatures",
+)
+@click.option(
+    "--full/--instructions-only",
+    default=True,
+    help="Include the rendered system and user messages, not just the instructions",
+)
+@click.option(
+    "--trained/--as-written",
+    default=False,
+    help="Show the instructions `serf train` wrote instead of the signature docstring",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Write the Markdown report to this file instead of stdout",
+)
+def prompts(
+    dataset: str | None,
+    signature_mode: str,
+    full: bool,
+    trained: bool,
+    output_path: str | None,
+) -> None:
+    """Show the DSPy signatures and prompts matching runs on.
+
+    A signature's docstring is its prompt: DSPy copies it into
+    Signature.instructions and the adapter renders it into the system message.
+    The report also prints the field list and the nested XML skeleton the answer
+    has to fill, which are fixed by the signature's types and are the part GEPA
+    cannot rewrite.
+
+    Makes no LLM call, so this is the cheap way to read what the model is told
+    before and after `serf train`.
+    """
+    from serf.dspy.prompts import all_prompt_reports, render_reports
+    from serf.dspy.trained import trained_instructions
+
+    datasets = [dataset] if dataset else None
+    reports = all_prompt_reports(signature_mode=signature_mode, datasets=datasets)
+    if trained:
+        from dataclasses import replace
+
+        reports = [
+            replace(
+                report, instructions=trained_instructions(report.dataset) or report.instructions
+            )
+            for report in reports
+        ]
+    document = render_reports(reports, include_prompt=full)
+
+    if output_path:
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as handle:
+            handle.write(document)
+        click.echo(f"Wrote {len(reports)} signature report(s) to {output_path}")
+        for report in reports:
+            click.echo(
+                f"  {report.dataset}: {report.signature_name}, "
+                f"{report.instruction_characters:,} instruction characters, "
+                f"{report.prompt_characters:,} in the full prompt"
+            )
+        return
+    click.echo(document)
+
+
+# ---------------------------------------------------------------------------
+# train  (GEPA optimization of a dataset's matching prompt)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--dataset",
+    "-d",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    multiple=True,
+    help="Benchmark dataset to train. Repeat the option to train several.",
+)
+@click.option(
+    "--all-datasets",
+    is_flag=True,
+    default=False,
+    help="Train every benchmark dataset in turn",
+)
+@click.option(
+    "--student-model",
+    type=str,
+    default=None,
+    help="Task LM that executes the matching rollouts (from config.yml models.student)",
+)
+@click.option(
+    "--teacher-model",
+    type=str,
+    default=None,
+    help="Reflection LM that rewrites the instructions (from config.yml models.teacher)",
+)
+@click.option(
+    "--auto",
+    type=click.Choice(["light", "medium", "heavy"], case_sensitive=False),
+    default=None,
+    help="GEPA budget preset (from config.yml optimize.auto)",
+)
+@click.option(
+    "--train-blocks",
+    type=int,
+    default=None,
+    help="Cap on training blocks (from config.yml optimize.train_blocks)",
+)
+@click.option(
+    "--val-blocks",
+    type=int,
+    default=None,
+    help="Cap on validation blocks (from config.yml optimize.val_blocks)",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for split sampling (from config.yml optimize.seed)",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_dir",
+    type=click.Path(),
+    default=None,
+    help="Directory to write the trained programs to (from config.yml optimize.trained_dir)",
+)
+@click.option(
+    "--log-dir",
+    type=click.Path(),
+    default=None,
+    help="GEPA checkpoint directory (from config.yml optimize.log_dir)",
+)
+@click.option(
+    "--data-dir",
+    type=click.Path(),
+    default=None,
+    help="Directory to download benchmark data into",
+)
+def train(
+    dataset: tuple[str, ...],
+    all_datasets: bool,
+    student_model: str | None,
+    teacher_model: str | None,
+    auto: str | None,
+    train_blocks: int | None,
+    val_blocks: int | None,
+    seed: int | None,
+    output_dir: str | None,
+    log_dir: str | None,
+    data_dir: str | None,
+) -> None:
+    """Train a benchmark dataset's matching prompt with GEPA.
+
+    Optimizes the per-dataset signature the benchmark actually runs. The student
+    LM executes matching rollouts, the teacher LM reads the feedback and rewrites
+    the instructions, and the winning program is written where `serf benchmark
+    --trained-prompts` and `serf prompts --trained` can read it.
+
+    Samples disjoint train and validation records, blocks each split on its own
+    so no record crosses the boundary, and keeps only the blocks that hold both
+    sources and at least one gold pair.
+
+    Requires VERTEX_AI_TOKEN for GPT OSS 120b and GEMINI_API_KEY for Gemini 3.5
+    Flash-Lite. `serf optimize` remains the path for the shared BlockMatch,
+    EntityMerge and EdgeResolve signatures.
+    """
+    from serf.dspy.train import train_dataset
+
+    names = list(BENCHMARK_DATASETS) if all_datasets else list(dataset)
+    if not names:
+        raise click.UsageError("Provide --dataset at least once, or --all-datasets")
+
+    setup_mlflow()
+
+    student_model = student_model or serf_config.get("models.student")
+    teacher_model = teacher_model or serf_config.get("models.teacher")
+    click.echo("GEPA training of the per-dataset matching prompts")
+    click.echo(f"  Student: {student_model}")
+    click.echo(f"  Teacher: {teacher_model}")
+    click.echo(f"  Datasets: {', '.join(names)}")
+
+    results = []
+    for name in names:
+        click.echo(f"\n=== {name} ===")
+        result = train_dataset(
+            name,
+            seed=seed,
+            train_blocks=train_blocks,
+            val_blocks=val_blocks,
+            student_model=student_model,
+            teacher_model=teacher_model,
+            auto=auto,
+            log_dir=log_dir,
+            output_dir=output_dir,
+            data_dir=data_dir,
+        )
+        results.append(result)
+        click.echo(f"  Signature: {result.signature_name}")
+        click.echo(f"  Examples:  {result.train_examples} train, {result.val_examples} val")
+        click.echo(
+            f"  Validation: {_score_text(result.baseline_score)} as written -> "
+            f"{_score_text(result.best_score)} trained"
+        )
+        click.echo(
+            f"  Instructions: {len(result.instructions_before):,} -> "
+            f"{len(result.instructions_after):,} characters"
+        )
+        click.echo(f"  Saved: {result.program_path}")
+        if not result.improved:
+            click.echo(
+                "  GEPA did not beat the shipped prompt on validation. Benchmark before "
+                "adopting it; --trained-prompts is opt-in for exactly this reason."
+            )
+
+    if len(results) > 1:
+        click.echo("\nSummary")
+        for result in results:
+            click.echo(
+                f"  {result.dataset:<16} {_score_text(result.baseline_score)} -> "
+                f"{_score_text(result.best_score)}"
+                f"{'  (improved)' if result.improved else ''}"
+            )
+
+
+def _score_text(score: float | None) -> str:
+    """Format a validation score for the CLI.
+
+    Parameters
+    ----------
+    score : float | None
+        Score to format
+
+    Returns
+    -------
+    str
+        Four-decimal score, or ``n/a`` when GEPA reported none
+    """
+    return "n/a" if score is None else f"{score:.4f}"
+
+
+# ---------------------------------------------------------------------------
+# optimize  (GEPA student/teacher prompt optimization)
+# ---------------------------------------------------------------------------
+
+
+@cli.command()
+@click.option(
+    "--signature",
+    type=click.Choice(["block-match", "entity-merge", "edge-resolve"], case_sensitive=False),
+    default="block-match",
+    help="ER signature to optimize with GEPA",
+)
+@click.option(
+    "--dataset",
+    "-d",
+    type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False),
+    required=False,
+    help="Benchmark dataset to block fully, then partition into train/val/holdout",
+)
+@click.option(
+    "--trainset",
+    type=click.Path(exists=True),
+    required=False,
+    help="JSONL file of labeled training examples",
+)
+@click.option(
+    "--valset",
+    type=click.Path(exists=True),
+    required=False,
+    help="JSONL file of labeled validation examples",
+)
+@click.option(
+    "--output",
+    "-o",
+    "output_path",
+    type=click.Path(),
+    required=False,
+    help="Path to save the optimized DSPy program",
+)
+@click.option(
+    "--student-model",
+    type=str,
+    default=None,
+    help="Student/task LM (from config.yml models.student)",
+)
+@click.option(
+    "--teacher-model",
+    type=str,
+    default=None,
+    help="Teacher/reflection LM (from config.yml models.teacher)",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for train/val/holdout sampling",
+)
+def optimize(
+    signature: str,
+    dataset: str | None,
+    trainset: str | None,
+    valset: str | None,
+    output_path: str | None,
+    student_model: str | None,
+    teacher_model: str | None,
+    seed: int | None,
+) -> None:
+    """Optimize an ER signature with GEPA.
+
+    Uses the student/task LM for rollouts and the teacher LM as GEPA's
+    reflection model. Requires VERTEX_AI_TOKEN for GPT OSS 120b and
+    GEMINI_API_KEY for Gemini 3.5 Flash-Lite.
+
+    With --dataset, randomly samples disjoint train, validation, and holdout
+    records using the budgets in config.yml, keeping ground-truth match groups
+    whole, then blocks within each split to build the BlockMatch examples.
+    """
+    import dspy
+
+    from serf.dspy.optimize import (
+        INPUT_FIELDS,
+        SIGNATURES,
+        load_jsonl_examples,
+        optimize_module,
+        prepare_dataset_splits,
+    )
+    from serf.eval.benchmarks import BenchmarkDataset
+    from serf.eval.splits import get_all_split_sizes, get_split_sizes
+
+    if not dataset and not trainset:
+        raise click.UsageError("Provide --dataset or --trainset")
+
+    setup_mlflow()
+
+    student_model = student_model or serf_config.get("models.student")
+    teacher_model = teacher_model or serf_config.get("models.teacher")
+    seed = seed if seed is not None else int(serf_config.get("optimize.seed", 42))
+    click.echo("GEPA optimization")
+    click.echo(f"  Signature: {signature}")
+    click.echo(f"  Student:   {student_model}")
+    click.echo(f"  Teacher:   {teacher_model}")
+    click.echo("  Split sizes (random match-group sampling; val and holdout first):")
+    for name, sizes in get_all_split_sizes().items():
+        click.echo(
+            f"    {name}: {sizes.train_records} train records, "
+            f"{sizes.val_records} val records, "
+            f"{sizes.holdout_records} holdout records"
+        )
+
+    holdout_blocks: list[Any] = []
+    if dataset:
+        sizes = get_split_sizes(dataset)
+        benchmark_data = BenchmarkDataset.download(dataset, output_path)
+        left_entities, right_entities = benchmark_data.to_entities()
+        entities = left_entities + right_entities
+        click.echo(f"  Sampling splits from {len(entities)} records, then blocking each split...")
+        train_examples, val_examples, holdout_blocks = prepare_dataset_splits(
+            entities,
+            benchmark_data.ground_truth,
+            sizes=sizes,
+            seed=seed,
+        )
+    else:
+        input_fields = INPUT_FIELDS[signature]
+        train_examples = load_jsonl_examples(str(trainset), input_fields)
+        val_examples = load_jsonl_examples(valset, input_fields) if valset else None
+
+    click.echo(f"  Trainset:  {len(train_examples)} block examples")
+    if val_examples is not None:
+        click.echo(f"  Valset:    {len(val_examples)} block examples")
+    if holdout_blocks:
+        holdout_size = sum(block.block_size for block in holdout_blocks)
+        click.echo(f"  Holdout:   {len(holdout_blocks)} blocks ({holdout_size} records)")
+
+    module = cast(dspy.Module, dspy.Predict(SIGNATURES[signature]))
+    # GEPA resumes from any state it finds in log_dir, so each run keeps its own.
+    optimized = optimize_module(
+        module,
+        trainset=train_examples,
+        valset=val_examples,
+        student_model=student_model,
+        teacher_model=teacher_model,
+        log_dir=output_path if dataset and output_path else None,
+    )
+
+    if output_path:
+        os.makedirs(
+            output_path if dataset else (os.path.dirname(output_path) or "."), exist_ok=True
+        )
+        program_path = os.path.join(output_path, f"{dataset}_gepa.json") if dataset else output_path
+        optimized.save(program_path)
+        click.echo(f"\nSaved optimized program to {program_path}")
+        if holdout_blocks:
+            holdout_path = os.path.join(output_path, f"{dataset}_holdout.jsonl")
+            with open(holdout_path, "w", encoding="utf-8") as handle:
+                for block in holdout_blocks:
+                    handle.write(json.dumps(block.model_dump(mode="json")) + "\n")
+            click.echo(f"Saved holdout blocks to {holdout_path}")
+
+
+# ---------------------------------------------------------------------------
 # benchmark  (single dataset, LLM matching)
 # ---------------------------------------------------------------------------
 
@@ -766,8 +1533,40 @@ def download(dataset: str, output_path: str | None) -> None:
 @click.option(
     "--max-iterations",
     type=int,
-    default=1,
-    help="Maximum ER iterations (re-block and re-match resolved entities)",
+    default=serf_config.get("er.max_iterations", 3),
+    help="Maximum ER iterations (re-block and re-match merged entities)",
+)
+@click.option(
+    "--signature-mode",
+    type=click.Choice(list(SIGNATURE_MODES), case_sensitive=False),
+    default=SIGNATURE_MODE_GENERIC,
+    help="Matching contract: the shared BlockMatch signature or this dataset's typed signature",
+)
+@click.option(
+    "--sample-records",
+    type=int,
+    default=None,
+    help="Sample this many records, keeping ground-truth match groups whole",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=None,
+    help="Random seed for record sampling (from config.yml optimize.seed)",
+)
+@click.option(
+    "--blocking-strategy",
+    type=click.Choice(["name", "json", "union"], case_sensitive=False),
+    default=None,
+    help=(
+        "Embed the name alone, every field as JSON with field names inline,"
+        " or block on both and keep the blocks from each"
+    ),
+)
+@click.option(
+    "--trained-prompts/--no-trained-prompts",
+    default=False,
+    help="Match with the instructions `serf train` wrote instead of the signature docstring",
 )
 def benchmark(
     dataset: str,
@@ -778,21 +1577,42 @@ def benchmark(
     limit: int | None,
     concurrency: int,
     max_iterations: int,
+    signature_mode: str,
+    sample_records: int | None,
+    seed: int | None,
+    blocking_strategy: str | None,
+    trained_prompts: bool,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
 
     Uses embeddings for blocking and LLM for matching.
-    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
+    for Gemini 3.5 Flash-Lite (teacher/analyze).
+
+    With --signature-mode per-dataset the block is matched with the typed DSPy
+    signature written for this dataset instead of the shared BlockMatch one.
+    With --trained-prompts it matches with the instructions `serf train` left in
+    config.yml optimize.trained_dir, which requires per-dataset mode.
+    With --sample-records the dataset is sampled by ground-truth match group, so
+    gold pairs survive, and metrics are scored against the surviving pairs.
     """
     from serf.eval.benchmarks import BenchmarkDataset
 
     setup_mlflow()
 
-    from serf.config import config as serf_config
-
     model = model or serf_config.get("models.llm")
+    embedding_model = str(serf_config.get("models.embedding"))
+    embedding_prompt = str(serf_config.get("models.embedding_prompt", ""))
+    strategy = (blocking_strategy or str(serf_config.get("er.blocking.strategy", "name"))).lower()
+
     click.echo(f"Running benchmark: {dataset}")
     click.echo(f"  Model: {model}")
+    click.echo(f"  Signature mode: {signature_mode}")
+    click.echo(f"  Embedding: {embedding_model} ({strategy} blocking)")
+    if trained_prompts:
+        from serf.dspy.trained import trained_program_path
+
+        click.echo(f"  Trained prompt: {trained_program_path(dataset)}")
     start = time.time()
 
     benchmark_data = BenchmarkDataset.download(dataset, output_path)
@@ -815,6 +1635,24 @@ def benchmark(
     click.echo(f"  Left table: {len(left_entities)} entities")
     click.echo(f"  Right table: {len(right_entities)} entities")
     click.echo(f"  Ground truth pairs: {len(benchmark_data.ground_truth)}")
+
+    if sample_records:
+        from serf.eval.sample import sample_records as sample_benchmark_records
+
+        seed = seed if seed is not None else int(serf_config.get("optimize.seed", 42))
+        record_sample = sample_benchmark_records(
+            all_entities,
+            benchmark_data.ground_truth,
+            sample_records,
+            seed=seed,
+        )
+        all_entities = record_sample.records
+        benchmark_data.ground_truth = record_sample.ground_truth
+        click.echo(
+            f"  Sampled {len(all_entities)} of {record_sample.total} records "
+            f"(seed {seed}) with {record_sample.gold_pairs} gold pairs retained"
+        )
+
     click.echo(f"  Total entities: {len(all_entities)}")
 
     # Auto-scale block size for limited test runs
@@ -832,24 +1670,36 @@ def benchmark(
             click.echo(f"\n  === Iteration {iteration}/{max_iterations} ===")
         prev_count = len(current_entities)
 
-        pairs, resolved = _benchmark_llm_matching(
-            current_entities, effective_block_size, model, limit, concurrency
+        pairs, _resolved = _benchmark_llm_matching(
+            current_entities,
+            effective_block_size,
+            model,
+            limit,
+            concurrency,
+            dataset=dataset,
+            signature_mode=signature_mode,
+            iteration=iteration,
+            embedding_model=embedding_model,
+            embedding_prompt=embedding_prompt,
+            blocking_strategy=strategy,
+            trained_prompts=trained_prompts,
         )
-        all_predicted_pairs.update(pairs)
+        all_predicted_pairs.update(expand_pairs(pairs, entity_members(current_entities)))
         iterations_run = iteration
 
+        merged = merge_matched_entities(current_entities, pairs)
         if max_iterations > 1:
-            reduction_pct = (prev_count - len(resolved)) / prev_count * 100 if prev_count > 0 else 0
+            reduction_pct = (prev_count - len(merged)) / prev_count * 100 if prev_count > 0 else 0
             click.echo(
-                f"    Entities: {prev_count} -> {len(resolved)} ({reduction_pct:.1f}% reduction)"
+                f"    Entities: {prev_count} -> {len(merged)} ({reduction_pct:.1f}% reduction)"
             )
 
-        if len(resolved) >= prev_count or iteration == max_iterations:
-            if len(resolved) >= prev_count and max_iterations > 1 and iteration < max_iterations:
-                click.echo("    Converged (no reduction), stopping early")
+        if len(merged) >= prev_count or iteration == max_iterations:
+            if len(merged) >= prev_count and max_iterations > 1 and iteration < max_iterations:
+                click.echo("    Converged (no merges), stopping early")
             break
 
-        current_entities = resolved
+        current_entities = merged
 
     predicted_pairs = all_predicted_pairs
     metrics = benchmark_data.evaluate(predicted_pairs)
@@ -862,6 +1712,10 @@ def benchmark(
             {"Metric": "Recall", "Value": f"{metrics['recall']:.4f}"},
             {"Metric": "F1 Score", "Value": f"{metrics['f1_score']:.4f}"},
             {"Metric": "Predicted Pairs", "Value": str(len(predicted_pairs))},
+            {
+                "Metric": "Scored Pairs",
+                "Value": str(int(metrics["true_positives"]) + int(metrics["false_positives"])),
+            },
             {"Metric": "Correct (TP)", "Value": str(metrics["true_positives"])},
             {"Metric": "Wrong (FP)", "Value": str(metrics["false_positives"])},
             {"Metric": "Iterations", "Value": str(iterations_run)},
@@ -871,12 +1725,20 @@ def benchmark(
 
     if output_path:
         os.makedirs(output_path, exist_ok=True)
-        results_file = os.path.join(output_path, f"{dataset}_results.json")
+        suffix = "" if signature_mode == SIGNATURE_MODE_GENERIC else f"_{signature_mode}"
+        results_file = os.path.join(output_path, f"{dataset}{suffix}_results.json")
         with open(results_file, "w") as f:
             json.dump(
                 {
                     "dataset": dataset,
                     "model": model,
+                    "signature_mode": signature_mode,
+                    "sample_records": sample_records,
+                    "seed": seed,
+                    "max_iterations": max_iterations,
+                    "iterations_run": iterations_run,
+                    "gold_pairs_retained": len(benchmark_data.ground_truth),
+                    "records": len(all_entities),
                     "elapsed_seconds": elapsed,
                     "predicted_pairs": len(predicted_pairs),
                     "true_pairs": len(benchmark_data.ground_truth),
@@ -921,9 +1783,9 @@ def benchmark_all(
 ) -> None:
     """Run LLM-based benchmarks on all available datasets.
 
-    Requires GEMINI_API_KEY environment variable (or appropriate key for the model).
+    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
+    for Gemini 3.5 Flash-Lite (teacher/analyze).
     """
-    from serf.config import config as serf_config
     from serf.eval.benchmarks import BenchmarkDataset
 
     setup_mlflow()
@@ -999,6 +1861,13 @@ def _benchmark_llm_matching(
     model: str | None = None,
     limit: int | None = None,
     concurrency: int = 20,
+    dataset: str | None = None,
+    signature_mode: str = SIGNATURE_MODE_GENERIC,
+    iteration: int = 1,
+    embedding_model: str | None = None,
+    embedding_prompt: str | None = None,
+    blocking_strategy: str | None = None,
+    trained_prompts: bool = False,
 ) -> tuple[set[tuple[int, int]], list[Any]]:
     """Run LLM-based matching for benchmarks.
 
@@ -1017,47 +1886,77 @@ def _benchmark_llm_matching(
         Max blocks to process (for testing)
     concurrency : int
         Number of concurrent LLM requests
+    dataset : str | None
+        Benchmark dataset name, required for per-dataset signatures
+    signature_mode : str
+        ``generic`` for the shared BlockMatch signature, ``per-dataset`` for the
+        typed signature written for this dataset
+    iteration : int
+        Current ER iteration, which tightens the target block size when
+        ``er.blocking.auto_scale_by_iteration`` is on
+    embedding_model : str | None
+        Blocking embedding to use. Defaults to config.
+    embedding_prompt : str | None
+        Instruction prefix for that model. Defaults to config.
+    blocking_strategy : str | None
+        ``name`` or ``json``. Defaults to config.
+    trained_prompts : bool
+        Match with the instructions ``serf train`` wrote for this dataset
 
     Returns
     -------
     tuple[set[tuple[int, int]], list[Entity]]
         Predicted match pairs and resolved entities for next iteration
     """
-    import asyncio
-
     from serf.block.pipeline import SemanticBlockingPipeline
-    from serf.match.matcher import EntityMatcher
+    from serf.match.run import match_blocks
 
-    max_block = min(100, target_block_size * 3)
-    click.echo(f"\n  Blocking (target={target_block_size}, max={max_block})...")
+    max_block = min(
+        serf_config.get("er.blocking.max_block_size", 100),
+        target_block_size * 3,
+    )
+    auto_scale = bool(serf_config.get("er.blocking.auto_scale_by_iteration", True))
     pipeline = SemanticBlockingPipeline(
-        target_block_size=target_block_size, max_block_size=max_block
+        model_name=embedding_model,
+        target_block_size=target_block_size,
+        max_block_size=max_block,
+        iteration=iteration,
+        auto_scale=auto_scale,
+        embedding_prompt=embedding_prompt,
+        blocking_strategy=blocking_strategy,
+    )
+    click.echo(
+        f"\n  Blocking (target={target_block_size}, max={max_block}, "
+        f"iteration={iteration}, auto_scale={auto_scale})..."
     )
     blocks, blocking_metrics = pipeline.run(all_entities)
-    click.echo(f"    {blocking_metrics.total_blocks} blocks created")
+    click.echo(
+        f"    {blocking_metrics.total_blocks} blocks created "
+        f"(avg {blocking_metrics.avg_block_size:.1f}, max {blocking_metrics.max_block_size})"
+    )
 
     click.echo(f"  Matching with LLM ({model}, concurrency={concurrency}, limit={limit})...")
-    matcher = EntityMatcher(model=model, max_concurrent=concurrency)
-    resolutions = asyncio.run(matcher.resolve_blocks(blocks, limit=limit))
+    outcome = match_blocks(
+        blocks,
+        signature_mode=signature_mode,
+        dataset=dataset,
+        model=model,
+        concurrency=concurrency,
+        limit=limit,
+        trained_prompts=trained_prompts,
+    )
+    if outcome.single_source_blocks:
+        click.echo(f"    {outcome.single_source_blocks} single-source blocks skipped")
+    if outcome.dropped_candidates:
+        click.echo(f"    {outcome.dropped_candidates} candidates dropped for unknown record ids")
+    if outcome.failed_blocks:
+        click.echo(
+            f"    WARNING: {outcome.failed_blocks} blocks failed their LLM call, "
+            f"recall is understated"
+        )
 
-    predicted_pairs: set[tuple[int, int]] = set()
-    resolved_entities: list[Any] = []
-    for r in resolutions:
-        # Extract from explicit match decisions
-        for m in r.matches:
-            if m.is_match:
-                a, b = m.entity_a_id, m.entity_b_id
-                predicted_pairs.add((min(a, b), max(a, b)))
-        # Also extract from merged entities' source_ids
-        # (LLM may merge entities without explicit MatchDecision objects)
-        for e in r.resolved_entities:
-            if e.source_ids:
-                for sid in e.source_ids:
-                    predicted_pairs.add((min(e.id, sid), max(e.id, sid)))
-        resolved_entities.extend(r.resolved_entities)
-
-    click.echo(f"    Predicted {len(predicted_pairs)} match pairs")
-    return predicted_pairs, resolved_entities
+    click.echo(f"    Predicted {len(outcome.predicted_pairs)} match pairs")
+    return outcome.predicted_pairs, outcome.resolved_entities
 
 
 if __name__ == "__main__":

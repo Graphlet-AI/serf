@@ -29,6 +29,9 @@ dependencies = [
     "pandas>=2.0",
     "pyspark-mcp>=0.0.6",
     "mlflow[genai]>=3.10.1",
+    "google-auth>=2.57.1",
+    "huggingface-hub>=1.30.0",
+    "deno>=2.4.5,<3.0.0",
 ]
 
 [project.urls]

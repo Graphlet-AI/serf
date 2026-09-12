@@ -1,7 +1,6 @@
 """Tests for entity embedding.
 
-Note: These tests use a small model for speed. The default Qwen3-Embedding-0.6B
-is too large for unit tests.
+The sentence-transformer model is mocked throughout so no weights are downloaded.
 """
 
 from unittest.mock import MagicMock, patch
@@ -44,3 +43,31 @@ def test_entity_embedder_embed(mock_st: MagicMock) -> None:
     assert result.shape == (3, 384)
     assert result.dtype == np.float32
     mock_model.encode.assert_called_once()
+
+
+@patch("serf.block.embeddings.SentenceTransformer")
+def test_entity_embedder_applies_prompt(mock_st: MagicMock) -> None:
+    """The e5/bge instruction prefix is prepended to every text."""
+    mock_model = MagicMock()
+    mock_model.get_sentence_embedding_dimension.return_value = 384
+    mock_model.encode.return_value = np.random.randn(2, 384).astype(np.float32)
+    mock_st.return_value = mock_model
+
+    embedder = EntityEmbedder(model_name="test-model", device="cpu", prompt="query: ")
+    embedder.embed(["acme widget", "globex gadget"])
+
+    assert mock_model.encode.call_args.args[0] == ["query: acme widget", "query: globex gadget"]
+
+
+@patch("serf.block.embeddings.SentenceTransformer")
+def test_entity_embedder_empty_prompt_leaves_text_alone(mock_st: MagicMock) -> None:
+    """An empty prefix passes the texts through untouched."""
+    mock_model = MagicMock()
+    mock_model.get_sentence_embedding_dimension.return_value = 384
+    mock_model.encode.return_value = np.random.randn(2, 384).astype(np.float32)
+    mock_st.return_value = mock_model
+
+    embedder = EntityEmbedder(model_name="test-model", device="cpu", prompt="")
+    embedder.embed(["acme widget", "globex gadget"])
+
+    assert mock_model.encode.call_args.args[0] == ["acme widget", "globex gadget"]

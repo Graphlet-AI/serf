@@ -7,7 +7,10 @@ and dataset analysis.
 
 import dspy
 
+from serf.config import config as _config
 from serf.dspy.types import BlockResolution, DatasetProfile, Entity
+
+_MATCHING_MODEL = _config.get("models.llm")
 
 
 class BlockMatch(dspy.Signature):
@@ -69,7 +72,7 @@ class AnalyzeDataset(dspy.Signature):
 
 
 class GenerateERConfig(dspy.Signature):
-    """Generate an entity resolution configuration for a dataset.
+    __doc__ = f"""Generate an entity resolution configuration for a dataset.
 
     Given a statistical profile of the dataset including field types,
     completeness, uniqueness, sample values, and record count, produce
@@ -88,7 +91,7 @@ class GenerateERConfig(dspy.Signature):
     - blocking parameters:
       - target_block_size: aim for 30 entities per block
       - max_block_size: hard cap at 100 entities per block
-    - matching model: use "gemini/gemini-3.5-flash-lite"
+    - matching model: use "{_MATCHING_MODEL}"
     - max_iterations: at most 5 iterations
     - convergence_threshold: a SMALL number like 0.01 to 0.05, representing
       the minimum fraction of entities reduced per round before stopping.
@@ -106,7 +109,7 @@ class GenerateERConfig(dspy.Signature):
         "name_field (str), text_fields (list of str), "
         "blocking_fields (list of str, usually empty), entity_type (str), "
         "blocking: {method: semantic, target_block_size: 30, max_block_size: 100}, "
-        "matching: {model: gemini/gemini-3.5-flash-lite}, "
+        f"matching: {{model: {_MATCHING_MODEL}}}, "
         "max_iterations (int, at most 5), "
         "convergence_threshold (float, small number like 0.01-0.05)"
     )

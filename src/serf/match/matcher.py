@@ -2,13 +2,15 @@
 
 import asyncio
 import json
-import os
 from typing import cast
 from uuid import uuid4
 
 import dspy
+from tqdm import tqdm
 
 from serf.config import config
+from serf.dspy.adapter import RepairingXMLAdapter
+from serf.dspy.lm import create_lm
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import BlockResolution, EntityBlock
 from serf.logs import get_logger
@@ -57,20 +59,17 @@ class EntityMatcher:
         self.max_concurrent = max_concurrent or config.get("er.matching.max_concurrent", 20)
         self._predictor: dspy.Predict | None = None
         self._lm: dspy.LM | None = None
-        self._adapter = dspy.XMLAdapter()
+        self._adapter = RepairingXMLAdapter()
 
     def _ensure_lm(self) -> dspy.LM:
-        """Get or create the LM instance."""
+        """Get or create the student/task LM instance."""
         if self._lm is None:
-            api_key = os.environ.get("GEMINI_API_KEY")
-            if not api_key:
-                raise ValueError("GEMINI_API_KEY environment variable required")
             temperature = config.get("er.matching.temperature", 0.0)
-            self._lm = dspy.LM(
+            self._lm = create_lm(
                 self.model,
-                api_key=api_key,
+                role="student",
                 temperature=temperature,
-                max_tokens=8192,
+                max_tokens=config.get("models.max_tokens", 8192),
             )
         return self._lm
 
@@ -80,6 +79,20 @@ class EntityMatcher:
         if self._predictor is None:
             self._predictor = cast(dspy.Predict, dspy.Predict(BlockMatch))
         return self._predictor
+
+    def warm_up(self) -> None:
+        """Build the LM and the predictor once, on the calling thread.
+
+        ``resolve_block`` runs inside a thread pool, so leaving the LM and the
+        predictor to be created on first use makes every worker thread build its
+        own, mint its own Vertex access token, and take DSPy's first litellm
+        touch concurrently. That last one is what loses whole blocks to
+        ``partially initialized module 'litellm'``. Doing the work here keeps it
+        single-threaded and lets a bad configuration fail the run outright
+        instead of degrading every block into error recovery.
+        """
+        self._ensure_lm()
+        _ = self.predictor
 
     def resolve_block(self, block: EntityBlock, iteration: int = 1) -> BlockResolution:
         """Process a single block through the LLM.
@@ -205,11 +218,10 @@ class EntityMatcher:
         list[BlockResolution]
             Resolutions for each block
         """
-        from tqdm import tqdm
-
         if limit is not None:
             blocks = blocks[:limit]
 
+        self.warm_up()
         total = len(blocks)
         logger.info(f"Processing {total} blocks with {self.max_concurrent} concurrent LLM calls")
 

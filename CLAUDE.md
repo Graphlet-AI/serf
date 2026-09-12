@@ -44,8 +44,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 - **LLM Integration**: DSPy signatures with `dspy.XMLAdapter` for structured output
 - **DSPy**: Programming—not prompting—LMs - a framework for building and optimizing LLM pipelines. See the Project's @assets/DSPy.md [DSPy Programming Guide](assets/DSPy.md) and read the docs at [DSPy Documentation](https://dspy.ai/api/).
+- **GEPA**: The reflective prompt optimizer behind `serf optimize`. See the Project's @assets/DSPy-GEPA.md [DSPy GEPA Guide](assets/DSPy-GEPA.md) before changing anything under `serf.dspy.optimize`, the `er_metric` feedback function, or the optimizer budget in `config.yml`.
+- **Flex**: `dspy.Flex` moves a module's own source code into GEPA's search space, which is how LLM calls get traded for deterministic Python. See the Project's @assets/DSPy-Flex.md [DSPy Flex Guide](assets/DSPy-Flex.md) before reaching for it. Nothing in SERF uses it yet. Its default interpreter needs Deno, which the `deno` dependency vendors into the virtualenv, so `uv sync` is all the setup required.
 - **Sentence Transformers**: A library for state-of-the-art sentence embeddings
-- **Qwen3 Embeddings**: Top MTEB leaderboard embedding across most categories.
+- **BGE Embeddings**: `BAAI/bge-small-en-v1.5`, the winner of `serf blocking-sweep` on blocking recall per unit of CPU. Needs its instruction prefix, held in `models.embedding_prompt`.
 - **Gemini Models**: Advanced models for matching and merging entities
 - **Data Processing**: Apache Spark (PySpark) for ETL and graph operations
 
@@ -152,6 +154,7 @@ logger.error(f"Failed to process: {error}")
 - Integration tests: Test with real services (Redis, S3, etc.)
 - Cache mode tests: Test different caching strategies
 - DSPy tests: Test DSPy signatures with mock LM calls
+- Benchmark runs: always pass `--max-iterations 3` to `serf benchmark`. One matching pass can only pair records blocking already put together, so a single iteration measures a different pipeline than the one that ships and its scores are not comparable to anything recorded in the README or `experiments/`. Three iterations is also better: measured across all five datasets it raises recall everywhere, wins F1 everywhere, and lifts the mean 0.0615. Benchmark scoring resolves the predicted pairs into the clusters they imply and then scores cross-source pairs only, because ground truth is bipartite by construction and merging entities asserts same-source pairs it cannot adjudicate; never reintroduce those into scoring, or later iterations will look like precision collapses when they are not.
 
 ### Spark Development
 
@@ -176,6 +179,7 @@ In addition, when writing PySpark code:
 
 - Python 3.12 required
 - Core packages: dspy-ai, pyspark, sentence-transformers, faiss-cpu, click, pyyaml
+- `deno` vendors the Deno binary that `dspy.PythonInterpreter` needs, so `dspy.Flex` runs after a plain `uv sync`
 - Development tools: uv, ruff, zuban, pytest
 - See pyproject.toml for complete dependency list
 

@@ -1,0 +1,425 @@
+"""DSPy language-model factory for student (task) and teacher (reflection) LMs."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+from datetime import UTC, datetime, timedelta
+from typing import Any
+
+import dspy
+import litellm
+from google.auth.transport.requests import Request
+from google.oauth2 import service_account
+
+from serf.config import config
+from serf.logs import get_logger
+
+logger = get_logger(__name__)
+
+# litellm must be fully executed before any worker thread touches it. DSPy defers its
+# import (dspy.utils.lazy_import.require), and require() hands back whatever sys.modules
+# already holds. MLflow's tracing hook runs a plain "import litellm" from inside a traced
+# call, so while one matcher thread is part-way through that import another thread's
+# require() returns the half-built module and dies on "partially initialized module
+# 'litellm' has no attribute 'completion'", losing the whole block. Importing it at module
+# scope executes it once, single-threaded. The attribute read forces DSPy's lazy proxy to
+# materialize in case something registered it before this module was loaded.
+_ = litellm.completion
+
+_CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+_DEFAULT_REFRESH_MARGIN_SECONDS = 300
+
+
+class VertexRefreshingLM(dspy.LM):
+    """DSPy LM that keeps its Vertex AI access token fresh.
+
+    Service-account access tokens expire after about an hour, which breaks
+    optimization runs that last longer than that. This LM mints a new token
+    before a request whenever the cached one is expired or about to expire.
+
+    Parameters
+    ----------
+    model : str
+        LiteLLM model identifier
+    credentials : service_account.Credentials
+        Refreshable service-account credentials
+    refresh_margin_seconds : int
+        Refresh this many seconds before the token actually expires
+    **kwargs : Any
+        Extra ``dspy.LM`` arguments (``api_base``, ``temperature``, ...)
+    """
+
+    def __init__(
+        self,
+        model: str,
+        *,
+        credentials: service_account.Credentials,
+        refresh_margin_seconds: int = _DEFAULT_REFRESH_MARGIN_SECONDS,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(model, **kwargs)
+        self.credentials = credentials
+        self.refresh_margin_seconds = refresh_margin_seconds
+
+    def forward(
+        self,
+        prompt: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Refresh the access token, then call the LM synchronously.
+
+        Parameters
+        ----------
+        prompt : str | None
+            Optional prompt text
+        messages : list[dict[str, Any]] | None
+            Optional chat messages
+        **kwargs : Any
+            Per-call LM parameters
+
+        Returns
+        -------
+        Any
+            LiteLLM completion response
+        """
+        self.refresh_token_if_needed()
+        return super().forward(prompt=prompt, messages=messages, **kwargs)
+
+    async def aforward(
+        self,
+        prompt: str | None = None,
+        messages: list[dict[str, Any]] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        """Refresh the access token, then call the LM asynchronously.
+
+        Parameters
+        ----------
+        prompt : str | None
+            Optional prompt text
+        messages : list[dict[str, Any]] | None
+            Optional chat messages
+        **kwargs : Any
+            Per-call LM parameters
+
+        Returns
+        -------
+        Any
+            LiteLLM completion response
+        """
+        self.refresh_token_if_needed()
+        return await super().aforward(prompt=prompt, messages=messages, **kwargs)
+
+    def refresh_token_if_needed(self) -> None:
+        """Mint a new access token when the cached one is stale.
+
+        Copies of this LM share the same credentials object, so a token
+        refreshed by one copy is picked up by the others.
+        """
+        if self._token_is_stale():
+            self.credentials.refresh(Request())
+            logger.info("Refreshed Vertex AI access token")
+        if self.kwargs.get("api_key") != self.credentials.token:
+            self.kwargs["api_key"] = self.credentials.token
+
+    def _token_is_stale(self) -> bool:
+        """Return whether the credentials need a refresh before the next call.
+
+        Returns
+        -------
+        bool
+            True when the token is missing, expired, or inside the safety margin
+        """
+        if not self.credentials.token or self.credentials.expired:
+            return True
+        expiry = self.credentials.expiry
+        if expiry is None:
+            return True
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=UTC)
+        margin = timedelta(seconds=self.refresh_margin_seconds)
+        return bool(datetime.now(UTC) >= expiry - margin)
+
+
+def is_vertex_maas_model(model: str) -> bool:
+    """Return whether a model identifier is a Vertex AI MaaS GPT-OSS endpoint.
+
+    Parameters
+    ----------
+    model : str
+        DSPy/LiteLLM model identifier
+
+    Returns
+    -------
+    bool
+        True when the model is served via Vertex AI MaaS (gpt-oss)
+    """
+    return "gpt-oss" in model.lower()
+
+
+def vertex_access_token() -> str:
+    """Return a Vertex AI access token from VERTEX_AI_TOKEN.
+
+    VERTEX_AI_TOKEN may be:
+    - a short-lived Google access token (``ya29.`` prefix)
+    - a service-account JSON document
+    - a base64-encoded service-account JSON document
+
+    Returns
+    -------
+    str
+        Bearer access token for the Vertex OpenAI-compatible endpoint
+
+    Raises
+    ------
+    ValueError
+        If VERTEX_AI_TOKEN is missing or cannot be parsed
+    """
+    raw = os.environ.get("VERTEX_AI_TOKEN", "").strip()
+    if not raw:
+        raise ValueError("VERTEX_AI_TOKEN environment variable required for Vertex AI MaaS models")
+    if raw.startswith("ya29."):
+        return raw
+
+    info = _parse_service_account_info(raw)
+    credentials = service_account.Credentials.from_service_account_info(
+        info,
+        scopes=[_CLOUD_PLATFORM_SCOPE],
+    )
+    credentials.refresh(Request())
+    if not credentials.token:
+        raise ValueError("Failed to refresh Vertex AI access token from VERTEX_AI_TOKEN")
+    return str(credentials.token)
+
+
+def create_lm(
+    model: str | None = None,
+    *,
+    role: str = "student",
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+) -> dspy.LM:
+    """Create a DSPy LM for the student (task) or teacher (reflection) role.
+
+    Parameters
+    ----------
+    model : str | None
+        Explicit model identifier. Defaults to ``models.student``/``models.llm``
+        for role ``student`` and ``models.teacher`` for role ``teacher``.
+    role : str
+        ``student`` for the task LM or ``teacher`` for the GEPA reflection LM
+    temperature : float | None
+        Sampling temperature. Defaults to ``models.temperature``.
+    max_tokens : int | None
+        Max output tokens. Defaults to ``models.max_tokens``.
+
+    Returns
+    -------
+    dspy.LM
+        Configured language model client
+    """
+    if model is None:
+        model = config.get("models.teacher") if role == "teacher" else config.get("models.llm")
+    if temperature is None:
+        temperature = float(config.get("models.temperature", 0.0))
+    if max_tokens is None:
+        max_tokens = int(config.get("models.max_tokens", 8192))
+
+    logger.info(f"Creating {role} LM: {model}")
+    if is_vertex_maas_model(model):
+        return _create_vertex_maas_lm(model, temperature=temperature, max_tokens=max_tokens)
+    return _create_gemini_lm(model, temperature=temperature, max_tokens=max_tokens)
+
+
+def _parse_service_account_info(raw: str) -> dict[str, Any]:
+    """Parse VERTEX_AI_TOKEN as JSON or base64-encoded JSON.
+
+    Parameters
+    ----------
+    raw : str
+        Raw VERTEX_AI_TOKEN value
+
+    Returns
+    -------
+    dict[str, Any]
+        Service account info dictionary
+
+    Raises
+    ------
+    ValueError
+        If the value is not valid service-account JSON
+    """
+    candidates = [raw]
+    decoded = _decode_base64(raw)
+    if decoded is not None:
+        candidates.append(decoded)
+
+    for candidate in candidates:
+        stripped = candidate.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            info = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(info, dict) and info.get("type") == "service_account":
+            return info
+
+    raise ValueError(
+        "VERTEX_AI_TOKEN must be a Google access token, a service account JSON, "
+        "or a base64-encoded service account JSON"
+    )
+
+
+def _decode_base64(raw: str) -> str | None:
+    """Decode standard or URL-safe base64, adding padding if needed.
+
+    Parameters
+    ----------
+    raw : str
+        Base64-encoded text, possibly without ``=`` padding
+
+    Returns
+    -------
+    str | None
+        Decoded UTF-8 text, or ``None`` if decoding fails
+    """
+    padded = raw + "=" * ((4 - len(raw) % 4) % 4)
+    for decoder in (base64.b64decode, base64.urlsafe_b64decode):
+        try:
+            return decoder(padded).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+    return None
+
+
+def _vertex_project_id(info: dict[str, Any] | None = None) -> str:
+    """Resolve the GCP project ID for Vertex AI MaaS.
+
+    Parameters
+    ----------
+    info : dict[str, Any] | None
+        Optional service-account info that may contain ``project_id``
+
+    Returns
+    -------
+    str
+        GCP project ID
+
+    Raises
+    ------
+    ValueError
+        If no project ID can be resolved
+    """
+    project = os.environ.get("GOOGLE_CLOUD_PROJECT") or os.environ.get("VERTEXAI_PROJECT")
+    if not project and info is not None:
+        raw_project = info.get("project_id")
+        if isinstance(raw_project, str):
+            project = raw_project
+    if not project:
+        raise ValueError(
+            "GOOGLE_CLOUD_PROJECT environment variable required for Vertex AI MaaS models"
+        )
+    return project
+
+
+def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -> dspy.LM:
+    """Create a DSPy LM pointed at Vertex AI's OpenAI-compatible MaaS endpoint.
+
+    Parameters
+    ----------
+    model : str
+        Model identifier (e.g. ``openai/gpt-oss-120b-maas``)
+    temperature : float
+        Sampling temperature
+    max_tokens : int
+        Max output tokens
+
+    Returns
+    -------
+    dspy.LM
+        LM configured for the Vertex OpenAI-compatible endpoint
+    """
+    location = config.get("models.vertex_ai.location", "us-central1")
+    raw = os.environ.get("VERTEX_AI_TOKEN", "").strip()
+    info: dict[str, Any] | None = None
+    if raw and not raw.startswith("ya29."):
+        info = _parse_service_account_info(raw)
+    project = _vertex_project_id(info)
+    api_base = (
+        f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
+        f"/locations/{location}/endpoints/openapi"
+    )
+    logger.info(f"Using Vertex AI MaaS endpoint in {location} for {model}")
+    # LiteLLM treats the first "openai/" as a provider prefix and strips it.
+    # Vertex's OpenAI-compatible endpoint requires publisher/model in the body.
+    litellm_model = model
+    if model.startswith("openai/") and not model.startswith("openai/openai/"):
+        litellm_model = f"openai/{model}"
+
+    if info is None:
+        logger.warning(
+            "VERTEX_AI_TOKEN is a raw bearer token and cannot be refreshed; runs longer "
+            "than the token lifetime (~1 hour) will fail with ACCESS_TOKEN_EXPIRED. "
+            "Set VERTEX_AI_TOKEN to service-account JSON for long runs."
+        )
+        return dspy.LM(
+            litellm_model,
+            api_base=api_base,
+            api_key=vertex_access_token(),
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+
+    credentials = service_account.Credentials.from_service_account_info(
+        info,
+        scopes=[_CLOUD_PLATFORM_SCOPE],
+    )
+    lm = VertexRefreshingLM(
+        litellm_model,
+        credentials=credentials,
+        refresh_margin_seconds=int(
+            config.get("models.vertex_ai.token_refresh_margin_seconds", 300)
+        ),
+        api_base=api_base,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
+    lm.refresh_token_if_needed()
+    return lm
+
+
+def _create_gemini_lm(model: str, *, temperature: float, max_tokens: int) -> dspy.LM:
+    """Create a DSPy LM for the Gemini Developer API.
+
+    Parameters
+    ----------
+    model : str
+        Gemini model identifier (e.g. ``gemini/gemini-3.5-flash-lite``)
+    temperature : float
+        Sampling temperature
+    max_tokens : int
+        Max output tokens
+
+    Returns
+    -------
+    dspy.LM
+        LM configured for the Gemini Developer API
+
+    Raises
+    ------
+    ValueError
+        If GEMINI_API_KEY is not set
+    """
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable required")
+    return dspy.LM(
+        model,
+        api_key=api_key,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )

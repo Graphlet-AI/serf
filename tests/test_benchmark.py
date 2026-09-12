@@ -112,10 +112,12 @@ def test_benchmark_runs_multiple_iterations() -> None:
         patch(_BENCHMARK_PATCHES[2]) as mock_bd_cls,
         patch(_BENCHMARK_PATCHES[3]) as mock_config,
     ):
+        # Each round merges a fresh pair, so the entity count keeps dropping
+        # until a round predicts nothing and the loop converges.
         mock_matching.side_effect = [
-            ({(0, 1)}, _make_entities(6)),
-            ({(0, 1), (2, 3)}, _make_entities(4)),
-            ({(0, 1), (2, 3)}, _make_entities(4)),
+            ({(0, 1)}, _make_entities(8)),
+            ({(2, 3)}, _make_entities(8)),
+            (set(), _make_entities(8)),
         ]
 
         result = _run_benchmark_cli(
@@ -135,7 +137,7 @@ def test_benchmark_runs_multiple_iterations() -> None:
 
 
 def test_benchmark_stops_early_on_convergence() -> None:
-    """When entity count does not decrease, the loop stops early."""
+    """When a round merges nothing, the loop stops instead of re-blocking."""
     with (
         patch(_BENCHMARK_PATCHES[0]),
         patch(_BENCHMARK_PATCHES[1]) as mock_matching,
@@ -143,7 +145,7 @@ def test_benchmark_stops_early_on_convergence() -> None:
         patch(_BENCHMARK_PATCHES[3]) as mock_config,
     ):
         all_entities = _make_entities(8)
-        mock_matching.return_value = ({(0, 1)}, all_entities)
+        mock_matching.return_value = (set(), all_entities)
 
         result = _run_benchmark_cli(
             mock_matching,
@@ -185,6 +187,8 @@ def test_benchmark_llm_matching_return_type() -> None:
     ):
         blocking_metrics = MagicMock()
         blocking_metrics.total_blocks = 1
+        blocking_metrics.avg_block_size = 2.0
+        blocking_metrics.max_block_size = 4
         mock_pipeline_cls.return_value.run.return_value = ([], blocking_metrics)
 
         pairs, result_entities = _benchmark_llm_matching(entities, target_block_size=10, model="m")

@@ -2,6 +2,9 @@
 
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from serf.dspy.types import (
     BlockingMetrics,
     BlockResolution,
@@ -24,6 +27,51 @@ def test_entity_creation() -> None:
     assert entity.attributes == {}
     assert entity.source_ids is None
     assert entity.match_skip is None
+
+
+def test_entity_attributes_from_json_string() -> None:
+    """XMLAdapter hands a dict field back as the tag body, so parse it."""
+    entity = Entity(id=1, name="Sony MDR-V150", attributes='{"price": "$24.95"}')  # type: ignore[arg-type]
+    assert entity.attributes == {"price": "$24.95"}
+
+
+def test_entity_attributes_from_empty_tag() -> None:
+    """An empty <attributes></attributes> tag means no attributes."""
+    assert Entity(id=1, name="Sony", attributes="").attributes == {}  # type: ignore[arg-type]
+    assert Entity(id=1, name="Sony", attributes="  \n ").attributes == {}  # type: ignore[arg-type]
+
+
+def test_entity_optional_fields_from_xml_null_placeholders() -> None:
+    """XML has no null literal, so a model writes a placeholder word instead."""
+    entity = Entity(
+        id=1,
+        name="Sony",
+        uuid="null",  # type: ignore[arg-type]
+        match_skip="None",  # type: ignore[arg-type]
+        match_skip_reason="",
+        source_ids=["null"],  # type: ignore[list-item]
+        source_uuids=[],
+    )
+    assert entity.uuid is None
+    assert entity.match_skip is None
+    assert entity.match_skip_reason is None
+    assert entity.source_ids is None
+    assert entity.source_uuids is None
+
+
+def test_entity_optional_fields_keep_real_values() -> None:
+    """Real values survive the placeholder filter."""
+    entity = Entity(id=1, name="Sony", uuid="abc-123", match_skip=True, source_ids=[2, 3])
+    assert entity.uuid == "abc-123"
+    assert entity.match_skip is True
+    assert entity.source_ids == [2, 3]
+
+
+def test_entity_attributes_reject_non_object() -> None:
+    """A string that is not a JSON object is still an error, not a silent dict."""
+    for bad in ("not json", "[1, 2]", '"just a string"'):
+        with pytest.raises(ValidationError):
+            Entity(id=1, name="Sony", attributes=bad)  # type: ignore[arg-type]
 
 
 def test_entity_with_all_fields() -> None:

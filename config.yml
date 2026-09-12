@@ -3,14 +3,61 @@ logs:
     path: logs
 
 models:
-  embedding: "intfloat/multilingual-e5-base"
-  llm: "gemini/gemini-3.5-flash-lite"
-  analyze_llm: "${models.llm}"
+  # The blocking embedding. It won `serf blocking-sweep` over the five Leipzig
+  # benchmarks against every candidate that fits 3B parameters and 1024
+  # dimensions, and it does so at a sixth of the CPU of the large models, which
+  # matters because blocking re-embeds every record on every ER round.
+  #
+  # Going large does not pay here. `bge-large-en-v1.5` is behind this model on
+  # mean blocking recall (0.8665 against 0.8765 over 2K-record samples) and only
+  # leads on the bibliographic datasets; `multilingual-e5-large-instruct` reaches
+  # 0.8705; `mxbai-embed-large-v1` is the one large model that beats it, by
+  # 0.0077 for six times the CPU. To try another model, point this key at it.
+  embedding: "BAAI/bge-small-en-v1.5"
+  # The e5 and bge families are trained with an instruction prefix on every input
+  # and lose accuracy without it. Blocking is a symmetric similarity task, so both
+  # sides get the same prefix. Leave empty for models trained without one.
+  embedding_prompt: "Represent this sentence for searching relevant passages: "
+  student: "openai/gpt-oss-120b-maas"
+  teacher: "gemini/gemini-3.5-flash-lite"
+  llm: "${models.student}"
+  analyze_llm: "${models.teacher}"
   temperature: 0.0
+  max_tokens: 65536
+  vertex_ai:
+    location: "us-central1"
+    token_refresh_margin_seconds: 300
+
+optimize:
+  auto: "light"
+  num_threads: 4
+  log_dir: "data/gepa_logs"
+  seed: 42
+  # Where `serf train` writes the program it trained and where the matcher looks
+  # for one. A dataset with no file here matches with its signature as written.
+  trained_dir: "data/trained_prompts"
+  # Blocks GEPA rolls out on and selects candidates against. Both are small on
+  # purpose: GEPA reached its optimum in 79 to 737 rollouts in the paper, and
+  # DSPy warns above 35 validation examples because most of the budget is spent
+  # re-scoring the validation set rather than learning from the training one.
+  train_blocks: 40
+  val_blocks: 20
 
 er:
+  # One matching pass can only pair records that blocking already put together,
+  # so a run needs several rounds: each one re-blocks the entities merged by the
+  # previous round and gives separated records another chance to meet.
+  max_iterations: 3
+
   blocking:
     method: semantic
+    # What text gets embedded. "name" uses the name or title alone, which keeps
+    # clusters tight. "json" uses every field as a JSON object with the field
+    # names inline, which helps where names alone are ambiguous. "union" blocks
+    # twice, once each way, and keeps the blocks from both, so a pair only has
+    # to be caught by one view. The union roughly doubles the pairs the matcher
+    # is asked to judge, which is why it is not the default.
+    strategy: name
     target_block_size: 30
     max_block_size: 100
     min_block_size: 2
@@ -35,6 +82,12 @@ er:
     edges: "data/iteration_{iteration}/edges"
     metrics: "data/iteration_{iteration}/metrics"
 
+analyze:
+  # `serf profile-benchmark` joins every left record against the right table on
+  # shared tokens, which is the widest shuffle in the project. The default 1g
+  # driver runs out of heap on dblp-scholar's 64K-row right table.
+  spark_driver_memory: "4g"
+
 mlflow:
   tracking_uri: "http://127.0.0.1:5001"
   experiment_name: "SERF-Entity-Resolution"
@@ -43,29 +96,173 @@ mlflow:
   port: 5001
   autolog:
     log_traces: true
-    log_traces_from_compile: false
+    log_traces_from_compile: true
     log_traces_from_eval: true
 
 benchmarks:
   output_dir: "data/benchmarks"
+  train_records: 2000
+  val_records: 1000
+  holdout_records: 1000
+  # Candidates for `serf blocking-sweep`. Small CPU-friendly models only, since
+  # blocking embeds every record on every ER iteration. The e5 and bge families
+  # need their instruction prefix; the others are trained without one.
+  embedding_candidates:
+    - model: "intfloat/multilingual-e5-base"
+      prompt: ""
+    - model: "intfloat/multilingual-e5-base"
+      prompt: "query: "
+    - model: "intfloat/multilingual-e5-small"
+      prompt: "query: "
+    - model: "BAAI/bge-small-en-v1.5"
+      prompt: "Represent this sentence for searching relevant passages: "
+    - model: "BAAI/bge-base-en-v1.5"
+      prompt: "Represent this sentence for searching relevant passages: "
+    - model: "sentence-transformers/all-MiniLM-L6-v2"
+      prompt: ""
+    - model: "sentence-transformers/all-mpnet-base-v2"
+      prompt: ""
+    - model: "thenlper/gte-small"
+      prompt: ""
+    - model: "thenlper/gte-base"
+      prompt: ""
+    # Added from the PairClassification ranking, and the only one of its size
+    # there: 149M parameters and 768 dimensions, trained without a prefix.
+    - model: "Alibaba-NLP/gte-modernbert-base"
+      prompt: ""
+  # `serf blocking-sweep --candidate-set large`. Models inside 3B parameters and
+  # 1024 output dimensions that load on transformers 5.x. Prompts are each
+  # model's own documented template for a symmetric task.
+  #
+  # The first five were chosen on MTEB(eng, v2) *clustering* score. That was the
+  # wrong category: measured over all thirteen candidates on one set of samples,
+  # clustering correlates with blocking recall at Spearman 0.0165, which is no
+  # information at all. `serf mteb-rank` shows PairClassification is the only
+  # category that carries signal, at 0.5714, because its tasks ask whether two
+  # short texts denote the same thing. The rest were added from the
+  # PairClassification ranking.
+  #
+  # Models deliberately absent, all higher scorers that will not run here:
+  # Jasper-Token-Compression-600M emits 2048 dimensions despite a hidden size of
+  # 1024; embeddinggemma-300m is gated; stella_en_400M_v5 and stella_en_1.5B_v5
+  # ship custom modelling code written against transformers 4.x, the 400M asking
+  # for xformers and the 1.5B for a `DynamicCache.from_legacy_cache` that no
+  # longer exists; Nano-Em1-0.6B-v2.1 leads PairClassification at 89.9 but is an
+  # LLM-based embedder whose tokenizer ships no chat template, so
+  # sentence-transformers cannot drive it.
+  embedding_candidates_large:
+    - model: "codefuse-ai/F2LLM-0.6B"
+      prompt: "Instruct: Identify the topic or theme of the given text\nQuery: "
+    - model: "Qwen/Qwen3-Embedding-0.6B"
+      prompt: "Instruct: Identify the topic or theme of the given text\nQuery: "
+    - model: "intfloat/multilingual-e5-large-instruct"
+      prompt: "Instruct: Retrieve semantically similar text.\nQuery: "
+    - model: "mixedbread-ai/mxbai-embed-large-v1"
+      prompt: "Represent this sentence for searching relevant passages: "
+    - model: "BAAI/bge-large-en-v1.5"
+      prompt: "Represent this sentence for searching relevant passages: "
+    # Added from the PairClassification ranking. All three are 335M parameters
+    # at 1024 dimensions and trained without an instruction prefix, and all
+    # three beat every clustering-selected large model on blocking recall.
+    # `llmrails/ember-v1` came from the same ranking and is not here: it scores
+    # 87.37, above all of them, and measures 0.8604, below all of them, because
+    # it collapses to 0.7953 on Abt-Buy.
+    - model: "avsolatorio/GIST-large-Embedding-v0"
+      prompt: ""
+    - model: "w601sxs/b1ade-embed"
+      prompt: ""
+    - model: "WhereIsAI/UAE-Large-V1"
+      prompt: ""
+  # MTEB(eng, v2) task names per category, read by `serf mteb-rank` to score
+  # candidate embeddings straight from the `mteb/results` dataset.
+  #
+  # PairClassification is the matching category: every task asks whether two
+  # short texts denote the same thing, scored by average precision over cosine
+  # similarity, which is the entity matching decision. It is the category to
+  # rank blocking candidates by. Clustering is kept for comparison because it
+  # is the category the large candidates were originally chosen on, and the
+  # rest are here so the comparison covers the whole benchmark rather than the
+  # two categories that happened to be interesting.
+  mteb_tasks:
+    PairClassification:
+      - "SprintDuplicateQuestions"
+      - "TwitterSemEval2015"
+      - "TwitterURLCorpus"
+    Clustering:
+      - "ArXivHierarchicalClusteringP2P"
+      - "ArXivHierarchicalClusteringS2S"
+      - "BiorxivClusteringP2P.v2"
+      - "MedrxivClusteringP2P.v2"
+      - "MedrxivClusteringS2S.v2"
+      - "StackExchangeClustering.v2"
+      - "StackExchangeClusteringP2P.v2"
+      - "TwentyNewsgroupsClustering.v2"
+    STS:
+      - "BIOSSES"
+      - "SICK-R"
+      - "STS12"
+      - "STS13"
+      - "STS14"
+      - "STS15"
+      - "STS17"
+      - "STS22.v2"
+      - "STSBenchmark"
+    Retrieval:
+      - "ArguAna"
+      - "CQADupstackGamingRetrieval"
+      - "CQADupstackUnixRetrieval"
+      - "ClimateFEVERHardNegatives"
+      - "FEVERHardNegatives"
+      - "FiQA2018"
+      - "HotpotQAHardNegatives"
+      - "SCIDOCS"
+      - "TRECCOVID"
+      - "Touche2020Retrieval.v3"
+    Classification:
+      - "AmazonCounterfactualClassification"
+      - "Banking77Classification"
+      - "ImdbClassification"
+      - "MTOPDomainClassification"
+      - "MassiveIntentClassification"
+      - "MassiveScenarioClassification"
+      - "ToxicConversationsClassification"
+      - "TweetSentimentExtractionClassification"
+    Reranking:
+      - "AskUbuntuDupQuestions"
+      - "MindSmallReranking"
   datasets:
     walmart-amazon:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"
       domain: products
       difficulty: hard
+      train_records: 2000
+      val_records: 1000
+      holdout_records: 1000
     abt-buy:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Textual/Abt-Buy/exp_data"
       domain: products
       difficulty: hard
+      train_records: 2000
+      val_records: 1000
+      holdout_records: 1000
     amazon-google:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Amazon-Google/amazon_google_exp_data.zip"
       domain: products
       difficulty: hard
+      train_records: 2000
+      val_records: 1000
+      holdout_records: 1000
     dblp-acm:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-ACM/dblp_acm_exp_data.zip"
       domain: bibliographic
       difficulty: easy
+      train_records: 2000
+      val_records: 1000
+      holdout_records: 1000
     dblp-scholar:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-GoogleScholar/dblp_scholar_exp_data.zip"
       domain: bibliographic
       difficulty: medium
+      train_records: 2000
+      val_records: 1000
+      holdout_records: 1000

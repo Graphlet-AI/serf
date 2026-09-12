@@ -1,15 +1,21 @@
 """Tests for benchmark dataset loading and evaluation."""
 
+import io
 import os
 import tempfile
+import urllib.request
+import zipfile
+from unittest.mock import patch
 
 import pandas as pd
 
 from serf.dspy.types import Entity
 from serf.eval.benchmarks import (
+    DATASET_REGISTRY,
     RIGHT_ID_OFFSET,
     BenchmarkDataset,
     _detect_name_column,
+    _find_zip_member,
     _get_text_columns,
 )
 
@@ -17,9 +23,13 @@ from serf.eval.benchmarks import (
 def test_available_datasets_returns_expected_names() -> None:
     """Test that available datasets includes expected benchmark names."""
     names = BenchmarkDataset.available_datasets()
-    assert "dblp-acm" in names
-    assert "dblp-scholar" in names
-    assert "abt-buy" in names
+    assert set(names) == {
+        "dblp-acm",
+        "dblp-scholar",
+        "abt-buy",
+        "walmart-amazon",
+        "amazon-google",
+    }
 
 
 def test_benchmark_dataset_creation_with_mock_data() -> None:
@@ -57,6 +67,78 @@ def test_evaluate_with_known_predictions() -> None:
     metrics = ds.evaluate({(1, 100001)})
     assert metrics["precision"] == 1.0
     assert metrics["recall"] == 0.5
+
+
+def test_evaluate_scores_the_clustering_not_the_pair_log() -> None:
+    """A group the matcher emitted as a star must be scored as the whole group.
+
+    ``collect_pairs`` flattens a resolved entity into master-to-source pairs, so
+    an entity covering left records 1 and 2 and right record 100001 reaches
+    scoring as (1, 2) and (1, 100001). The pair (2, 100001) is never written
+    down, yet the entity plainly claims it.
+    """
+    table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "A"]})
+    table_b = pd.DataFrame({"id": [1], "title": ["A"]})
+    ground_truth = {(1, 100001), (2, 100001)}
+
+    ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
+
+    metrics = ds.evaluate({(1, 2), (1, 100001)})
+    assert metrics["true_positives"] == 2
+    assert metrics["false_positives"] == 0
+    assert metrics["recall"] == 1.0
+
+
+def test_evaluate_does_not_penalize_a_correct_same_source_merge() -> None:
+    """A same-source pair is outside what a bipartite gold standard can state.
+
+    Ground truth is built as (a_id, b_id + RIGHT_ID_OFFSET), so it never holds a
+    left-left or right-right pair. Later ER iterations assert same-source pairs
+    by transitivity, and scoring them as pairs against this gold standard counts
+    every one as wrong no matter how correct the merge was.
+    """
+    table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "A"]})
+    table_b = pd.DataFrame({"id": [1], "title": ["A"]})
+    ground_truth = {(1, 100001), (2, 100001)}
+
+    ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
+
+    metrics = ds.evaluate({(1, 100001), (2, 100001), (1, 2)})
+    assert metrics["precision"] == 1.0
+    assert metrics["recall"] == 1.0
+    assert metrics["false_positives"] == 0
+
+
+def test_evaluate_counts_the_cross_source_cost_of_a_wrong_merge() -> None:
+    """Not scoring same-source pairs must not let a bad merge through unseen.
+
+    Welding two gold entities together by way of a same-source pair is paid for
+    in the cross-source pairs the resulting cluster claims.
+    """
+    table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
+    table_b = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
+    ground_truth = {(1, 100001), (2, 100002)}
+
+    ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
+
+    metrics = ds.evaluate({(1, 100001), (2, 100002), (1, 2)})
+    assert metrics["true_positives"] == 2
+    assert metrics["false_positives"] == 2
+    assert metrics["precision"] == 0.5
+
+
+def test_evaluate_still_counts_cross_source_mistakes() -> None:
+    """Dropping same-source pairs must not hide a real error."""
+    table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
+    table_b = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
+    ground_truth = {(1, 100001)}
+
+    ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
+
+    metrics = ds.evaluate({(1, 100001), (2, 100001), (1, 2)})
+    assert metrics["true_positives"] == 1
+    assert metrics["false_positives"] == 1
+    assert metrics["precision"] == 0.5
 
 
 def test_to_entities_produces_valid_entities() -> None:
@@ -137,7 +219,7 @@ def test_load_from_deepmatcher_format() -> None:
         ds = BenchmarkDataset.load("test", tmpdir)
         assert len(ds.table_a) == 2
         assert len(ds.table_b) == 2
-        assert len(ds.ground_truth) == 1  # Only label=1 pairs
+        assert ds.ground_truth == {(0, RIGHT_ID_OFFSET)}
 
 
 def test_load_raises_when_directory_missing() -> None:
@@ -154,3 +236,60 @@ def test_download_raises_for_unknown_dataset() -> None:
 
     with pytest.raises(ValueError):
         BenchmarkDataset.download("nonexistent-dataset")
+
+
+def test_find_zip_member_nested_exp_data() -> None:
+    """DeepMatcher zips nest CSVs under exp_data/."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("exp_data/tableA.csv", "id\n1\n")
+        zf.writestr("__MACOSX/tableA.csv", "skip\n")
+        assert _find_zip_member(zf, "tableA.csv") == "exp_data/tableA.csv"
+        assert _find_zip_member(zf, "missing.csv") is None
+
+
+class _FakeUrlResponse:
+    """Minimal urlopen context manager returning zip bytes."""
+
+    def __init__(self, data: bytes) -> None:
+        self._data = data
+
+    def read(self) -> bytes:
+        return self._data
+
+    def __enter__(self) -> "_FakeUrlResponse":
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+
+def _deepmatcher_zip_bytes() -> bytes:
+    """Build a nested DeepMatcher exp_data zip."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("exp_data/tableA.csv", "id,title\n10,Widget\n20,Gadget\n")
+        zf.writestr("exp_data/tableB.csv", "id,title\n30,Widget\n40,Other\n")
+        zf.writestr("exp_data/train.csv", "ltable_id,rtable_id,label\n10,30,1\n20,40,0\n")
+        zf.writestr("exp_data/valid.csv", "ltable_id,rtable_id,label\n")
+        zf.writestr("exp_data/test.csv", "ltable_id,rtable_id,label\n")
+    return buf.getvalue()
+
+
+def test_download_deepmatcher_nested_zip() -> None:
+    """Download loads DeepMatcher tableA/tableB and labeled matches from a zip."""
+    data = _deepmatcher_zip_bytes()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        with patch.object(urllib.request, "urlopen", return_value=_FakeUrlResponse(data)):
+            ds = BenchmarkDataset.download("walmart-amazon", tmpdir)
+        assert len(ds.table_a) == 2
+        assert len(ds.table_b) == 2
+        assert ds.ground_truth == {(0, RIGHT_ID_OFFSET)}
+        assert str(ds.table_a.iloc[0]["title"]) == "Widget"
+
+
+def test_download_amazon_google_uses_deepmatcher_registry() -> None:
+    """amazon-google is registered as DeepMatcher (no Leipzig mapping_name)."""
+    assert "mapping_name" not in DATASET_REGISTRY["amazon-google"]
+    assert "mapping_name" not in DATASET_REGISTRY["walmart-amazon"]
+    assert "mapping_name" in DATASET_REGISTRY["dblp-acm"]

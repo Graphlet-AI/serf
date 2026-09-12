@@ -453,6 +453,43 @@ Run-to-run variance is not zero. DBLP-ACM's one-iteration F1 read 0.9788 in the 
 0.9693 here on the same prompts and sample, so about 0.01 of drift. The effects in the table above
 are five to ten times that.
 
+## Why Abzu never saw any of this
+
+Abzu runs the same three stages in the same order with the same block-size schedule,
+`max(10, max_block_size // iteration)`, which SERF ported directly. Three things differ, and each
+one explains part of why the bug was ours alone.
+
+**Abzu's LLM returns the partition; SERF's returns pairs.** `MultiEntityResolution(CompanyList) ->
+CompanyList` asks for the resolved set itself: one record per entity, lowest input id as master,
+every other id in `source_ids`, and "Return ALL companies including those that don't merge with
+anything". There is no closure step, because there is nothing to close — the model already said
+which records are one thing. SERF's signatures emit `candidates[].is_match`, and
+`merge_matched_entities` runs union-find to manufacture the partition. That union-find is where a
+single spurious pair can weld two components, and `expand_pairs` is where the welded component turns
+into a cross product. Neither step exists in Abzu.
+
+**Abzu's evaluation sits inside the loop; SERF's sits after it.** `abzu process er all --iteration N`
+is one round per invocation, and for `iteration > 1` the input path is
+`config.get("process.kg.er.paths.eval").format(iteration=prev_iteration)` — round N+1 reads round
+N's _eval_ output, not its match output. Eval therefore runs before anything downstream sees the
+data. Its only mutation is `matches_df.distinct()`; it deliberately does not repair references
+("Keep ALL source_uuids, not just validated ones"). But it does report per round, and it fails the
+round loudly: coverage of the original companies must be >= 99.99%, invalid references < 0.01%, UUID
+overlap with the original and previous iterations < 1.0%. SERF's loop carries the merge output
+forward in memory with nothing asserted, and scores `all_predicted_pairs` once at the end.
+
+**Abzu has no accuracy metric at all.** Ripgrep across the repository finds no precision, recall, F1
+or gold standard; its `CLAUDE.md` claims "Precision/recall metrics against ground truth" but no such
+code exists. What `evaluate_er_matches` measures is lineage conservation and reduction:
+`original_coverage_pct`, `source_uuid_error_pct`, `uuid_overlap_with_original_pct`,
+`reduction_from_matching_pct`, `ids_dropped_by_baml`, `total_reduction_pct`. So Abzu could not have
+hit this bug: scoring pairs against a bipartite gold standard is the thing it never does.
+
+The two metric sets answer different questions and neither contradicts the other. Abzu asks whether a
+round lost records; SERF asks whether a round's pairs were right. SERF already has ports of Abzu's
+conservation checks in `serf.eval` — `validate_source_uuids` implements the 99.99% coverage rule —
+but only `serf evaluate` calls them, so `serf benchmark`'s loop never asserts them per round.
+
 ## Artifacts
 
 - Per-arm result JSON: `data/benchmarks/sig_<arm>/<dataset>_per-dataset_results.json`; the adopted
@@ -472,6 +509,9 @@ are five to ten times that.
 - Accumulated pairs against the clustering closure, all ten runs:
   `/opt/cursor/artifacts/closure_consistency.log` and `closure_consistency.json` from
   `/opt/cursor/artifacts/closure_consistency.py`
+- Loop comparison diagram: `/opt/cursor/artifacts/loop_comparison.png` from
+  `/opt/cursor/artifacts/loop_comparison.py`; Abzu read at commit `118f1e9` of
+  https://github.com/Graphlet-AI/abzu
 - Superseded three-iteration runs scored before the fix:
   `data/benchmarks/tier_removal/<dataset>_per-dataset_results.json` for DBLP-ACM and Abt-Buy,
   `data/benchmarks/iter3_rerun/<dataset>/<dataset>_per-dataset_results.json` for the other three

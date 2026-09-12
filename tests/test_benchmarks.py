@@ -69,6 +69,41 @@ def test_evaluate_with_known_predictions() -> None:
     assert metrics["recall"] == 0.5
 
 
+def test_evaluate_ignores_same_source_pairs() -> None:
+    """A same-source pair is outside what a bipartite gold standard can state.
+
+    Ground truth is built as (a_id, b_id + RIGHT_ID_OFFSET), so it never holds a
+    left-left or right-right pair. Later ER iterations assert same-source pairs
+    by transitivity, and scoring them against this gold standard counts every one
+    as wrong no matter how correct the merge was.
+    """
+    table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
+    table_b = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
+    ground_truth = {(1, 100001), (2, 100002)}
+
+    ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
+
+    predictions = {(1, 100001), (2, 100002), (1, 2), (100001, 100002)}
+    metrics = ds.evaluate(predictions)
+    assert metrics["precision"] == 1.0
+    assert metrics["recall"] == 1.0
+    assert metrics["false_positives"] == 0
+
+
+def test_evaluate_still_counts_cross_source_mistakes() -> None:
+    """Dropping same-source pairs must not hide a real error."""
+    table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
+    table_b = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
+    ground_truth = {(1, 100001)}
+
+    ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
+
+    metrics = ds.evaluate({(1, 100001), (2, 100001), (1, 2)})
+    assert metrics["true_positives"] == 1
+    assert metrics["false_positives"] == 1
+    assert metrics["precision"] == 0.5
+
+
 def test_to_entities_produces_valid_entities() -> None:
     """Test that to_entities creates proper Entity objects."""
     table_a = pd.DataFrame(

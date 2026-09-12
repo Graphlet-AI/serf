@@ -506,6 +506,16 @@ class BenchmarkDataset:
     def evaluate(self, predicted_pairs: set[tuple[int, int]]) -> dict[str, float | int]:
         """Evaluate predictions against ground truth.
 
+        Only cross-source pairs are scored. Ground truth is built as
+        ``(a_id, b_id + RIGHT_ID_OFFSET)``, so these benchmarks state a bipartite
+        matching between the two tables and can never assert that two left
+        records or two right records are the same thing. Later ER iterations do
+        assert exactly that, because merging two entities and expanding the
+        result claims identity among every record involved, including within a
+        source. Those claims may well be right, but this ground truth does not
+        say either way, so counting them as errors measures the gold standard's
+        shape rather than the matcher.
+
         Parameters
         ----------
         predicted_pairs : set[tuple[int, int]]
@@ -516,7 +526,12 @@ class BenchmarkDataset:
         dict[str, float | int]
             Metrics: precision, recall, f1_score, true_positives, false_positives
         """
-        return evaluate_resolution(predicted_pairs, self.ground_truth)
+        cross_source = {
+            pair
+            for pair in predicted_pairs
+            if (pair[0] < RIGHT_ID_OFFSET) != (pair[1] < RIGHT_ID_OFFSET)
+        }
+        return evaluate_resolution(cross_source, self.ground_truth)
 
     def to_entities(self) -> tuple[list[Entity], list[Entity]]:
         """Convert tables to Entity objects for the pipeline.

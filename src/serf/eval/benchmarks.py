@@ -9,7 +9,7 @@ import pandas as pd
 
 from serf.config import config
 from serf.dspy.types import Entity
-from serf.eval.metrics import evaluate_resolution
+from serf.eval.metrics import connected_components, evaluate_resolution
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
@@ -506,15 +506,24 @@ class BenchmarkDataset:
     def evaluate(self, predicted_pairs: set[tuple[int, int]]) -> dict[str, float | int]:
         """Evaluate predictions against ground truth.
 
-        Only cross-source pairs are scored. Ground truth is built as
-        ``(a_id, b_id + RIGHT_ID_OFFSET)``, so these benchmarks state a bipartite
-        matching between the two tables and can never assert that two left
-        records or two right records are the same thing. Later ER iterations do
-        assert exactly that, because merging two entities and expanding the
-        result claims identity among every record involved, including within a
-        source. Those claims may well be right, but this ground truth does not
-        say either way, so counting them as errors measures the gold standard's
-        shape rather than the matcher.
+        The pairs are first resolved into the clusters they imply, then scored
+        over the cross-source pairs those clusters claim. Both steps matter.
+
+        Resolving into clusters removes the matcher's choice of which pairs to
+        write down. A block resolution reaches scoring as master-to-source pairs,
+        so an entity covering two left and two right records arrives as three
+        pairs rather than the six it asserts; scoring the pairs as given would
+        charge the two missing cross-source ones as misses.
+
+        Restricting to cross-source pairs matches what the gold standard can
+        state. Ground truth is built as ``(a_id, b_id + RIGHT_ID_OFFSET)``, a
+        bipartite matching between the two tables, so it never holds a left-left
+        or right-right pair. Later ER iterations do assert same-source pairs,
+        because merging two entities claims identity among every record involved.
+        Those claims may well be right, but this ground truth does not say
+        either way, so scoring them measures the gold standard's shape rather
+        than the matcher. A same-source merge that is wrong is still paid for,
+        in the cross-source pairs the enlarged cluster goes on to claim.
 
         Parameters
         ----------
@@ -526,12 +535,12 @@ class BenchmarkDataset:
         dict[str, float | int]
             Metrics: precision, recall, f1_score, true_positives, false_positives
         """
-        cross_source = {
-            pair
-            for pair in predicted_pairs
-            if (pair[0] < RIGHT_ID_OFFSET) != (pair[1] < RIGHT_ID_OFFSET)
-        }
-        return evaluate_resolution(cross_source, self.ground_truth)
+        claimed: set[tuple[int, int]] = set()
+        for cluster in connected_components(predicted_pairs):
+            left = [i for i in cluster if i < RIGHT_ID_OFFSET]
+            right = [i for i in cluster if i >= RIGHT_ID_OFFSET]
+            claimed.update((a, b) for a in left for b in right)
+        return evaluate_resolution(claimed, self.ground_truth)
 
     def to_entities(self) -> tuple[list[Entity], list[Entity]]:
         """Convert tables to Entity objects for the pipeline.

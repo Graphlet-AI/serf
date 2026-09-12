@@ -5,6 +5,7 @@ import pytest
 from serf.dspy.types import Entity
 from serf.eval.metrics import (
     cluster_f1,
+    connected_components,
     evaluate_resolution,
     f1_score,
     pair_completeness,
@@ -127,6 +128,17 @@ def test_reduction_ratio_empty_total_returns_zero() -> None:
     """Reduction ratio returns 0.0 when total_possible_pairs is 0."""
     assert reduction_ratio(0, 0) == 0.0
     assert reduction_ratio(10, 0) == 0.0
+
+
+def test_connected_components_chains_transitive_matches() -> None:
+    """Matching a to b and b to c puts all three in one cluster."""
+    components = connected_components({(1, 2), (2, 3), (7, 8)})
+    assert sorted(components, key=min) == [{1, 2, 3}, {7, 8}]
+
+
+def test_connected_components_of_no_pairs_is_empty() -> None:
+    """Ids never mentioned in a pair are singletons and are not reported."""
+    assert connected_components(set()) == []
 
 
 def test_cluster_f1_matching_clusters() -> None:

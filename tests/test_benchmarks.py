@@ -69,13 +69,51 @@ def test_evaluate_with_known_predictions() -> None:
     assert metrics["recall"] == 0.5
 
 
-def test_evaluate_ignores_same_source_pairs() -> None:
+def test_evaluate_scores_the_clustering_not_the_pair_log() -> None:
+    """A group the matcher emitted as a star must be scored as the whole group.
+
+    ``collect_pairs`` flattens a resolved entity into master-to-source pairs, so
+    an entity covering left records 1 and 2 and right record 100001 reaches
+    scoring as (1, 2) and (1, 100001). The pair (2, 100001) is never written
+    down, yet the entity plainly claims it.
+    """
+    table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "A"]})
+    table_b = pd.DataFrame({"id": [1], "title": ["A"]})
+    ground_truth = {(1, 100001), (2, 100001)}
+
+    ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
+
+    metrics = ds.evaluate({(1, 2), (1, 100001)})
+    assert metrics["true_positives"] == 2
+    assert metrics["false_positives"] == 0
+    assert metrics["recall"] == 1.0
+
+
+def test_evaluate_does_not_penalize_a_correct_same_source_merge() -> None:
     """A same-source pair is outside what a bipartite gold standard can state.
 
     Ground truth is built as (a_id, b_id + RIGHT_ID_OFFSET), so it never holds a
     left-left or right-right pair. Later ER iterations assert same-source pairs
-    by transitivity, and scoring them against this gold standard counts every one
-    as wrong no matter how correct the merge was.
+    by transitivity, and scoring them as pairs against this gold standard counts
+    every one as wrong no matter how correct the merge was.
+    """
+    table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "A"]})
+    table_b = pd.DataFrame({"id": [1], "title": ["A"]})
+    ground_truth = {(1, 100001), (2, 100001)}
+
+    ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
+
+    metrics = ds.evaluate({(1, 100001), (2, 100001), (1, 2)})
+    assert metrics["precision"] == 1.0
+    assert metrics["recall"] == 1.0
+    assert metrics["false_positives"] == 0
+
+
+def test_evaluate_counts_the_cross_source_cost_of_a_wrong_merge() -> None:
+    """Not scoring same-source pairs must not let a bad merge through unseen.
+
+    Welding two gold entities together by way of a same-source pair is paid for
+    in the cross-source pairs the resulting cluster claims.
     """
     table_a = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
     table_b = pd.DataFrame({"id": [1, 2], "title": ["A", "B"]})
@@ -83,11 +121,10 @@ def test_evaluate_ignores_same_source_pairs() -> None:
 
     ds = BenchmarkDataset("test", table_a, table_b, ground_truth, {})
 
-    predictions = {(1, 100001), (2, 100002), (1, 2), (100001, 100002)}
-    metrics = ds.evaluate(predictions)
-    assert metrics["precision"] == 1.0
-    assert metrics["recall"] == 1.0
-    assert metrics["false_positives"] == 0
+    metrics = ds.evaluate({(1, 100001), (2, 100002), (1, 2)})
+    assert metrics["true_positives"] == 2
+    assert metrics["false_positives"] == 2
+    assert metrics["precision"] == 0.5
 
 
 def test_evaluate_still_counts_cross_source_mistakes() -> None:

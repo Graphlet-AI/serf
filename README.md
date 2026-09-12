@@ -490,27 +490,27 @@ replaced, and the two signatures that kept their original instructions say so in
 ### How Many ER Iterations
 
 Each ER iteration re-blocks what the previous one merged, so later rounds can pair records that
-blocking never put together on the first pass. That is a recall instrument, and it is priced in
-precision. Same samples, same prompts, only the iteration count differs:
+blocking never put together on the first pass. Same samples, same prompts, only the iteration count
+differs:
 
-| Dataset            | F1 @1      | F1 @3      | Delta   | Recall @1 -> @3  | Precision @1 -> @3 |
-| ------------------ | ---------- | ---------- | ------- | ---------------- | ------------------ |
-| **Abt-Buy**        | 0.8413     | **0.9249** | +0.0837 | 0.7303 -> 0.9094 | 0.9920 -> 0.9409   |
-| **DBLP-ACM**       | 0.9788     | **0.9853** | +0.0066 | 0.9685 -> 0.9874 | 0.9893 -> 0.9833   |
-| **Walmart-Amazon** | **0.8905** | 0.8675     | -0.0230 | 0.8133 -> 0.9600 | 0.9839 -> 0.7912   |
-| **Amazon-Google**  | **0.7619** | 0.7318     | -0.0301 | 0.6493 -> 0.8580 | 0.9218 -> 0.6379   |
-| **DBLP-Scholar**   | **0.9189** | 0.4343     | -0.4846 | 0.8500 -> 0.9500 | 1.0000 -> 0.2815   |
+| Dataset            | F1 @1  | F1 @3      | Delta   | Recall @1 -> @3  | Precision @1 -> @3 |
+| ------------------ | ------ | ---------- | ------- | ---------------- | ------------------ |
+| **Amazon-Google**  | 0.7619 | **0.8655** | +0.1036 | 0.6493 -> 0.8580 | 0.9218 -> 0.8732   |
+| **Abt-Buy**        | 0.8413 | **0.9381** | +0.0968 | 0.7303 -> 0.9094 | 0.9920 -> 0.9686   |
+| **DBLP-Scholar**   | 0.9244 | **0.9793** | +0.0549 | 0.8594 -> 0.9594 | 1.0000 -> 1.0000   |
+| **Walmart-Amazon** | 0.8905 | **0.9412** | +0.0507 | 0.8133 -> 0.9600 | 0.9839 -> 0.9231   |
+| **DBLP-ACM**       | 0.9693 | **0.9737** | +0.0044 | 0.9622 -> 0.9727 | 0.9765 -> 0.9747   |
+| **mean**           | 0.8775 | **0.9395** | +0.0621 |                  |                    |
 
-Recall rose on all five and precision fell on all five, but only two datasets come out ahead, and
-the mean falls 0.0895. The reason is that merging collapses each connected component of the
-predicted pairs, and scoring then asserts every cross pair between two merged components: one wrong
-pair between components of a and b records costs a x b false record pairs. DBLP-Scholar is worst
-affected because Google Scholar legitimately holds several records per publication, so its
-components are large. Its 299 third-round decisions were scored as 1,080 record pairs, 776 of them
-false.
+Iteration wins on all five, worth +0.0621 mean F1. Recall rises everywhere; precision gives back
+between 0.0018 and 0.0608 on four of the five.
 
-The default stays three iterations for comparability, but it is not free. Quote DBLP-Scholar at one
-iteration or name this effect. Details in
+An earlier version of this table reported the opposite, with DBLP-Scholar losing 0.4846 F1. That was
+a scoring bug, not a pipeline result. These benchmarks state a bipartite ground truth, built as
+`(a_id, b_id + RIGHT_ID_OFFSET)`, so they never say whether two left records or two right records
+are the same thing. Expanding a merged entity asserts exactly that, and those same-source pairs were
+being counted as false positives — on DBLP-Scholar, all 783 of its false positives were same-source
+and none was a real error. `BenchmarkDataset.evaluate` now scores only cross-source pairs. Details in
 [experiments/per-dataset-signature-baseline.md](experiments/per-dataset-signature-baseline.md).
 
 ## Project Structure

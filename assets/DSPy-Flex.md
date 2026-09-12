@@ -248,11 +248,22 @@ JSON. A candidate whose output is the wrong shape, or is missing a required fiel
 `CodeInterpreterError` naming the field, which GEPA scores at the failure score for that example.
 
 The default interpreter is `dspy.PythonInterpreter`, which is Deno and Pyodide, **so running a
-`Flex` requires Deno on the machine**. It is not installed in this repo's environment
-(`shutil.which('deno')` is `None`), which is the first thing to fix before trying any of this here.
-`dspy.LocalInterpreter` is the documented alternative and is a weaker boundary: it separates process
-memory and stdout but keeps the host user's filesystem, environment, credentials, network and
-process authority.
+`Flex` requires Deno on the machine**. This repo installs it as the `deno` dependency in
+`pyproject.toml`, which vendors the binary into the virtualenv rather than asking for a system
+package, so `uv sync` is the whole setup. dspy prefers that managed binary over anything on `PATH`:
+`_find_deno_executable` tries `from deno import find_deno_bin` first and only falls back to
+`shutil.which("deno")`. It resolves to `.venv/bin/deno`, and `_validate_deno_version` requires
+`>=2.0.0,<3.0.0`. `dspy.LocalInterpreter` is the documented alternative and is a weaker boundary: it
+separates process memory and stdout but keeps the host user's filesystem, environment, credentials,
+network and process authority.
+
+The sandbox boundary is real and worth knowing the shape of, because it is what the optimizer-authored
+code may assume. Probed here, deterministic Python and the standard library work, reading a host path
+raises `FileNotFoundError` because the host filesystem is simply not mounted, an outbound HTTP request
+kills the Deno process, and `subprocess` ends the session rather than shelling out. The one surprise
+is at the boundary itself: a typed SERF signature works, but pydantic record models cross into the
+guest as plain dicts, so `dspy.Predict` logs `Type mismatch for field 'dblp_records'` before coercing
+them. Outputs still come back as the declared types.
 
 ## Penalizing LM Calls With `program_trace`
 
@@ -362,8 +373,11 @@ Concrete, and checked against this repo rather than assumed.
   are not better: four successive attempts to spell out the `walmart-amazon` profiling scored 0.800,
   0.851, 0.870 and 0.855 F1 against 0.892 for the short version. Flex's second lever is exactly what
   is missing when the first one has already been pulled past its useful range.
-- **Deno is the blocker.** `dspy.PythonInterpreter` needs it and it is absent here, so the first step
-  is installing it or supplying a custom `interpreter_factory` and accepting that trust boundary.
+- **The runtime is no longer the blocker.** Deno ships as a dependency, and `dspy.Flex` runs on both
+  a plain string signature and the real `DblpAcmBlockMatch`, whose 7,696 characters of instructions
+  survive into the baseline `module_src` GEPA would start editing. What is left is the work itself:
+  a feedback metric that declares `program_trace`, a λ worth paying, and a reflection model strong
+  enough to write code.
 
 Nothing in SERF uses `dspy.Flex` today. `serf train` optimizes instructions on a `dspy.Predict` over
 the per-dataset signature, which is the prompt-only column of the table above — the one that bought

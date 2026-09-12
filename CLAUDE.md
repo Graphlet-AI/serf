@@ -45,7 +45,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - **LLM Integration**: DSPy signatures with `dspy.XMLAdapter` for structured output
 - **DSPy**: Programming—not prompting—LMs - a framework for building and optimizing LLM pipelines. See the Project's @assets/DSPy.md [DSPy Programming Guide](assets/DSPy.md) and read the docs at [DSPy Documentation](https://dspy.ai/api/).
 - **GEPA**: The reflective prompt optimizer behind `serf optimize`. See the Project's @assets/DSPy-GEPA.md [DSPy GEPA Guide](assets/DSPy-GEPA.md) before changing anything under `serf.dspy.optimize`, the `er_metric` feedback function, or the optimizer budget in `config.yml`.
-- **Flex**: `dspy.Flex` moves a module's own source code into GEPA's search space, which is how LLM calls get traded for deterministic Python. See the Project's @assets/DSPy-Flex.md [DSPy Flex Guide](assets/DSPy-Flex.md) before reaching for it. Nothing in SERF uses it yet, and it needs Deno for the default interpreter.
+- **Flex**: `dspy.Flex` moves a module's own source code into GEPA's search space, which is how LLM calls get traded for deterministic Python. See the Project's @assets/DSPy-Flex.md [DSPy Flex Guide](assets/DSPy-Flex.md) before reaching for it. Nothing in SERF uses it yet. Its default interpreter needs Deno, which the `deno` dependency vendors into the virtualenv, so `uv sync` is all the setup required.
 - **Sentence Transformers**: A library for state-of-the-art sentence embeddings
 - **BGE Embeddings**: `BAAI/bge-small-en-v1.5`, the winner of `serf blocking-sweep` on blocking recall per unit of CPU. Needs its instruction prefix, held in `models.embedding_prompt`.
 - **Gemini Models**: Advanced models for matching and merging entities
@@ -179,6 +179,7 @@ In addition, when writing PySpark code:
 
 - Python 3.12 required
 - Core packages: dspy-ai, pyspark, sentence-transformers, faiss-cpu, click, pyyaml
+- `deno` vendors the Deno binary that `dspy.PythonInterpreter` needs, so `dspy.Flex` runs after a plain `uv sync`
 - Development tools: uv, ruff, zuban, pytest
 - See pyproject.toml for complete dependency list
 

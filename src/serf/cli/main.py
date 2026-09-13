@@ -20,6 +20,7 @@ from serf.eval.benchmarks import DATASET_REGISTRY
 from serf.eval.splits import SplitSizes, get_split_sizes, training_overlap
 from serf.logs import get_logger, setup_logging
 from serf.match.run import entity_members, expand_pairs, merge_matched_entities
+from serf.merge.conservation import recover_dropped_records
 from serf.tracking import setup_mlflow
 
 logger = get_logger(__name__)
@@ -1716,6 +1717,10 @@ def benchmark(
     all_predicted_pairs: set[tuple[int, int]] = set()
     current_entities = all_entities
     iterations_run = 0
+    # Merging mints ids, so a later iteration holds entities whose ids are not
+    # record ids. Pair expansion and conservation are both stated over the
+    # records the run started from.
+    original_ids = {entity.id for entity in all_entities}
 
     for iteration in range(1, max_iterations + 1):
         if max_iterations > 1:
@@ -1736,7 +1741,9 @@ def benchmark(
             blocking_strategy=strategy,
             trained_prompts=trained_prompts,
         )
-        all_predicted_pairs.update(expand_pairs(pairs, entity_members(current_entities)))
+        all_predicted_pairs.update(
+            expand_pairs(pairs, entity_members(current_entities, original_ids))
+        )
         iterations_run = iteration
 
         merged = merge_matched_entities(current_entities, pairs)
@@ -1754,6 +1761,7 @@ def benchmark(
         current_entities = merged
 
     predicted_pairs = all_predicted_pairs
+    current_entities, conservation = recover_dropped_records(all_entities, current_entities)
     metrics = benchmark_data.evaluate(predicted_pairs)
     elapsed = time.time() - start
 
@@ -1771,9 +1779,13 @@ def benchmark(
             {"Metric": "Correct (TP)", "Value": str(metrics["true_positives"])},
             {"Metric": "Wrong (FP)", "Value": str(metrics["false_positives"])},
             {"Metric": "Iterations", "Value": str(iterations_run)},
+            {"Metric": "Records Conserved", "Value": f"{conservation.coverage_pct:.4f}%"},
+            {"Metric": "Records Recovered", "Value": str(conservation.recovered_records)},
         ]
     )
     click.echo(results_df.to_string(index=False))
+    if not conservation.passes:
+        click.echo(f"  WARNING: conservation {conservation.summary()}")
 
     if output_path:
         os.makedirs(output_path, exist_ok=True)
@@ -1795,6 +1807,9 @@ def benchmark(
                     "elapsed_seconds": elapsed,
                     "predicted_pairs": len(predicted_pairs),
                     "true_pairs": len(benchmark_data.ground_truth),
+                    "records_conserved_pct": conservation.coverage_pct,
+                    "records_recovered": conservation.recovered_records,
+                    "conservation_passes": conservation.passes,
                     **metrics,
                 },
                 f,

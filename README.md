@@ -354,14 +354,14 @@ The standard entity resolution scoreboard is the Papers With Code [Entity Resolu
 task. Papers With Code was sunset in 2025 and now redirects to Hugging Face, so the live mirror of
 those boards is [OpenCodePapers](https://opencodepapers-b7572d.gitlab.io/benchmarks/entity-resolution-on-abt-buy.html).
 SERF is a 1,000-record sample at seed 42, three ER iterations, `--signature-mode per-dataset`,
-`gpt-oss-120b` matching, no training.
+`gpt-oss-120b` matching, no training, and the partition matcher contract.
 
 | Model                  | Abt-Buy F1 | Task                      | Trained on the benchmark |
 | ---------------------- | ---------- | ------------------------- | ------------------------ |
 | gpt4-0613 zero-shot    | 95.78      | pair classification       | no                       |
 | RoBERTa-SupCon         | 94.29      | pair classification       | yes                      |
 | gpt-4o-mini fine-tuned | 94.09      | pair classification       | yes                      |
-| **SERF gpt-oss-120b**  | **93.54**  | **end-to-end resolution** | **no**                   |
+| **SERF gpt-oss-120b**  | **93.18**  | **end-to-end resolution** | **no**                   |
 | gpt-4o-2024-08-06      | 92.20      | pair classification       | no                       |
 | RobEM                  | 90.90      | pair classification       | yes                      |
 | HierGAT                | 89.80      | pair classification       | yes                      |
@@ -605,7 +605,10 @@ replaced, and the two signatures that kept their original instructions say so in
 
 Each ER iteration re-blocks what the previous one merged, so later rounds can pair records that
 blocking never put together on the first pass. Same samples, same prompts, only the iteration count
-differs:
+differs. Measured under the pairwise matcher contract, before the switch to partitions; the
+contract change moves mean F1 by -0.0037, which is inside the run-to-run noise, so the shape of
+this table stands. The per-dataset comparison of the two contracts is in
+[experiments/partition-vs-pairwise-contract.md](experiments/partition-vs-pairwise-contract.md).
 
 | Dataset            | F1 @1  | F1 @3      | Delta   | Recall @1 -> @3  | Precision @1 -> @3 |
 | ------------------ | ------ | ---------- | ------- | ---------------- | ------------------ |

@@ -16,6 +16,17 @@ _DEFAULT_VAL_RECORDS = 1000
 _DEFAULT_HOLDOUT_RECORDS = 1000
 _DEFAULT_SEED = 42
 
+BENCHMARK_SPLIT_SAMPLE = "sample"
+BENCHMARK_SPLIT_TRAIN = "train"
+BENCHMARK_SPLIT_VAL = "val"
+BENCHMARK_SPLIT_HOLDOUT = "holdout"
+BENCHMARK_SPLITS = (
+    BENCHMARK_SPLIT_SAMPLE,
+    BENCHMARK_SPLIT_TRAIN,
+    BENCHMARK_SPLIT_VAL,
+    BENCHMARK_SPLIT_HOLDOUT,
+)
+
 
 @dataclass(frozen=True)
 class SplitSizes:
@@ -223,6 +234,58 @@ def sample_random_splits(
         if ground_truth and not count_gold_pairs(records, ground_truth):
             logger.warning(f"Split {name} contains no gold pairs and cannot be scored")
     return splits
+
+
+def split_records(
+    dataset: str,
+    entities: list[Entity],
+    ground_truth: set[tuple[int, int]],
+    split: str,
+    seed: int | None = None,
+) -> tuple[list[Entity], set[tuple[int, int]]]:
+    """Return one named split's records and the gold pairs inside it.
+
+    The splits are the same partition ``serf train`` optimizes against, so
+    ``holdout`` is the only one GEPA never saw. Scoring a trained prompt on
+    ``val`` reports the score GEPA selected the prompt by, which is not a
+    measurement of anything the prompt has not already been fitted to.
+
+    Parameters
+    ----------
+    dataset : str
+        Benchmark dataset name, used to look up the configured budgets
+    entities : list[Entity]
+        Full record list, both sources concatenated
+    ground_truth : set[tuple[int, int]]
+        True matching pairs over the full dataset
+    split : str
+        One of ``train``, ``val`` or ``holdout``
+    seed : int | None
+        RNG seed. Defaults to config ``optimize.seed``, which is what
+        ``serf train`` uses, so the partition matches the one it trained on.
+
+    Returns
+    -------
+    tuple[list[Entity], set[tuple[int, int]]]
+        The split's records and the ground truth restricted to them
+    """
+    sizes = get_split_sizes(dataset)
+    splits = sample_random_splits(
+        entities,
+        ground_truth,
+        train_records=sizes.train_records,
+        val_records=sizes.val_records,
+        holdout_records=sizes.holdout_records,
+        seed=seed,
+    )
+    records = {
+        BENCHMARK_SPLIT_TRAIN: splits.train_records,
+        BENCHMARK_SPLIT_VAL: splits.val_records,
+        BENCHMARK_SPLIT_HOLDOUT: splits.holdout_records,
+    }[split]
+    record_ids = {entity.id for entity in records}
+    kept = {pair for pair in ground_truth if pair[0] in record_ids and pair[1] in record_ids}
+    return sorted(records, key=lambda entity: entity.id), kept
 
 
 def _scaled_budgets(total: int, *budgets: int) -> tuple[int, ...]:

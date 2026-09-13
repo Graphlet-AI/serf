@@ -17,6 +17,13 @@ from serf.dspy.dataset_signatures import (
     SIGNATURE_MODES,
 )
 from serf.eval.benchmarks import DATASET_REGISTRY
+from serf.eval.splits import (
+    BENCHMARK_SPLIT_SAMPLE,
+    BENCHMARK_SPLITS,
+    SplitSizes,
+    get_split_sizes,
+    split_records,
+)
 from serf.logs import get_logger, setup_logging
 from serf.match.run import entity_members, expand_pairs, merge_matched_entities
 from serf.tracking import setup_mlflow
@@ -1192,6 +1199,24 @@ def prompts(
     help="Cap on validation blocks (from config.yml optimize.val_blocks)",
 )
 @click.option(
+    "--train-records",
+    type=int,
+    default=None,
+    help="Records to draw for training (from config.yml benchmarks.train_records)",
+)
+@click.option(
+    "--val-records",
+    type=int,
+    default=None,
+    help="Records to draw for validation (from config.yml benchmarks.val_records)",
+)
+@click.option(
+    "--holdout-records",
+    type=int,
+    default=None,
+    help="Records to reserve, untouched by training (from config.yml benchmarks.holdout_records)",
+)
+@click.option(
     "--seed",
     type=int,
     default=None,
@@ -1225,6 +1250,9 @@ def train(
     auto: str | None,
     train_blocks: int | None,
     val_blocks: int | None,
+    train_records: int | None,
+    val_records: int | None,
+    holdout_records: int | None,
     seed: int | None,
     output_dir: str | None,
     log_dir: str | None,
@@ -1237,9 +1265,11 @@ def train(
     the instructions, and the winning program is written where `serf benchmark
     --trained-prompts` and `serf prompts --trained` can read it.
 
-    Samples disjoint train and validation records, blocks each split on its own
-    so no record crosses the boundary, and keeps only the blocks that hold both
-    sources and at least one gold pair.
+    Samples disjoint train, validation and holdout records, blocks each split on
+    its own so no record crosses the boundary, and keeps only the blocks that
+    hold both sources and at least one gold pair. Training reads train, GEPA
+    selects on validation, and holdout is left for `serf benchmark --split
+    holdout` so the trained prompt can be measured on records it never saw.
 
     Requires VERTEX_AI_TOKEN for GPT OSS 120b and GEMINI_API_KEY for Gemini 3.5
     Flash-Lite. `serf optimize` remains the path for the shared BlockMatch,
@@ -1263,9 +1293,22 @@ def train(
     results = []
     for name in names:
         click.echo(f"\n=== {name} ===")
+        configured = get_split_sizes(name)
+        sizes = SplitSizes(
+            train_records=train_records if train_records is not None else configured.train_records,
+            val_records=val_records if val_records is not None else configured.val_records,
+            holdout_records=holdout_records
+            if holdout_records is not None
+            else configured.holdout_records,
+        )
+        click.echo(
+            f"  Records: {sizes.train_records} train, {sizes.val_records} val, "
+            f"{sizes.holdout_records} holdout"
+        )
         result = train_dataset(
             name,
             seed=seed,
+            sizes=sizes,
             train_blocks=train_blocks,
             val_blocks=val_blocks,
             student_model=student_model,
@@ -1555,6 +1598,12 @@ def optimize(
     help="Random seed for record sampling (from config.yml optimize.seed)",
 )
 @click.option(
+    "--split",
+    type=click.Choice(list(BENCHMARK_SPLITS), case_sensitive=False),
+    default=BENCHMARK_SPLIT_SAMPLE,
+    help="Score a plain record sample, or the val or holdout split `serf train` partitions",
+)
+@click.option(
     "--blocking-strategy",
     type=click.Choice(["name", "json", "union"], case_sensitive=False),
     default=None,
@@ -1580,6 +1629,7 @@ def benchmark(
     signature_mode: str,
     sample_records: int | None,
     seed: int | None,
+    split: str,
     blocking_strategy: str | None,
     trained_prompts: bool,
 ) -> None:
@@ -1595,6 +1645,11 @@ def benchmark(
     config.yml optimize.trained_dir, which requires per-dataset mode.
     With --sample-records the dataset is sampled by ground-truth match group, so
     gold pairs survive, and metrics are scored against the surviving pairs.
+
+    --split holdout scores the records `serf train` reserved and never showed
+    GEPA. Pair it with --trained-prompts: a plain sample at the default seed and
+    size draws the same records as the validation split GEPA selected on, so a
+    trained prompt measured there is reading its own validation score.
     """
     from serf.eval.benchmarks import BenchmarkDataset
 
@@ -1636,10 +1691,21 @@ def benchmark(
     click.echo(f"  Right table: {len(right_entities)} entities")
     click.echo(f"  Ground truth pairs: {len(benchmark_data.ground_truth)}")
 
-    if sample_records:
+    seed = seed if seed is not None else int(serf_config.get("optimize.seed", 42))
+
+    if split != BENCHMARK_SPLIT_SAMPLE:
+        total = len(all_entities)
+        all_entities, split_gold = split_records(
+            dataset, all_entities, benchmark_data.ground_truth, split, seed=seed
+        )
+        benchmark_data.ground_truth = split_gold
+        click.echo(
+            f"  Split {split}: {len(all_entities)} of {total} records "
+            f"(seed {seed}) with {len(split_gold)} gold pairs inside it"
+        )
+    elif sample_records:
         from serf.eval.sample import sample_records as sample_benchmark_records
 
-        seed = seed if seed is not None else int(serf_config.get("optimize.seed", 42))
         record_sample = sample_benchmark_records(
             all_entities,
             benchmark_data.ground_truth,
@@ -1735,6 +1801,8 @@ def benchmark(
                     "signature_mode": signature_mode,
                     "sample_records": sample_records,
                     "seed": seed,
+                    "split": split,
+                    "trained_prompts": trained_prompts,
                     "max_iterations": max_iterations,
                     "iterations_run": iterations_run,
                     "gold_pairs_retained": len(benchmark_data.ground_truth),

@@ -164,6 +164,7 @@ class ConservationReport:
 def check_conservation(
     inputs: Iterable[Any],
     outputs: Iterable[Any],
+    minted_ids: Iterable[int] | None = None,
 ) -> ConservationReport:
     """Report whether every input record is still reachable from the output.
 
@@ -173,6 +174,11 @@ def check_conservation(
         Records the run started from
     outputs : Iterable[Any]
         Records the run produced
+    minted_ids : Iterable[int] | None
+        Ids the run itself created for merged entities. A multi-round run
+        merges entities it merged earlier, so an intermediate entity's id
+        legitimately appears in a later record's lineage. Without this the
+        check reads those as references to records that never existed.
 
     Returns
     -------
@@ -182,6 +188,7 @@ def check_conservation(
     input_ids: set[int] = set()
     for record in inputs:
         input_ids |= coverage_of(record)
+    referenceable = input_ids | {int(value) for value in minted_ids or ()}
 
     output_list = list(outputs)
     claims: dict[int, int] = {}
@@ -195,7 +202,7 @@ def check_conservation(
     missing = sorted(input_ids - set(claims))
     # A merged record's own id is minted, so it is deliberately not an input
     # id. Only lineage entries are references, and only they can dangle.
-    invalid = sorted({record_id for record_id in lineage_refs} - input_ids)
+    invalid = sorted(set(lineage_refs) - referenceable)
     duplicated = sorted(
         record_id for record_id, count in claims.items() if count > 1 and record_id in input_ids
     )
@@ -215,6 +222,7 @@ def check_conservation(
 def recover_dropped_records(
     inputs: list[Any],
     outputs: list[Any],
+    minted_ids: Iterable[int] | None = None,
 ) -> tuple[list[Any], ConservationReport]:
     """Add back every input record the output fails to account for.
 
@@ -230,6 +238,9 @@ def recover_dropped_records(
         Records the run started from
     outputs : list[Any]
         Records the run produced
+    minted_ids : Iterable[int] | None
+        Ids the run created for merged entities, which are legitimate lineage
+        targets even though they were never input records
 
     Returns
     -------
@@ -237,7 +248,8 @@ def recover_dropped_records(
         The output with the missing records appended, and the report for the
         repaired output
     """
-    before = check_conservation(inputs, outputs)
+    minted = set(minted_ids or ())
+    before = check_conservation(inputs, outputs, minted)
 
     repaired = outputs
     added = 0
@@ -255,7 +267,7 @@ def recover_dropped_records(
             f"output record; added {added} of them back as unmatched records"
         )
 
-    after = check_conservation(inputs, repaired) if added else before
+    after = check_conservation(inputs, repaired, minted) if added else before
     after.recovered_records = added
     if not after.passes:
         message = f"Conservation failed after recovery: {after.summary()}"

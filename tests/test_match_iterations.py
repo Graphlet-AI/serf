@@ -8,6 +8,7 @@ entity as a match against every record that entity carries.
 
 from serf.dspy.types import Entity
 from serf.match.run import entity_members, expand_pairs, merge_matched_entities
+from serf.merge.canonical import IdAllocator
 
 
 def _entity(entity_id: int, name: str, source_ids: list[int] | None = None) -> Entity:
@@ -136,3 +137,33 @@ def test_merge_matched_entities_ignores_pairs_for_absent_records() -> None:
     merged = merge_matched_entities(entities, {(1, 999)})
 
     assert [e.id for e in merged] == [1, 2]
+
+
+def test_one_allocator_across_rounds_never_mints_the_same_id_twice() -> None:
+    """A per-round allocator cannot see the ids an earlier round created."""
+    allocator = IdAllocator({1, 2, 3, 4})
+
+    first = merge_matched_entities(
+        [_entity(1, "a"), _entity(2, "a"), _entity(3, "b"), _entity(4, "b")],
+        {(1, 2), (3, 4)},
+        allocator,
+    )
+    second = merge_matched_entities(first, {(first[0].id, first[1].id)}, allocator)
+
+    assert len(allocator.issued) == 3
+    assert len(set(allocator.issued)) == 3
+    assert second[0].id in allocator.issued
+
+
+def test_a_second_round_merge_records_the_intermediate_entity_in_its_lineage() -> None:
+    """Lineage is an audit trail, so the entity that existed in between is kept."""
+    allocator = IdAllocator({1, 2, 3})
+
+    first = merge_matched_entities(
+        [_entity(1, "a"), _entity(2, "a"), _entity(3, "a")], {(1, 2)}, allocator
+    )
+    intermediate = next(e.id for e in first if e.source_ids)
+    second = merge_matched_entities(first, {(intermediate, 3)}, allocator)
+
+    assert len(second) == 1
+    assert set(second[0].source_ids or []) == {1, 2, 3, intermediate}

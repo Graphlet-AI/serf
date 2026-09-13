@@ -112,6 +112,24 @@ class IdAllocator:
         self._cursor = (
             1 if configured == STRATEGY_SMALLEST_UNUSED else max(self._used, default=0) + 1
         )
+        self._issued: set[int] = set()
+
+    @property
+    def issued(self) -> set[int]:
+        """Return every id this allocator has minted.
+
+        An entity merged in one round can be merged again in the next, and its
+        minted id then becomes a lineage entry of the result. Those ids are
+        real - each identifies an entity that existed - but they were never
+        input records, so a conservation check has to be told about them to
+        tell them apart from a reference to nothing.
+
+        Returns
+        -------
+        set[int]
+            Minted ids
+        """
+        return set(self._issued)
 
     def mint(self) -> int:
         """Return an unused id and mark it used.
@@ -125,6 +143,7 @@ class IdAllocator:
             self._cursor += 1
         minted = self._cursor
         self._used.add(minted)
+        self._issued.add(minted)
         self._cursor += 1
         return minted
 

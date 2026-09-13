@@ -20,6 +20,7 @@ from serf.eval.benchmarks import DATASET_REGISTRY
 from serf.eval.splits import SplitSizes, get_split_sizes, training_overlap
 from serf.logs import get_logger, setup_logging
 from serf.match.run import entity_members, expand_pairs, merge_matched_entities
+from serf.merge.canonical import IdAllocator
 from serf.merge.conservation import recover_dropped_records
 from serf.tracking import setup_mlflow
 
@@ -1821,6 +1822,12 @@ def benchmark(
     # record ids. Pair expansion and conservation are both stated over the
     # records the run started from.
     original_ids = {entity.id for entity in all_entities}
+    # One allocator for the whole run, so no id is minted twice and the ids it
+    # created are known when conservation reads the lineage at the end. An
+    # entity merged in round one and merged again in round two leaves its
+    # minted id in the result's source_ids, which is real lineage rather than
+    # a reference to nothing.
+    allocator = IdAllocator(original_ids)
 
     for iteration in range(1, max_iterations + 1):
         if max_iterations > 1:
@@ -1846,7 +1853,7 @@ def benchmark(
         )
         iterations_run = iteration
 
-        merged = merge_matched_entities(current_entities, pairs)
+        merged = merge_matched_entities(current_entities, pairs, allocator)
         if max_iterations > 1:
             reduction_pct = (prev_count - len(merged)) / prev_count * 100 if prev_count > 0 else 0
             click.echo(
@@ -1861,7 +1868,9 @@ def benchmark(
         current_entities = merged
 
     predicted_pairs = all_predicted_pairs
-    current_entities, conservation = recover_dropped_records(all_entities, current_entities)
+    current_entities, conservation = recover_dropped_records(
+        all_entities, current_entities, allocator.issued
+    )
     metrics = benchmark_data.evaluate(predicted_pairs)
     elapsed = time.time() - start
 

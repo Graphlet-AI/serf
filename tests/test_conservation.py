@@ -154,3 +154,41 @@ def test_coverage_of_accepts_both_records_and_mappings() -> None:
     assert coverage_of({"id": 3, "source_ids": [5, 6]}) == {3, 5, 6}
     assert coverage_of(CanonicalRecord(id=3, source_ids=[5, 6])) == {3, 5, 6}
     assert coverage_of(Entity(id=3, name="x", source_ids=[5, 6])) == {3, 5, 6}
+
+
+def test_an_intermediate_entitys_minted_id_is_real_lineage_not_a_dangling_reference() -> None:
+    """The bug the abt-buy run found: a two-round merge leaves a minted id in source_ids."""
+    inputs = [{"id": 1}, {"id": 2}, {"id": 3}]
+    # Round one merged 1 and 2 into minted entity 4; round two merged 4 with 3
+    # into minted entity 5, whose lineage names 4.
+    outputs: list[Any] = [CanonicalRecord(id=5, source_ids=[1, 2, 3, 4])]
+
+    unaware = check_conservation(inputs, outputs)
+    aware = check_conservation(inputs, outputs, minted_ids={4, 5})
+
+    assert unaware.invalid_reference_ids == [4]
+    assert not unaware.passes
+    assert aware.invalid_reference_ids == []
+    assert aware.passes
+
+
+def test_recovery_also_takes_the_minted_ids_into_account() -> None:
+    inputs = [{"id": 1}, {"id": 2}, {"id": 3}]
+    outputs: list[Any] = [CanonicalRecord(id=5, source_ids=[1, 2, 4])]
+
+    repaired, report = recover_dropped_records(inputs, outputs, minted_ids={4, 5})
+
+    assert report.passes
+    assert report.recovered_records == 1
+    assert len(repaired) == 2
+
+
+def test_a_reference_to_an_id_nobody_ever_issued_still_dangles() -> None:
+    """The check must stay able to catch a genuinely invented reference."""
+    inputs = [{"id": 1}, {"id": 2}]
+    outputs: list[Any] = [CanonicalRecord(id=5, source_ids=[1, 2, 9999])]
+
+    report = check_conservation(inputs, outputs, minted_ids={5})
+
+    assert report.invalid_reference_ids == [9999]
+    assert not report.passes

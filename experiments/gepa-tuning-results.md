@@ -19,7 +19,33 @@ prompt is actually better on records nothing in the run was allowed to see.
 | ------------- | -------: | -----: | ---------: | ---------------------- | -------------------------- | -----------: |
 | amazon-google |       33 |      6 |         32 | 0.8997 → 0.9376        | 0.8550 → 0.8566            |  **+0.0016** |
 
-(Remaining datasets in progress; this file is updated as each run finishes.)
+Abt-Buy, Walmart-Amazon, DBLP-Scholar and DBLP-ACM are still running; this file
+is updated as each finishes.
+
+## The validation set saturates on four of the five datasets
+
+Amazon-Google was the one dataset picked to go first precisely because its six
+validation examples score around 0.84 and can therefore order candidates.
+Abt-Buy, running second, shows the opposite:
+
+```
+Iteration 15: New valset pareto front scores: {0: 0.96, 1: 1.0, 2: 1.0, 3: 1.0, 4: 0.966, 5: 1.0}
+Iteration 15: Best score on valset: 0.9875862068965517
+Iteration 16: All subsample scores perfect for parent 3. Skipping.
+```
+
+Four of the six examples are already perfect, the aggregate is 0.9876, and GEPA
+has begun skipping iterations because it cannot separate its candidates. That is
+the same saturation DBLP-ACM showed in `gepa-example-yield.md`, and it is
+expected on Walmart-Amazon and DBLP-Scholar too: every dataset except
+Amazon-Google is easy enough that six examples run out of discriminating power.
+
+So the honest summary of this configuration is that **200 validation records
+selects usefully on one of five datasets**. The 80/20 ratio is correct in
+records; the absolute count is what fails, because 200 records become 4 to 6
+scoreable blocks. Reaching DSPy's own 35-example threshold needs roughly 1,000
+validation records, which abandons 80/20 — a trade worth making only for the
+datasets that demonstrably saturate, which is now most of them.
 
 ## What the first result shows
 

@@ -380,35 +380,38 @@ Every number below the full-table row is post-fix. Until recently `dspy.XMLAdapt
 fallback at double the inference cost and lost the ones the fallback also failed. The investigation and
 the before/after are in [experiments/xml-adapter-block-loss.md](experiments/xml-adapter-block-loss.md).
 
-### Against the Public Leaderboard
+### Against the Published Results
 
-The standard entity resolution scoreboard is the Papers With Code [Entity Resolution](https://paperswithcode.com/task/entity-resolution)
-task. Papers With Code was sunset in 2025 and now redirects to Hugging Face, so the live mirror of
-those boards is [OpenCodePapers](https://opencodepapers-b7572d.gitlab.io/benchmarks/entity-resolution-on-abt-buy.html).
 SERF is a 1,000-record sample at seed 42, three ER iterations, `--signature-mode per-dataset`,
 `gpt-oss-120b` matching, no training, and the partition matcher contract.
 
-| Model                  | Abt-Buy F1 | Task                      | Trained on the benchmark |
-| ---------------------- | ---------- | ------------------------- | ------------------------ |
-| gpt4-0613 zero-shot    | 95.78      | pair classification       | no                       |
-| RoBERTa-SupCon         | 94.29      | pair classification       | yes                      |
-| gpt-4o-mini fine-tuned | 94.09      | pair classification       | yes                      |
-| **SERF gpt-oss-120b**  | **93.18**  | **end-to-end resolution** | **no**                   |
-| gpt-4o-2024-08-06      | 92.20      | pair classification       | no                       |
-| RobEM                  | 90.90      | pair classification       | yes                      |
-| HierGAT                | 89.80      | pair classification       | yes                      |
-| Ditto                  | 89.33      | pair classification       | yes                      |
-| gpt-4o-mini            | 87.68      | pair classification       | no                       |
-| Llama-3.1-70B          | 79.12      | pair classification       | no                       |
+Almost every published figure on these datasets is **pair classification**: candidate pairs are
+handed to the model and it labels each one. SERF does the whole task from the raw tables, so its
+recall carries every pair blocking never proposed, which a pair classifier never pays for. One
+paper does publish genuine end-to-end pipelines, and that is the row worth reading:
 
-The best verified published figure for each of the five datasets, with its evaluation protocol and
-the spread near the top, is collected in
-[experiments/state-of-the-art.md](experiments/state-of-the-art.md).
+| Dataset        | SERF end-to-end | SC-Block end-to-end | Best pair classification, full test split |
+| -------------- | --------------- | ------------------- | ----------------------------------------- |
+| DBLP-ACM       | **99.26**       | not published       | 99.32 (EM-Join)                           |
+| DBLP-Scholar   | **96.65**       | not published       | 98.51 (Jellyfish-13B)                     |
+| Walmart-Amazon | **94.67**       | 86.0                | 91.62 (Qwen3-4B cross-encoder)            |
+| Abt-Buy        | **93.18**       | 92.9                | 95.15 (Qwen3-8B cross-encoder)            |
+| Amazon-Google  | **83.90**       | 80.3                | 81.69 (Jellyfish-7B)                      |
 
-The comparison is indicative, not like-for-like. Every leaderboard entry scores pair classification:
-the candidate pairs are handed to the model and it labels each one. SERF does the whole task, so its
-recall carries every pair blocking never proposed, which a pair classifier never pays for. Read the
-row as "end-to-end, untrained, in the neighbourhood of an unfine-tuned frontier model", not as a rank.
+Abt-Buy is the honest comparison: SERF's 1,000-record sample is nearly the whole 2,173-record
+table, and 93.18 against SC-Block's 92.9 is a like-for-like tie with both about two points under
+the best pair-classification result. The Walmart-Amazon and DBLP-Scholar rows flatter SERF and
+should be discounted — those are exactly the datasets where its sample is the smallest fraction of
+the table, and sampling by match group removes most of the non-matching records a full run has to
+reject.
+
+Two further cautions, both documented in
+[experiments/state-of-the-art.md](experiments/state-of-the-art.md) with sources. The widely-quoted
+"SOTA" figures for Abt-Buy (95.78) and Amazon-Google (85.21) are measured on a **down-sampled**
+test split capped at 250 positives and 1,000 negatives, which inflates F1 by roughly four points,
+so they are not in the table above. And a harsher post-blocking protocol collapses the leaderboard
+ordering entirely: asked to pick a match from ten retrieved candidates rather than to label a
+curated pair file, Ditto falls from 86.76 to 57.75 on Walmart-Amazon.
 
 The row moved up from 90.38, which was measured with the shared `BlockMatch` signature before the
 per-dataset signatures existed. Two changes account for the difference and both are recorded

@@ -32,7 +32,9 @@ from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 
 from serf.block.pipeline import SemanticBlockingPipeline
 from serf.config import config
+from serf.dspy.adapter import RepairingXMLAdapter
 from serf.dspy.dataset_signatures import DatasetSignatureSpec, get_dataset_spec
+from serf.dspy.lm import create_lm
 from serf.dspy.optimize import optimize_module
 from serf.dspy.trained import predictor_instructions, trained_program_path
 from serf.dspy.types import Entity, EntityBlock
@@ -80,6 +82,13 @@ class TrainResult:
         Instructions the run started from
     instructions_after : str
         Instructions the run ended with
+    holdout_examples : int
+        Blocks in the holdout split, which GEPA never saw
+    holdout_baseline_score : float | None
+        Holdout score of the prompt as shipped
+    holdout_score : float | None
+        Holdout score of the prompt GEPA kept. The only number from a training
+        run that is not a score on data the run selected against.
     """
 
     dataset: str
@@ -91,16 +100,25 @@ class TrainResult:
     best_score: float | None
     instructions_before: str
     instructions_after: str
+    holdout_examples: int = 0
+    holdout_baseline_score: float | None = None
+    holdout_score: float | None = None
 
     @property
     def improved(self) -> bool:
         """Whether GEPA found a candidate that beat the shipped prompt.
+
+        Reads the holdout comparison when there is one. The validation scores
+        are what GEPA selected on, so a gain there is partly the selection
+        showing through; the holdout is the one that answers the question.
 
         Returns
         -------
         bool
             True when both scores are known and the best one is higher
         """
+        if self.holdout_score is not None and self.holdout_baseline_score is not None:
+            return self.holdout_score > self.holdout_baseline_score
         if self.baseline_score is None or self.best_score is None:
             return False
         return self.best_score > self.baseline_score
@@ -427,6 +445,56 @@ def make_dataset_metric(spec: DatasetSignatureSpec) -> Callable[..., ScoreWithFe
     return metric
 
 
+def score_on_examples(
+    program: dspy.Module,
+    examples: list[dspy.Example],
+    metric: Callable[..., ScoreWithFeedback],
+    student_model: str | None = None,
+) -> float | None:
+    """Average the metric over examples, running the program on each.
+
+    Used for the holdout score, which has to be measured outside GEPA because
+    GEPA only ever evaluates the sets it was given.
+
+    A block whose call fails scores zero rather than being skipped. Dropping it
+    would quietly raise the average by removing the cases the prompt handles
+    worst, which is the wrong direction for a number meant to be trusted.
+
+    Parameters
+    ----------
+    program : dspy.Module
+        Program to evaluate
+    examples : list[dspy.Example]
+        Examples carrying inputs and gold pairs
+    metric : Callable[..., ScoreWithFeedback]
+        Scoring function
+    student_model : str | None
+        Task LM. Defaults to config ``models.student``.
+
+    Returns
+    -------
+    float | None
+        Mean score, or None when there is nothing to score
+    """
+    if not examples:
+        return None
+    lm = create_lm(student_model, role="student")
+    total = 0.0
+    failures = 0
+    with dspy.context(lm=lm, adapter=RepairingXMLAdapter()):
+        for example in examples:
+            try:
+                prediction = program(**example.inputs())
+            except Exception as error:
+                failures += 1
+                logger.warning(f"Holdout block failed and scores zero: {error}")
+                continue
+            total += float(metric(example, prediction).score)
+    if failures:
+        logger.warning(f"{failures} of {len(examples)} holdout blocks failed their call")
+    return total / len(examples)
+
+
 def train_dataset(
     dataset: str,
     *,
@@ -440,6 +508,7 @@ def train_dataset(
     log_dir: str | None = None,
     output_dir: str | None = None,
     data_dir: str | None = None,
+    score_holdout: bool = True,
 ) -> TrainResult:
     """Optimize one benchmark dataset's matching prompt with GEPA.
 
@@ -473,6 +542,10 @@ def train_dataset(
         ``optimize.trained_dir``.
     data_dir : str | None
         Benchmark download directory
+    score_holdout : bool
+        Score both prompts on the holdout split once GEPA is done. This is the
+        only measurement of the run that GEPA did not select against, and it
+        costs one pass over the holdout blocks per prompt.
 
     Returns
     -------
@@ -528,12 +601,13 @@ def train_dataset(
             "holds both sources. Raise benchmarks.train_records or the blocking block size."
         )
 
+    metric = make_dataset_metric(spec)
     module = cast(dspy.Module, dspy.Predict(spec.signature))
     optimized = optimize_module(
         module,
         trainset=trainset,
         valset=valset or None,
-        metric=make_dataset_metric(spec),
+        metric=metric,
         student_model=student_model,
         teacher_model=teacher_model,
         auto=auto,
@@ -544,6 +618,26 @@ def train_dataset(
     path.parent.mkdir(parents=True, exist_ok=True)
     optimized.save(str(path))
     baseline_score, best_score = _validation_scores(optimized)
+
+    holdout_baseline: float | None = None
+    holdout_best: float | None = None
+    holdoutset: list[dspy.Example] = []
+    if score_holdout and splits.holdout_records:
+        holdout_all, _ = blocker.run(splits.holdout_records)
+        holdoutset = blocks_to_dataset_examples(holdout_all, benchmark.ground_truth, spec)
+        logger.info(
+            f"Scoring {dataset} on {len(splits.holdout_records)} held-out records in "
+            f"{len(holdout_all)} blocks ({len(holdoutset)} usable examples), which GEPA never saw"
+        )
+        holdout_baseline = score_on_examples(module, holdoutset, metric, student_model)
+        holdout_best = score_on_examples(optimized, holdoutset, metric, student_model)
+        logger.info(f"Holdout {dataset}: baseline={holdout_baseline} trained={holdout_best}")
+    elif score_holdout:
+        logger.warning(
+            f"No holdout records for {dataset}, so the run has no score GEPA did not select "
+            "against. Raise benchmarks.holdout_records."
+        )
+
     instructions_after = (
         predictor_instructions(cast(dspy.Predict, optimized)) or instructions_before
     )
@@ -562,6 +656,9 @@ def train_dataset(
         best_score=best_score,
         instructions_before=instructions_before,
         instructions_after=instructions_after,
+        holdout_examples=len(holdoutset),
+        holdout_baseline_score=holdout_baseline,
+        holdout_score=holdout_best,
     )
 
 

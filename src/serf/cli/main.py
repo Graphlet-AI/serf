@@ -1237,6 +1237,12 @@ def prompts(
     default=None,
     help="Directory to download benchmark data into",
 )
+@click.option(
+    "--holdout/--no-holdout",
+    "score_holdout",
+    default=True,
+    help="Score both prompts on the held-out records GEPA never saw",
+)
 def train(
     dataset: tuple[str, ...],
     all_datasets: bool,
@@ -1252,6 +1258,7 @@ def train(
     output_dir: str | None,
     log_dir: str | None,
     data_dir: str | None,
+    score_holdout: bool,
 ) -> None:
     """Train a benchmark dataset's matching prompt with GEPA.
 
@@ -1262,9 +1269,10 @@ def train(
 
     Samples disjoint train, validation and holdout records, blocks each split on
     its own so no record crosses the boundary, and keeps only the blocks that
-    hold both sources and at least one gold pair. Training reads train, GEPA
-    selects on validation, and holdout is left for `serf benchmark --split
-    holdout` so the trained prompt can be measured on records it never saw.
+    hold both sources and at least one gold pair. Training reads train and GEPA
+    selects on validation, so both of those scores are partly the selection
+    showing through. The holdout split is scored once at the end, on records
+    GEPA never saw, and that is the number to believe.
 
     Requires VERTEX_AI_TOKEN for GPT OSS 120b and GEMINI_API_KEY for Gemini 3.5
     Flash-Lite. `serf optimize` remains the path for the shared BlockMatch,
@@ -1312,31 +1320,45 @@ def train(
             log_dir=log_dir,
             output_dir=output_dir,
             data_dir=data_dir,
+            score_holdout=score_holdout,
         )
         results.append(result)
         click.echo(f"  Signature: {result.signature_name}")
-        click.echo(f"  Examples:  {result.train_examples} train, {result.val_examples} val")
+        click.echo(
+            f"  Examples:  {result.train_examples} train, {result.val_examples} val, "
+            f"{result.holdout_examples} holdout"
+        )
         click.echo(
             f"  Validation: {_score_text(result.baseline_score)} as written -> "
-            f"{_score_text(result.best_score)} trained"
+            f"{_score_text(result.best_score)} trained  (GEPA selected on this)"
         )
+        if result.holdout_score is not None:
+            click.echo(
+                f"  Holdout:    {_score_text(result.holdout_baseline_score)} as written -> "
+                f"{_score_text(result.holdout_score)} trained  (GEPA never saw this)"
+            )
         click.echo(
             f"  Instructions: {len(result.instructions_before):,} -> "
             f"{len(result.instructions_after):,} characters"
         )
         click.echo(f"  Saved: {result.program_path}")
         if not result.improved:
+            measured_on = "holdout" if result.holdout_score is not None else "validation"
             click.echo(
-                "  GEPA did not beat the shipped prompt on validation. Benchmark before "
+                f"  GEPA did not beat the shipped prompt on {measured_on}. Benchmark before "
                 "adopting it; --trained-prompts is opt-in for exactly this reason."
             )
 
     if len(results) > 1:
         click.echo("\nSummary")
+        click.echo(f"  {'dataset':<16} {'val':>16}  {'holdout':>16}")
         for result in results:
+            validation = f"{_score_text(result.baseline_score)}->{_score_text(result.best_score)}"
+            holdout = (
+                f"{_score_text(result.holdout_baseline_score)}->{_score_text(result.holdout_score)}"
+            )
             click.echo(
-                f"  {result.dataset:<16} {_score_text(result.baseline_score)} -> "
-                f"{_score_text(result.best_score)}"
+                f"  {result.dataset:<16} {validation:>16}  {holdout:>16}"
                 f"{'  (improved)' if result.improved else ''}"
             )
 
@@ -1360,6 +1382,84 @@ def _score_text(score: float | None) -> str:
 # ---------------------------------------------------------------------------
 # optimize  (GEPA student/teacher prompt optimization)
 # ---------------------------------------------------------------------------
+
+
+@cli.command(name="schema", context_settings={"show_default": True})
+@click.argument("path", type=click.Path(exists=True))
+@click.option(
+    "--merge",
+    "merge_path",
+    type=click.Path(exists=True),
+    default=None,
+    help="JSON file holding records, or a list of groups, to canonicalize against this schema",
+)
+def schema_command(path: str, merge_path: str | None) -> None:
+    """Show an entity schema, and optionally merge records against it.
+
+    Renders the declared fields with the semantic type and merge policy each
+    one resolves to, plus the Pydantic classes generated for DSPy signatures:
+    one source class of scalars for the LLM to read, and one canonical class of
+    lists for what a merge produces.
+
+    With --merge, reads JSON and prints the canonical records it resolves to,
+    so a schema's merge policy can be checked against real values before a run
+    depends on it. The file holds either a flat list of records, treated as one
+    group, or a list of groups, which is the shape the matcher now returns.
+    """
+    from serf.merge.canonical import canonicalize_groups, known_ids
+    from serf.schema import canonical_model, load_schema, source_model
+
+    entity_schema = load_schema(path)
+    click.echo(f"Schema: {entity_schema.entity}")
+    if entity_schema.description:
+        click.echo(f"  {entity_schema.description.strip()}")
+
+    policies = entity_schema.merge_policies()
+    fields_df = pd.DataFrame(
+        [
+            {
+                "Field": field.name,
+                "Type": field.type,
+                "Value": field.scalar_type().__name__,
+                "Required": "yes" if field.required else "no",
+                "Dedupe": policies[field.name].dedupe,
+                "Threshold": (
+                    f"{policies[field.name].threshold:.2f}"
+                    if policies[field.name].dedupe == "fuzzy"
+                    else ""
+                ),
+            }
+            for field in entity_schema.fields
+        ]
+    )
+    click.echo("\nFields:")
+    click.echo(fields_df.to_string(index=False))
+
+    source = source_model(entity_schema)
+    canonical = canonical_model(entity_schema)
+    click.echo(f"\nGenerated classes:\n  source:    {source.__name__}")
+    click.echo(f"  canonical: {canonical.__name__}")
+
+    if not merge_path:
+        return
+
+    with open(merge_path, encoding="utf-8") as handle:
+        payload = json.load(handle)
+    if not isinstance(payload, list) or not payload:
+        raise click.UsageError(f"{merge_path} must hold a non-empty JSON list")
+
+    groups = payload if isinstance(payload[0], list) else [payload]
+    records = [record for group in groups for record in group]
+
+    click.echo(f"\nMerging {len(records)} records in {len(groups)} group(s) from {merge_path}")
+    merged = canonicalize_groups(
+        groups,
+        field_types=entity_schema.field_types(),
+        policies=policies,
+        reserved=known_ids(records),
+    )
+    for record in merged:
+        click.echo(f"  {json.dumps(record.to_dict(), ensure_ascii=False)}")
 
 
 @cli.command()

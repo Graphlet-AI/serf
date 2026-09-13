@@ -12,6 +12,7 @@ from serf.dspy.schemas.base import ResolvedEntity
 from serf.dspy.train import (
     GOLD_PAIRS_FIELD,
     MAX_ENUMERATED_ERRORS,
+    TrainResult,
     _apply_cap,
     _example_cap,
     blocks_to_dataset_examples,
@@ -310,6 +311,7 @@ def test_train_dataset_uses_the_dataset_signature_and_saves_where_matching_looks
     splits = MagicMock()
     splits.train_records = entities
     splits.val_records = entities
+    splits.holdout_records = []
 
     optimized = dspy.Predict(SPEC.signature)
     optimized.signature = SPEC.signature.with_instructions("Rewritten by GEPA.")
@@ -332,7 +334,7 @@ def test_train_dataset_uses_the_dataset_signature_and_saves_where_matching_looks
             [_block(entities)],
             MagicMock(),
         )
-        result = train_dataset("dblp-acm", output_dir=str(tmp_path))
+        result = train_dataset("dblp-acm", output_dir=str(tmp_path), score_holdout=False)
 
     assert captured["module"].signature is SPEC.signature
     assert captured["metric"].__qualname__.startswith("make_dataset_metric")
@@ -345,6 +347,62 @@ def test_train_dataset_uses_the_dataset_signature_and_saves_where_matching_looks
     assert result.instructions_after == "Rewritten by GEPA."
     assert Path(result.program_path) == trained_program_path("dblp-acm", str(tmp_path))
     assert Path(result.program_path).exists()
+    assert result.holdout_score is None, "holdout scoring was switched off"
+
+
+def test_a_validation_gain_that_does_not_show_on_holdout_is_not_an_improvement() -> None:
+    """GEPA selected on validation, so a gain there is partly the selection showing through."""
+    result = TrainResult(
+        dataset="dblp-acm",
+        signature_name="DblpAcmBlockMatch",
+        program_path="",
+        train_examples=1,
+        val_examples=1,
+        baseline_score=0.5,
+        best_score=0.9,
+        instructions_before="",
+        instructions_after="",
+        holdout_examples=1,
+        holdout_baseline_score=0.8,
+        holdout_score=0.8,
+    )
+
+    assert result.improved is False
+
+
+def test_holdout_decides_improvement_when_it_was_measured() -> None:
+    result = TrainResult(
+        dataset="dblp-acm",
+        signature_name="DblpAcmBlockMatch",
+        program_path="",
+        train_examples=1,
+        val_examples=1,
+        baseline_score=0.9,
+        best_score=0.5,
+        instructions_before="",
+        instructions_after="",
+        holdout_examples=1,
+        holdout_baseline_score=0.7,
+        holdout_score=0.8,
+    )
+
+    assert result.improved is True
+
+
+def test_without_a_holdout_score_improvement_falls_back_to_validation() -> None:
+    result = TrainResult(
+        dataset="dblp-acm",
+        signature_name="DblpAcmBlockMatch",
+        program_path="",
+        train_examples=1,
+        val_examples=1,
+        baseline_score=0.5,
+        best_score=0.9,
+        instructions_before="",
+        instructions_after="",
+    )
+
+    assert result.improved is True
 
 
 def test_train_dataset_refuses_to_train_on_nothing(tmp_path: Path) -> None:

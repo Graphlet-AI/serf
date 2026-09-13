@@ -1,5 +1,6 @@
 """Tests for the SERF CLI."""
 
+import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -316,3 +317,73 @@ def test_run_help() -> None:
     assert "--max-iterations" in result.output
     assert "--convergence-threshold" in result.output
     assert "--target-block-size" in result.output
+
+
+def test_schema_help() -> None:
+    """`serf schema` is registered and documents both of its modes."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["schema", "--help"])
+    assert result.exit_code == 0
+    assert "--merge" in result.output
+
+
+def test_schema_shows_the_fields_and_the_policy_each_one_resolves_to() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["schema", "schemas/person.yml"])
+    assert result.exit_code == 0, result.output
+    assert "CanonicalPerson" in result.output
+    # `address` is fuzzy by default; the schema overrides state to exact.
+    assert "state address   str       no  exact" in " ".join(result.output.split("\n"))
+
+
+def test_schema_merge_reproduces_the_worked_example_from_the_specification(
+    tmp_path: Path,
+) -> None:
+    """The documented input, through the CLI, produces the documented output."""
+    payload = [
+        [
+            {"id": 1, "name": "Russell Jurney"},
+            {
+                "id": 3,
+                "name": "Russell H Jurney",
+                "source_ids": [5, 6],
+                "state": "WA",
+                "nation": "US",
+            },
+            {"id": 7, "name": "Russ Journey", "state": "CA"},
+        ],
+        [{"id": 2, "name": "Bob Dorf"}],
+    ]
+    path = tmp_path / "records.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["schema", "schemas/person.yml", "--merge", str(path)])
+
+    assert result.exit_code == 0, result.output
+    emitted = [
+        json.loads(line.strip())
+        for line in result.output.splitlines()
+        if line.strip().startswith("{")
+    ]
+    assert emitted == [
+        {
+            "id": 4,
+            "name": ["Russell H Jurney"],
+            "state": ["CA", "WA"],
+            "nation": ["US"],
+            "source_ids": [1, 3, 5, 6, 7],
+        },
+        {"id": 2, "name": ["Bob Dorf"]},
+    ]
+
+
+def test_schema_merge_rejects_a_payload_that_is_not_a_list(tmp_path: Path) -> None:
+    path = tmp_path / "records.json"
+    path.write_text(json.dumps({"id": 1}), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["schema", "schemas/person.yml", "--merge", str(path)])
+
+    assert result.exit_code != 0
+    assert "non-empty JSON list" in result.output

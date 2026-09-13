@@ -188,7 +188,6 @@ def test_the_shipped_config_answers_an_arbitrary_dotted_path() -> None:
     """The whole point of the port: any key is readable by its path."""
     assert shipped_config.get("matcher.similarity.min_threshold") == 0.8
     assert shipped_config.get("matcher.output") == "partition"
-    assert shipped_config.get("merge.id_minting.strategy") == "smallest_unused"
     assert shipped_config.get("merge.semantics.name.dedupe") == "fuzzy"
     assert shipped_config.get("merge.semantics.text.dedupe") == "none"
     assert shipped_config.get("merge.conservation.coverage_threshold") == 0.9999

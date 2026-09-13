@@ -340,19 +340,24 @@ def test_schema_merge_reproduces_the_worked_example_from_the_specification(
     tmp_path: Path,
 ) -> None:
     """The documented input, through the CLI, produces the documented output."""
+    russell = "11111111-1111-4111-8111-111111111111"
+    russell_h = "33333333-3333-4333-8333-333333333333"
+    russ = "77777777-7777-4777-8777-777777777777"
+    bob = "22222222-2222-4222-8222-222222222222"
+    absorbed = ["55555555-5555-4555-8555-555555555555", "66666666-6666-4666-8666-666666666666"]
     payload = [
         [
-            {"id": 1, "name": "Russell Jurney"},
+            {"uuid": russell, "name": "Russell Jurney"},
             {
-                "id": 3,
+                "uuid": russell_h,
                 "name": "Russell H Jurney",
-                "source_ids": [5, 6],
+                "source_uuids": absorbed,
                 "state": "WA",
                 "nation": "US",
             },
-            {"id": 7, "name": "Russ Journey", "state": "CA"},
+            {"uuid": russ, "name": "Russ Journey", "state": "CA"},
         ],
-        [{"id": 2, "name": "Bob Dorf"}],
+        [{"uuid": bob, "name": "Bob Dorf"}],
     ]
     path = tmp_path / "records.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -366,21 +371,18 @@ def test_schema_merge_reproduces_the_worked_example_from_the_specification(
         for line in result.output.splitlines()
         if line.strip().startswith("{")
     ]
-    assert emitted == [
-        {
-            "id": 4,
-            "name": ["Russell H Jurney"],
-            "state": ["CA", "WA"],
-            "nation": ["US"],
-            "source_ids": [1, 3, 5, 6, 7],
-        },
-        {"id": 2, "name": ["Bob Dorf"]},
-    ]
+    merged, untouched = emitted
+    assert merged["name"] == ["Russell H Jurney"]
+    assert merged["state"] == ["CA", "WA"]
+    assert merged["nation"] == ["US"]
+    assert merged["source_uuids"] == sorted([russell, russell_h, russ, *absorbed])
+    assert merged["uuid"] not in {russell, russell_h, russ, bob, *absorbed}
+    assert untouched == {"uuid": bob, "name": ["Bob Dorf"]}
 
 
 def test_schema_merge_rejects_a_payload_that_is_not_a_list(tmp_path: Path) -> None:
     path = tmp_path / "records.json"
-    path.write_text(json.dumps({"id": 1}), encoding="utf-8")
+    path.write_text(json.dumps({"uuid": "x"}), encoding="utf-8")
 
     runner = CliRunner()
     result = runner.invoke(cli, ["schema", "schemas/person.yml", "--merge", str(path)])

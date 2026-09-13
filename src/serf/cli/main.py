@@ -24,8 +24,12 @@ from serf.eval.splits import (
     select_eval_split,
 )
 from serf.logs import get_logger, setup_logging
-from serf.match.run import entity_members, expand_pairs, merge_matched_entities
-from serf.merge.canonical import IdAllocator
+from serf.match.run import (
+    ensure_identities,
+    entity_members,
+    expand_pairs,
+    merge_matched_entities,
+)
 from serf.merge.conservation import recover_dropped_records
 from serf.tracking import setup_mlflow
 
@@ -1412,7 +1416,7 @@ def schema_command(path: str, merge_path: str | None) -> None:
     depends on it. The file holds either a flat list of records, treated as one
     group, or a list of groups, which is the shape the matcher now returns.
     """
-    from serf.merge.canonical import canonicalize_groups, known_ids
+    from serf.merge.canonical import canonicalize_groups
     from serf.schema import canonical_model, load_schema, source_model
 
     entity_schema = load_schema(path)
@@ -1462,7 +1466,6 @@ def schema_command(path: str, merge_path: str | None) -> None:
         groups,
         field_types=entity_schema.field_types(),
         policies=policies,
-        reserved=known_ids(records),
     )
     for record in merged:
         click.echo(f"  {json.dumps(record.to_dict(), ensure_ascii=False)}")
@@ -1838,6 +1841,10 @@ def benchmark(
             f"with {record_sample.gold_pairs} gold pairs retained"
         )
 
+    # Identity is established once, here, so every record in the run has a
+    # uuid before anything merges and conservation can compare the inputs and
+    # the outputs in one identity space.
+    all_entities = ensure_identities(all_entities)
     click.echo(f"  Total entities: {len(all_entities)}")
 
     # Auto-scale block size for limited test runs
@@ -1853,12 +1860,11 @@ def benchmark(
     # record ids. Pair expansion and conservation are both stated over the
     # records the run started from.
     original_ids = {entity.id for entity in all_entities}
-    # One allocator for the whole run, so no id is minted twice and the ids it
-    # created are known when conservation reads the lineage at the end. An
-    # entity merged in round one and merged again in round two leaves its
-    # minted id in the result's source_ids, which is real lineage rather than
-    # a reference to nothing.
-    allocator = IdAllocator(original_ids)
+    # Uuids the run itself creates for merged entities. An entity merged in
+    # round one and merged again in round two leaves its minted uuid in the
+    # result's source_uuids, which is real lineage rather than a reference to
+    # nothing, so conservation has to be told about them.
+    minted_uuids: set[str] = set()
 
     for iteration in range(1, max_iterations + 1):
         if max_iterations > 1:
@@ -1884,7 +1890,9 @@ def benchmark(
         )
         iterations_run = iteration
 
-        merged = merge_matched_entities(current_entities, pairs, allocator)
+        before_merge = {entity.uuid for entity in current_entities if entity.uuid}
+        merged = merge_matched_entities(current_entities, pairs)
+        minted_uuids |= {entity.uuid for entity in merged if entity.uuid} - before_merge
         if max_iterations > 1:
             reduction_pct = (prev_count - len(merged)) / prev_count * 100 if prev_count > 0 else 0
             click.echo(
@@ -1900,7 +1908,7 @@ def benchmark(
 
     predicted_pairs = all_predicted_pairs
     current_entities, conservation = recover_dropped_records(
-        all_entities, current_entities, allocator.issued
+        all_entities, current_entities, minted_uuids
     )
     metrics = benchmark_data.evaluate(predicted_pairs)
     elapsed = time.time() - start

@@ -124,7 +124,7 @@ def test_rounds_accumulate_recall_across_rounds() -> None:
     def _run(current: list[Entity]) -> tuple[list[EntityBlock], BlockingMetrics]:
         if pipeline.run.call_count == 1:
             return first
-        merged = next(e for e in current if {1, 2} <= set(e.source_ids or []))
+        merged = next(e for e in current if len(e.source_uuids or []) >= 2)
         return ([_block([merged, c])], BlockingMetrics(total_blocks=1))
 
     pipeline = MagicMock()

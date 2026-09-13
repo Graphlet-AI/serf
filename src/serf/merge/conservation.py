@@ -28,47 +28,65 @@ MISSING_IN_OUTPUT_REASON = "missing_in_match_output"
 
 @runtime_checkable
 class HasLineage(Protocol):
-    """Anything carrying an id and the ids it absorbed."""
+    """Anything carrying a uuid and the uuids it absorbed."""
 
-    id: int
-    source_ids: list[int] | None
-
-
-def coverage_of(record: Any) -> set[int]:
-    """Return every input id a record accounts for.
-
-    Parameters
-    ----------
-    record : Any
-        A mapping with ``id`` and optionally ``source_ids``, or an object with
-        those attributes
-
-    Returns
-    -------
-    set[int]
-        The record's own id together with its lineage
-    """
-    if isinstance(record, dict):
-        return {int(record["id"]), *(int(value) for value in record.get("source_ids") or [])}
-    return {int(record.id), *(int(value) for value in record.source_ids or [])}
+    uuid: str | None
+    source_uuids: list[str] | None
 
 
-def _lineage_of(record: Any) -> list[int]:
-    """Return the ids a record claims to have absorbed.
+def coverage_of(record: Any) -> set[str]:
+    """Return every input uuid a record accounts for.
 
     Parameters
     ----------
     record : Any
-        A mapping with ``source_ids``, or an object with that attribute
+        A mapping with ``uuid`` and optionally ``source_uuids``, or an object
+        with those attributes
 
     Returns
     -------
-    list[int]
-        Lineage entries, excluding the record's own id
+    set[str]
+        The record's own uuid together with its lineage
     """
-    if isinstance(record, dict):
-        return [int(value) for value in record.get("source_ids") or []]
-    return [int(value) for value in record.source_ids or []]
+    return {*_identity_of(record), *_lineage_of(record)}
+
+
+def _identity_of(record: Any) -> list[str]:
+    """Return a record's own uuid, or nothing when it has not been assigned one.
+
+    Parameters
+    ----------
+    record : Any
+        A mapping with ``uuid``, or an object with that attribute
+
+    Returns
+    -------
+    list[str]
+        One uuid, or an empty list
+    """
+    value = record.get("uuid") if isinstance(record, dict) else getattr(record, "uuid", None)
+    return [str(value)] if value else []
+
+
+def _lineage_of(record: Any) -> list[str]:
+    """Return the uuids a record claims to have absorbed.
+
+    Parameters
+    ----------
+    record : Any
+        A mapping with ``source_uuids``, or an object with that attribute
+
+    Returns
+    -------
+    list[str]
+        Lineage entries, excluding the record's own uuid
+    """
+    values = (
+        record.get("source_uuids")
+        if isinstance(record, dict)
+        else getattr(record, "source_uuids", None)
+    )
+    return [str(value) for value in values or []]
 
 
 @dataclass
@@ -78,21 +96,21 @@ class ConservationReport:
     Parameters
     ----------
     input_records : int
-        Distinct input ids the run started from, lineage included
+        Distinct input uuids the run started from, lineage included
     output_records : int
         Records the run produced
     covered_ids : int
-        Input ids reachable from some output record
+        Input uuids reachable from some output record
     coverage_pct : float
         ``covered_ids`` as a percentage of ``input_records``
-    missing_ids : list[int]
-        Input ids no output record accounts for. Empty after recovery.
-    invalid_reference_ids : list[int]
-        Ids referenced by an output's ``source_ids`` that were never an input
+    missing_ids : list[str]
+        Input uuids no output record accounts for. Empty after recovery.
+    invalid_reference_ids : list[str]
+        Uuids referenced by an output's ``source_uuids`` that were never an input
     reference_error_pct : float
         ``invalid_reference_ids`` as a percentage of all lineage references
-    duplicated_ids : list[int]
-        Input ids accounted for by more than one output record, which means
+    duplicated_ids : list[str]
+        Input uuids accounted for by more than one output record, which means
         the same record is claimed by two entities
     recovered_records : int
         Records added back because nothing else accounted for them
@@ -102,10 +120,10 @@ class ConservationReport:
     output_records: int = 0
     covered_ids: int = 0
     coverage_pct: float = 100.0
-    missing_ids: list[int] = field(default_factory=list)
-    invalid_reference_ids: list[int] = field(default_factory=list)
+    missing_ids: list[str] = field(default_factory=list)
+    invalid_reference_ids: list[str] = field(default_factory=list)
     reference_error_pct: float = 0.0
-    duplicated_ids: list[int] = field(default_factory=list)
+    duplicated_ids: list[str] = field(default_factory=list)
     recovered_records: int = 0
 
     @property
@@ -164,7 +182,7 @@ class ConservationReport:
 def check_conservation(
     inputs: Iterable[Any],
     outputs: Iterable[Any],
-    minted_ids: Iterable[int] | None = None,
+    minted_uuids: Iterable[str] | None = None,
 ) -> ConservationReport:
     """Report whether every input record is still reachable from the output.
 
@@ -174,9 +192,9 @@ def check_conservation(
         Records the run started from
     outputs : Iterable[Any]
         Records the run produced
-    minted_ids : Iterable[int] | None
-        Ids the run itself created for merged entities. A multi-round run
-        merges entities it merged earlier, so an intermediate entity's id
+    minted_uuids : Iterable[str] | None
+        Uuids the run itself created for merged entities. A multi-round run
+        merges entities it merged earlier, so an intermediate entity's uuid
         legitimately appears in a later record's lineage. Without this the
         check reads those as references to records that never existed.
 
@@ -185,14 +203,14 @@ def check_conservation(
     ConservationReport
         Coverage, dangling references and double-claimed records
     """
-    input_ids: set[int] = set()
+    input_ids: set[str] = set()
     for record in inputs:
         input_ids |= coverage_of(record)
-    referenceable = input_ids | {int(value) for value in minted_ids or ()}
+    referenceable = input_ids | {str(value) for value in minted_uuids or ()}
 
     output_list = list(outputs)
-    claims: dict[int, int] = {}
-    lineage_refs: list[int] = []
+    claims: dict[str, int] = {}
+    lineage_refs: list[str] = []
     for record in output_list:
         for record_id in coverage_of(record):
             claims[record_id] = claims.get(record_id, 0) + 1
@@ -200,8 +218,8 @@ def check_conservation(
 
     covered = input_ids & set(claims)
     missing = sorted(input_ids - set(claims))
-    # A merged record's own id is minted, so it is deliberately not an input
-    # id. Only lineage entries are references, and only they can dangle.
+    # A merged record's own uuid is minted, so it is deliberately not an
+    # input uuid. Only lineage entries are references, and only they dangle.
     invalid = sorted(set(lineage_refs) - referenceable)
     duplicated = sorted(
         record_id for record_id, count in claims.items() if count > 1 and record_id in input_ids
@@ -222,7 +240,7 @@ def check_conservation(
 def recover_dropped_records(
     inputs: list[Any],
     outputs: list[Any],
-    minted_ids: Iterable[int] | None = None,
+    minted_uuids: Iterable[str] | None = None,
 ) -> tuple[list[Any], ConservationReport]:
     """Add back every input record the output fails to account for.
 
@@ -238,8 +256,8 @@ def recover_dropped_records(
         Records the run started from
     outputs : list[Any]
         Records the run produced
-    minted_ids : Iterable[int] | None
-        Ids the run created for merged entities, which are legitimate lineage
+    minted_uuids : Iterable[str] | None
+        Uuids the run created for merged entities, which are legitimate lineage
         targets even though they were never input records
 
     Returns
@@ -248,7 +266,7 @@ def recover_dropped_records(
         The output with the missing records appended, and the report for the
         repaired output
     """
-    minted = set(minted_ids or ())
+    minted = set(minted_uuids or ())
     before = check_conservation(inputs, outputs, minted)
 
     repaired = outputs

@@ -26,27 +26,27 @@ _canonical_cache: dict[str, type[BaseModel]] = {}
 
 
 class CanonicalEntity(BaseModel):
-    """Base for a generated canonical record: an id and the lineage behind it.
+    """Base for a generated canonical record: a uuid and the lineage behind it.
 
     Parameters
     ----------
-    id : int
-        Identifier for this entity, minted when the record is a merge
-    source_ids : list[int]
-        Every input id this record absorbed, transitively, sorted
+    uuid : str
+        Identity of this entity, minted when the record is a merge
+    source_uuids : list[str]
+        Every input uuid this record absorbed, transitively, sorted
     """
 
-    id: int = Field(
+    uuid: str = Field(
         description=(
-            "Identifier for this resolved entity. A merge of several records "
-            "gets a new id that none of them used."
+            "Identity of this resolved entity. A merge of several records gets "
+            "a new uuid that none of them used."
         )
     )
-    source_ids: list[int] = Field(
+    source_uuids: list[str] = Field(
         default_factory=list,
         description=(
-            "Every input record id this entity stands for, including ids its "
-            "inputs had already absorbed. Never drop one."
+            "Every input record uuid this entity stands for, including uuids "
+            "its inputs had already absorbed. Never drop one."
         ),
     )
 

@@ -49,10 +49,18 @@ there look exactly like success: fewer records out than in is the point. So the
 record format is built around the question "is everything still reachable?"
 rather than around convenience.
 
-A merge produces a new entity, so it gets a **new id**, and every id it
-absorbed — including the ids its inputs had already absorbed — moves into
-`source_ids`. Nothing that went in is ever unreachable from what comes out.
-A record that matched nothing keeps its id and gains no lineage.
+Identity is a **UUID** throughout. Integer identifiers exist in exactly one
+place: `UUIDMapper` renumbers a block's records 1..n before the LLM sees them,
+because small integers are cheap tokens a model copies back reliably, and maps
+them straight back afterwards. Outside that boundary an integer identifier is
+either a key belonging to some source system or a bug.
+
+A merge produces a new entity, so it gets a **minted uuid**, and every uuid it
+absorbed — including the ones its inputs had already absorbed — moves into
+`source_uuids`. Nothing that went in is ever unreachable from what comes out.
+A record that matched nothing keeps its uuid and gains no lineage. A minted
+uuid also cannot collide with a record the current process has not seen, which
+an integer minted from the ids in one block always could.
 
 Every field except `id` holds a **list**, ordered most complete first. A merged
 record can legitimately carry two states, and a scalar field would force a
@@ -61,24 +69,25 @@ one value takes the head and gets the fullest one rather than an arbitrary one.
 The idea is Senzing's — multi-valued features, explicit lineage — without its
 wire format.
 
+Abbreviating the uuids to make it readable:
+
 ```python
 # in
-{"id": 1, "name": "Russell Jurney"}
-{"id": 2, "name": "Bob Dorf"}
-{"id": 3, "name": "Russell H Jurney", "source_ids": [5, 6], "state": "WA", "nation": "US"}
-{"id": 7, "name": "Russ Journey", "state": "CA"}
+{"uuid": "A", "name": "Russell Jurney"}
+{"uuid": "B", "name": "Bob Dorf"}
+{"uuid": "C", "name": "Russell H Jurney", "source_uuids": ["E", "F"], "state": "WA", "nation": "US"}
+{"uuid": "D", "name": "Russ Journey", "state": "CA"}
 
 # out
-{"id": 4, "name": ["Russell H Jurney"], "state": ["CA", "WA"], "nation": ["US"],
- "source_ids": [1, 3, 5, 6, 7]}
-{"id": 2, "name": ["Bob Dorf"]}
+{"uuid": "<minted>", "name": ["Russell H Jurney"], "state": ["CA", "WA"], "nation": ["US"],
+ "source_uuids": ["A", "C", "D", "E", "F"]}
+{"uuid": "B", "name": ["Bob Dorf"]}
 ```
 
-Three things decide that output. The new id is the lowest integer no record and
-no lineage entry has claimed, so `4` rather than `8`. The three spellings of the
-name collapse because `name` is compared by similarity, and the fullest spelling
-survives. `CA` and `WA` both survive because they are two states, not two
-spellings of one.
+Two things decide the field values. The three spellings of the name collapse
+because `name` is compared by similarity, and the fullest spelling survives.
+`CA` and `WA` both survive because they are two states, not two spellings of
+one.
 
 Which of those happens is decided by the **field type**, inferred by
 `serf.analyze.field_detection` or declared in a schema:

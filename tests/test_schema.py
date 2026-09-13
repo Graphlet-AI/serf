@@ -65,7 +65,12 @@ def test_a_schema_override_beats_the_field_types_default_policy() -> None:
 def test_the_override_actually_changes_what_merges() -> None:
     """Without the exact override, two state codes one letter apart would collapse."""
     schema = _schema()
-    groups = [[{"id": 1, "state": "CA"}, {"id": 2, "state": "GA"}]]
+    groups = [
+        [
+            {"uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "state": "CA"},
+            {"uuid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "state": "GA"},
+        ]
+    ]
 
     merged = canonicalize_groups(
         groups, field_types=schema.field_types(), policies=schema.merge_policies()
@@ -87,16 +92,21 @@ def test_the_canonical_model_makes_every_field_a_list() -> None:
 
     assert issubclass(model, CanonicalEntity)
     assert model.model_fields["name"].annotation == list[str]
-    assert model.model_fields["id"].annotation is int
-    assert model.model_fields["source_ids"].annotation == list[int]
+    assert model.model_fields["uuid"].annotation is str
+    assert model.model_fields["source_uuids"].annotation == list[str]
 
 
 def test_a_canonical_record_round_trips_through_the_generated_model() -> None:
     model = canonical_model(_schema())
 
-    record = model(id=4, source_ids=[1, 3, 5, 6, 7], name=["Russell H Jurney"], state=["CA", "WA"])
+    record = model(
+        uuid="eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        source_uuids=["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"],
+        name=["Russell H Jurney"],
+        state=["CA", "WA"],
+    )
 
-    assert record.model_dump()["source_ids"] == [1, 3, 5, 6, 7]
+    assert record.model_dump()["source_uuids"] == ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]
     assert record.model_dump()["name"] == ["Russell H Jurney"]
 
 

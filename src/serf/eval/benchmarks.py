@@ -2,6 +2,7 @@
 
 import io
 import urllib.request
+import uuid as uuid_module
 import zipfile
 from pathlib import Path
 
@@ -75,6 +76,10 @@ NAME_CANDIDATES = ("title", "name", "product_name", "product_title", "book_title
 
 # Offset for right table IDs to avoid collisions with left table
 RIGHT_ID_OFFSET = 100000
+
+# Fixed namespace so a benchmark record's uuid is the same on every load, which
+# is what lets two runs' lineage be compared.
+_BENCHMARK_UUID_NAMESPACE = uuid_module.UUID("6f6b3f9a-3d7c-4a4e-9c2f-5b1f0a7d8e21")
 
 
 def _load_csv(path: Path) -> pd.DataFrame:
@@ -270,8 +275,15 @@ def _row_to_entity(
             desc_parts.append(str(row[col]))
     description = " ".join(desc_parts) if desc_parts else ""
 
+    # Identity is a uuid from birth, so lineage never has to be reconstructed
+    # from an integer later. The integer stays as the source key the benchmark
+    # gold standard is expressed over. Deriving the uuid from that key rather
+    # than drawing a random one keeps a run reproducible: the same record gets
+    # the same identity on every load, which is what makes two runs' lineage
+    # comparable.
     return Entity(
         id=entity_id,
+        uuid=str(uuid_module.uuid5(_BENCHMARK_UUID_NAMESPACE, f"{prefix}{entity_id}")),
         name=name or "unknown",
         description=description,
         entity_type="entity",

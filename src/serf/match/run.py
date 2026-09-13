@@ -18,7 +18,7 @@ from serf.logs import get_logger
 from serf.match.dataset_matcher import DatasetMatcher
 from serf.match.matcher import EntityMatcher
 from serf.match.partition import partition_from_pairs
-from serf.merge.canonical import IdAllocator
+from serf.merge.canonical import mint_uuid, uuid_for_source_key
 from serf.merge.merger import EntityMerger
 
 logger = get_logger(__name__)
@@ -244,11 +244,7 @@ def expand_pairs(pairs: set[tuple[int, int]], members: dict[int, set[int]]) -> s
     return expanded
 
 
-def merge_matched_entities(
-    entities: list[Entity],
-    pairs: set[tuple[int, int]],
-    allocator: IdAllocator | None = None,
-) -> list[Entity]:
+def merge_matched_entities(entities: list[Entity], pairs: set[tuple[int, int]]) -> list[Entity]:
     """Collapse every connected component of matched entities into one entity.
 
     The result is what the next iteration re-blocks: a record that was matched
@@ -256,36 +252,28 @@ def merge_matched_entities(
     fullest of the group, so it can land in a different block and meet records
     the first round of blocking kept away from it.
 
-    A merge produces a new entity, so it gets a minted id and every id it
-    absorbed, transitively, moves into ``source_ids``. An entity that merged
-    with nothing keeps its own id.
+    A merge produces a new entity, so it gets a minted uuid, and every uuid it
+    absorbed - transitively - moves into ``source_uuids``. An entity that
+    merged with nothing keeps its own uuid. Lineage is uuid-only: an integer
+    identifier belongs to a source system, not to SERF, and the record's own
+    ``id`` stays the source key it arrived with so the benchmark gold standard
+    can still be matched against it.
 
     Parameters
     ----------
     entities : list[Entity]
         Entities handed to the current iteration
     pairs : set[tuple[int, int]]
-        Pairs the matcher predicted over those entities
-    allocator : IdAllocator | None
-        Source of minted ids. One seeded from every id and lineage entry in
-        ``entities`` is built when omitted, which is correct as long as
-        ``entities`` is the whole working set.
+        Pairs the matcher predicted over those entities, keyed by source id
 
     Returns
     -------
     list[Entity]
         One entity per connected component, sorted by id
     """
-    groups = partition_from_pairs(pairs, {e.id for e in entities})
-    by_id = {e.id: e for e in entities}
-    if allocator is None:
-        allocator = IdAllocator(
-            {
-                entity_id
-                for entity in entities
-                for entity_id in (entity.id, *(entity.source_ids or []))
-            }
-        )
+    identified = ensure_identities(entities)
+    groups = partition_from_pairs(pairs, {e.id for e in identified})
+    by_id = {e.id: e for e in identified}
 
     merger = EntityMerger()
     merged: list[Entity] = []
@@ -297,13 +285,50 @@ def merge_matched_entities(
             continue
         lineage = sorted(
             {
-                entity_id
+                value
                 for member in members
-                for entity_id in (member.id, *(member.source_ids or []))
+                for value in [member.uuid, *(member.source_uuids or [])]
+                if value
             }
         )
-        merged.append(combined.model_copy(update={"id": allocator.mint(), "source_ids": lineage}))
+        merged.append(
+            combined.model_copy(update={"uuid": mint_uuid(), "source_uuids": lineage or None})
+        )
     return sorted(merged, key=lambda e: e.id)
+
+
+def ensure_identities(entities: list[Entity]) -> list[Entity]:
+    """Give every entity a uuid, deriving one where it is missing.
+
+    Lineage is uuid-only, so a record without a uuid would contribute nothing
+    to its merged record's lineage: a silent hole in the audit trail rather
+    than a visible failure. Call this once where records enter the pipeline, so
+    the inputs and the outputs of a run share one identity space and a
+    conservation check can compare them.
+
+    Parameters
+    ----------
+    entities : list[Entity]
+        Entities handed to the current iteration
+
+    Returns
+    -------
+    list[Entity]
+        The same entities, each carrying a uuid
+    """
+    missing = [entity for entity in entities if not entity.uuid]
+    if not missing:
+        return entities
+    logger.warning(
+        f"{len(missing)} of {len(entities)} entities reached merging without a uuid; "
+        "deriving one from each source key so their lineage is not lost"
+    )
+    return [
+        entity
+        if entity.uuid
+        else entity.model_copy(update={"uuid": uuid_for_source_key(entity.id)})
+        for entity in entities
+    ]
 
 
 def collect_pairs(resolutions: list[BlockResolution]) -> MatchOutcome:

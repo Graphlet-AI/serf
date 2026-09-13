@@ -363,13 +363,9 @@ def select_eval_split(
     )
     logger.info(f"Evaluation split selected for {dataset}: {selection.describe()}")
     if not selection.records:
-        logger.warning(
-            f"Split {split} of {dataset} is empty; raise benchmarks.{split}_records"
-        )
+        logger.warning(f"Split {split} of {dataset} is empty; raise benchmarks.{split}_records")
     elif not kept:
-        logger.warning(
-            f"Split {split} of {dataset} holds no gold pair and cannot be scored"
-        )
+        logger.warning(f"Split {split} of {dataset} holds no gold pair and cannot be scored")
     return selection
 
 

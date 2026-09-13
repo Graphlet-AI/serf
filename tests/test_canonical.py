@@ -1,120 +1,135 @@
-"""Tests for canonical records: minted ids, lineage, and array-valued fields."""
+"""Tests for canonical records: minted uuids, lineage, and array-valued fields."""
 
 from typing import Any
 
 import pytest
 
 from serf.merge.canonical import (
-    STRATEGY_SEQUENTIAL,
-    STRATEGY_SMALLEST_UNUSED,
     CanonicalRecord,
-    IdAllocator,
     canonicalize,
     canonicalize_groups,
-    known_ids,
+    known_uuids,
+    mint_uuid,
 )
 
+# The worked example from the specification, with uuids standing in for the
+# integers it was written with. Integer identity lives only inside UUIDMapper.
+RUSSELL = "11111111-1111-4111-8111-111111111111"
+BOB = "22222222-2222-4222-8222-222222222222"
+RUSSELL_H = "33333333-3333-4333-8333-333333333333"
+ABSORBED_A = "55555555-5555-4555-8555-555555555555"
+ABSORBED_B = "66666666-6666-4666-8666-666666666666"
+RUSS = "77777777-7777-4777-8777-777777777777"
+
 SPEC_RECORDS: list[dict[str, Any]] = [
-    {"id": 1, "name": "Russell Jurney"},
-    {"id": 2, "name": "Bob Dorf"},
-    {"id": 3, "name": "Russell H Jurney", "source_ids": [5, 6], "state": "WA", "nation": "US"},
-    {"id": 7, "name": "Russ Journey", "state": "CA"},
+    {"uuid": RUSSELL, "name": "Russell Jurney"},
+    {"uuid": BOB, "name": "Bob Dorf"},
+    {
+        "uuid": RUSSELL_H,
+        "name": "Russell H Jurney",
+        "source_uuids": [ABSORBED_A, ABSORBED_B],
+        "state": "WA",
+        "nation": "US",
+    },
+    {"uuid": RUSS, "name": "Russ Journey", "state": "CA"},
 ]
 
 
-def _by_id() -> dict[int, dict[str, Any]]:
-    return {record["id"]: record for record in SPEC_RECORDS}
+def _by_uuid() -> dict[str, dict[str, Any]]:
+    return {record["uuid"]: record for record in SPEC_RECORDS}
 
 
 def test_the_worked_example_from_the_specification() -> None:
     """The documented input must produce the documented output, field for field."""
-    records = _by_id()
-    groups = [[records[1], records[3], records[7]], [records[2]]]
+    records = _by_uuid()
+    groups = [[records[RUSSELL], records[RUSSELL_H], records[RUSS]], [records[BOB]]]
 
     merged, untouched = canonicalize_groups(groups)
 
-    assert merged.to_dict() == {
-        "id": 4,
-        "name": ["Russell H Jurney"],
-        "state": ["CA", "WA"],
-        "nation": ["US"],
-        "source_ids": [1, 3, 5, 6, 7],
+    rendered = merged.to_dict()
+    assert rendered["name"] == ["Russell H Jurney"]
+    assert rendered["state"] == ["CA", "WA"]
+    assert rendered["nation"] == ["US"]
+    assert rendered["source_uuids"] == sorted([RUSSELL, RUSSELL_H, ABSORBED_A, ABSORBED_B, RUSS])
+    assert untouched.to_dict() == {"uuid": BOB, "name": ["Bob Dorf"]}
+
+
+def test_a_merge_mints_an_identity_no_input_holds() -> None:
+    """A merge is a new entity, so it cannot answer to one of its inputs' uuids."""
+    records = _by_uuid()
+
+    merged = canonicalize_groups([[records[RUSSELL], records[RUSSELL_H], records[RUSS]]])[0]
+
+    assert merged.uuid not in {RUSSELL, BOB, RUSSELL_H, ABSORBED_A, ABSORBED_B, RUSS}
+
+
+def test_a_minted_identity_cannot_collide_with_a_record_outside_the_group() -> None:
+    """Why uuids: an integer minted from one block's ids can hit another block's record."""
+    records = _by_uuid()
+    group = [records[RUSSELL], records[RUSSELL_H], records[RUSS]]
+
+    first = canonicalize_groups([group])[0]
+    second = canonicalize_groups([group])[0]
+
+    assert first.uuid != second.uuid
+    assert BOB not in {first.uuid, second.uuid}
+
+
+def test_lineage_absorbs_both_the_matched_uuids_and_their_own_lineage() -> None:
+    """Russell H already stood for two records, so the merge has to stand for them too."""
+    records = _by_uuid()
+
+    merged = canonicalize_groups([[records[RUSSELL], records[RUSSELL_H], records[RUSS]]])[0]
+
+    assert merged.source_uuids == sorted([RUSSELL, RUSSELL_H, ABSORBED_A, ABSORBED_B, RUSS])
+    assert merged.covers() == {
+        merged.uuid,
+        RUSSELL,
+        RUSSELL_H,
+        ABSORBED_A,
+        ABSORBED_B,
+        RUSS,
     }
-    assert untouched.to_dict() == {"id": 2, "name": ["Bob Dorf"]}
 
 
-def test_a_merge_mints_an_id_no_record_and_no_lineage_entry_claims() -> None:
-    """Reusing an id that appears in some source_ids would make lineage ambiguous."""
-    records = _by_id()
-
-    merged = canonicalize_groups(
-        [[records[1], records[3], records[7]]], reserved=known_ids(SPEC_RECORDS)
-    )[0]
-
-    assert merged.id not in {1, 2, 3, 5, 6, 7}
-
-
-def test_minting_from_a_slice_alone_can_collide_with_a_record_outside_it() -> None:
-    """Why `reserved` exists: a block does not know the ids of the blocks beside it."""
-    records = _by_id()
-    group = [records[1], records[3], records[7]]
-
-    unaware = canonicalize_groups([group])[0]
-    aware = canonicalize_groups([group], reserved=known_ids(SPEC_RECORDS))[0]
-
-    assert unaware.id == 2
-    assert aware.id == 4
-
-
-def test_lineage_absorbs_both_the_matched_ids_and_their_own_source_ids() -> None:
-    """Record 3 already stood for 5 and 6, so the merge has to stand for them too."""
-    records = _by_id()
-
-    merged = canonicalize_groups(
-        [[records[1], records[3], records[7]]], reserved=known_ids(SPEC_RECORDS)
-    )[0]
-
-    assert merged.source_ids == [1, 3, 5, 6, 7]
-    assert merged.covers() == {1, 3, 4, 5, 6, 7}
-
-
-def test_an_unmatched_record_keeps_its_id_and_gains_no_lineage() -> None:
+def test_an_unmatched_record_keeps_its_uuid_and_gains_no_lineage() -> None:
     """Nothing merged, so there is no new entity and nothing to record."""
-    untouched = canonicalize_groups([[_by_id()[2]]])[0]
+    untouched = canonicalize_groups([[_by_uuid()[BOB]]])[0]
 
-    assert untouched.id == 2
-    assert untouched.source_ids == []
+    assert untouched.uuid == BOB
+    assert untouched.source_uuids == []
 
 
 def test_a_group_of_one_that_already_had_lineage_keeps_it() -> None:
-    """A record standing for 5 and 6 still stands for them when it matches nothing."""
-    alone = canonicalize_groups([[_by_id()[3]]])[0]
+    alone = canonicalize_groups([[_by_uuid()[RUSSELL_H]]])[0]
 
-    assert alone.id == 3
-    assert alone.source_ids == [5, 6]
+    assert alone.uuid == RUSSELL_H
+    assert alone.source_uuids == sorted([ABSORBED_A, ABSORBED_B])
 
 
 def test_every_field_of_every_input_survives_into_the_output() -> None:
     """Rule 2: the merged record carries all the fields of its inputs."""
-    groups = [[_by_id()[1], _by_id()[3], _by_id()[7]]]
+    records = _by_uuid()
+    groups = [[records[RUSSELL], records[RUSSELL_H], records[RUSS]]]
 
     merged = canonicalize_groups(groups)[0]
 
     assert set(merged.fields) == {"name", "state", "nation"}
 
 
-def test_every_field_except_id_is_a_list() -> None:
+def test_every_field_except_the_identity_is_a_list() -> None:
     """Rule 3, including the single-valued fields that read like scalars."""
-    merged = canonicalize_groups([[_by_id()[1], _by_id()[3], _by_id()[7]]])[0]
+    records = _by_uuid()
+    merged = canonicalize_groups([[records[RUSSELL], records[RUSSELL_H], records[RUSS]]])[0]
 
     rendered = merged.to_dict()
-    assert isinstance(rendered["id"], int)
-    assert all(isinstance(value, list) for key, value in rendered.items() if key != "id")
+    assert isinstance(rendered["uuid"], str)
+    assert all(isinstance(value, list) for key, value in rendered.items() if key != "uuid")
 
 
 def test_values_already_held_as_lists_are_absorbed_not_nested() -> None:
     """A merged record is itself a valid input, so merging has to be idempotent in shape."""
-    groups = [[{"id": 1, "state": ["CA", "WA"]}, {"id": 2, "state": ["OR"]}]]
+    groups = [[{"uuid": RUSSELL, "state": ["CA", "WA"]}, {"uuid": BOB, "state": ["OR"]}]]
 
     merged = canonicalize_groups(groups)[0]
 
@@ -123,56 +138,33 @@ def test_values_already_held_as_lists_are_absorbed_not_nested() -> None:
 
 def test_field_order_follows_first_appearance_across_the_inputs() -> None:
     """Readable output beats alphabetised output, and the order must be deterministic."""
-    groups = [[{"id": 1, "zeta": "a"}, {"id": 2, "alpha": "b"}]]
+    groups = [[{"uuid": RUSSELL, "zeta": "a"}, {"uuid": BOB, "alpha": "b"}]]
 
     merged = canonicalize_groups(groups)[0]
 
-    assert list(merged.to_dict()) == ["id", "zeta", "alpha", "source_ids"]
+    assert list(merged.to_dict()) == ["uuid", "zeta", "alpha", "source_uuids"]
 
 
 def test_canonicalizing_nothing_is_an_error_rather_than_an_empty_record() -> None:
     """An empty group means the caller lost records, which must not pass silently."""
     with pytest.raises(ValueError, match="empty group"):
-        canonicalize([], IdAllocator([]))
+        canonicalize([])
 
 
-def test_smallest_unused_fills_the_gaps_in_the_id_space() -> None:
-    allocator = IdAllocator({1, 2, 3, 5, 6, 7}, strategy=STRATEGY_SMALLEST_UNUSED)
-
-    assert [allocator.mint() for _ in range(3)] == [4, 8, 9]
-
-
-def test_sequential_never_reuses_an_id_below_the_high_water_mark() -> None:
-    allocator = IdAllocator({1, 2, 3, 5, 6, 7}, strategy=STRATEGY_SEQUENTIAL)
-
-    assert [allocator.mint() for _ in range(3)] == [8, 9, 10]
-
-
-def test_an_unknown_strategy_falls_back_rather_than_raising() -> None:
-    """A typo in config must not take down a pipeline mid-run."""
-    allocator = IdAllocator({4}, strategy="nonsense")
-
-    assert allocator.strategy == STRATEGY_SEQUENTIAL
-
-
-def test_one_allocator_across_groups_cannot_mint_the_same_id_twice() -> None:
-    groups = [
-        [{"id": 10, "name": "a"}, {"id": 11, "name": "a"}],
-        [{"id": 12, "name": "b"}, {"id": 13, "name": "b"}],
-    ]
-
-    minted = [record.id for record in canonicalize_groups(groups)]
-
-    assert len(set(minted)) == len(minted)
-
-
-def test_known_ids_counts_lineage_as_used() -> None:
-    assert known_ids(SPEC_RECORDS) == {1, 2, 3, 5, 6, 7}
+def test_known_uuids_counts_lineage_as_used() -> None:
+    assert known_uuids(SPEC_RECORDS) == {
+        RUSSELL,
+        BOB,
+        RUSSELL_H,
+        ABSORBED_A,
+        ABSORBED_B,
+        RUSS,
+    }
 
 
 def test_a_field_type_override_beats_detection() -> None:
     """A schema knows what detection can only guess from values."""
-    groups = [[{"id": 1, "blob": "Main Street"}, {"id": 2, "blob": "Main St"}]]
+    groups = [[{"uuid": RUSSELL, "blob": "Main Street"}, {"uuid": BOB, "blob": "Main St"}]]
 
     detected = canonicalize_groups(groups)[0]
     overridden = canonicalize_groups(groups, field_types={"blob": "address"})[0]
@@ -182,14 +174,18 @@ def test_a_field_type_override_beats_detection() -> None:
 
 
 def test_blank_values_never_reach_the_output() -> None:
-    groups = [[{"id": 1, "name": "Russell", "note": ""}, {"id": 2, "name": None}]]
+    groups = [[{"uuid": RUSSELL, "name": "Russell", "note": ""}, {"uuid": BOB, "name": None}]]
 
     merged = canonicalize_groups(groups)[0]
 
     assert merged.fields == {"name": ["Russell"]}
 
 
-def test_covers_includes_the_records_own_id() -> None:
-    record = CanonicalRecord(id=4, source_ids=[1, 3])
+def test_covers_includes_the_records_own_identity() -> None:
+    record = CanonicalRecord(uuid=RUSSELL, source_uuids=[ABSORBED_A, ABSORBED_B])
 
-    assert record.covers() == {1, 3, 4}
+    assert record.covers() == {RUSSELL, ABSORBED_A, ABSORBED_B}
+
+
+def test_minted_identities_are_distinct() -> None:
+    assert len({mint_uuid() for _ in range(100)}) == 100

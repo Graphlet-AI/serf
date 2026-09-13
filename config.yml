@@ -75,6 +75,83 @@ er:
     max_retries: 3
     retry_delay_ms: 300
 
+matcher:
+  # What the LLM returns for a block. "partition" asks it to place every input
+  # record into exactly one group, so the answer is the grouping itself rather
+  # than a list of pairwise verdicts that then has to be reassembled. A pair
+  # list can contradict itself; a partition cannot, and it makes a dropped
+  # record visible as a gap in the cover instead of an absent pair nobody
+  # counted.
+  output: partition
+
+  partition:
+    # A record the model leaves out of every group is a dropped record, not an
+    # unmatched one. Put it back as its own group rather than losing it.
+    recover_dropped_records: true
+    # A record named in two groups is a contradiction. Keep the first mention
+    # and record the conflict.
+    resolve_duplicate_records: true
+    # Fail the run when the recovered partition still fails to cover every
+    # input record. Nothing should ever reach this.
+    require_full_coverage: true
+
+  similarity:
+    # Single-linkage threshold for deciding that two values of one field are
+    # variants of the same value rather than two different values. At 0.80,
+    # "Russell H Jurney", "Russell Jurney" and "Russ Journey" collapse to one
+    # value, while "CA" and "WA" stay apart.
+    min_threshold: 0.8
+
+merge:
+  # A merge produces a new entity, so it gets a new id rather than inheriting
+  # one of its inputs'. "smallest_unused" takes the lowest positive integer no
+  # record and no source_id has claimed, which keeps ids dense. "sequential"
+  # counts up from the highest id ever seen, which is safer when records arrive
+  # in batches and ids must never be reused.
+  id_minting:
+    strategy: smallest_unused
+
+  # How values of one field are combined when records merge, keyed by the field
+  # type `serf.analyze.field_detection` infers. A schema YAML can override the
+  # policy per field.
+  #   fuzzy  - collapse values whose similarity clears the threshold, keep the
+  #            most complete one
+  #   exact  - collapse only values that normalise to the same string
+  #   none   - keep every distinct value; for freeform prose, where two
+  #            descriptions are two facts rather than two spellings of one
+  semantics:
+    name:
+      dedupe: fuzzy
+      threshold: 0.8
+    address:
+      dedupe: fuzzy
+      threshold: 0.8
+    url:
+      dedupe: exact
+    email:
+      dedupe: exact
+    phone:
+      dedupe: exact
+    identifier:
+      dedupe: exact
+    date:
+      dedupe: exact
+    numeric:
+      dedupe: exact
+    text:
+      dedupe: none
+
+  conservation:
+    # Abzu's lineage checks, ported. Coverage is the share of input ids that
+    # appear in the output as an id or inside some source_ids; it is repaired
+    # before it is reported, so anything below the threshold is a bug.
+    coverage_threshold: 0.9999
+    # Share of source_ids that point at a record that never existed.
+    reference_error_threshold: 0.0001
+    # Raise rather than warn when conservation fails after recovery. Data
+    # integrity outranks match performance.
+    fail_on_loss: true
+
   eval:
     coverage_threshold: 0.9999
     error_threshold: 0.0001
@@ -106,8 +183,21 @@ mlflow:
 
 benchmarks:
   output_dir: "data/benchmarks"
-  train_records: 2000
-  val_records: 1000
+  # Record budgets for `serf train`, filled in the order val, holdout, train.
+  # Validation and holdout are reserved first and honoured exactly whenever the
+  # dataset can hold them; train takes what is left. Evaluation data is the
+  # thing that silently rounds to nothing, so it is never the split that
+  # absorbs a shortfall.
+  #
+  # Train and val are sized at roughly 80/20. Val is small on purpose: GEPA's
+  # trial count comes from the candidate count alone, so a larger valset buys
+  # no extra exploration, and DSPy asks for the smallest valset that still
+  # matches the task distribution against the largest possible trainset.
+  # Holdout is the same size as train and GEPA never sees it, so the score
+  # taken on it at the end of a run is the only one that is not a validation
+  # score.
+  train_records: 1000
+  val_records: 200
   holdout_records: 1000
   # Candidates for `serf blocking-sweep`. Small CPU-friendly models only, since
   # blocking embeds every record on every ER iteration. The e5 and bge families
@@ -240,34 +330,34 @@ benchmarks:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"
       domain: products
       difficulty: hard
-      train_records: 2000
-      val_records: 1000
+      train_records: 1000
+      val_records: 200
       holdout_records: 1000
     abt-buy:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Textual/Abt-Buy/exp_data"
       domain: products
       difficulty: hard
-      train_records: 2000
-      val_records: 1000
+      train_records: 1000
+      val_records: 200
       holdout_records: 1000
     amazon-google:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Amazon-Google/amazon_google_exp_data.zip"
       domain: products
       difficulty: hard
-      train_records: 2000
-      val_records: 1000
+      train_records: 1000
+      val_records: 200
       holdout_records: 1000
     dblp-acm:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-ACM/dblp_acm_exp_data.zip"
       domain: bibliographic
       difficulty: easy
-      train_records: 2000
-      val_records: 1000
+      train_records: 1000
+      val_records: 200
       holdout_records: 1000
     dblp-scholar:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-GoogleScholar/dblp_scholar_exp_data.zip"
       domain: bibliographic
       difficulty: medium
-      train_records: 2000
-      val_records: 1000
+      train_records: 1000
+      val_records: 200
       holdout_records: 1000

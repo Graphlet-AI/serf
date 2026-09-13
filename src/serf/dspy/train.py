@@ -22,6 +22,7 @@ and ``DatasetMatcher`` reads it back, so a trained prompt reaches the benchmark
 without anyone editing a docstring.
 """
 
+import random
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, cast
@@ -127,6 +128,62 @@ def gold_pairs_in_block(block: EntityBlock, ground_truth: set[tuple[int, int]]) 
         if left in ids and right in ids
     ]
     return sorted(pairs)
+
+
+def _example_cap(override: int | None, config_key: str) -> int | None:
+    """Resolve an example cap, where absent means no cap.
+
+    Parameters
+    ----------
+    override : int | None
+        Value passed on the command line, if any
+    config_key : str
+        Config key holding the default, which may be null
+
+    Returns
+    -------
+    int | None
+        The cap, or None to use every usable example
+    """
+    if override is not None:
+        return override
+    configured = config.get(config_key)
+    return None if configured is None else int(configured)
+
+
+def _apply_cap(
+    examples: list[dspy.Example], cap: int | None, seed: int | None, label: str
+) -> list[dspy.Example]:
+    """Reduce an example list to ``cap`` entries by sampling, not by slicing.
+
+    Blocking emits blocks in an order that carries no meaning, so keeping the
+    first ``cap`` of them would drop a systematic rather than a representative
+    part of the split. Sampling at the run's seed keeps the reduction
+    reproducible without inheriting that order.
+
+    Parameters
+    ----------
+    examples : list[dspy.Example]
+        Usable examples built from the split's blocks
+    cap : int | None
+        Maximum examples to keep, or None to keep all
+    seed : int | None
+        RNG seed, so the same run reduces the same way
+    label : str
+        Split name, for logging
+
+    Returns
+    -------
+    list[dspy.Example]
+        At most ``cap`` examples
+    """
+    if cap is None or len(examples) <= cap:
+        return examples
+    logger.info(
+        f"Sampling {cap} of {len(examples)} usable {label} examples at seed {seed}; "
+        f"raise optimize.{label}_blocks to use all of them"
+    )
+    return random.Random(seed).sample(examples, cap)
 
 
 def blocks_to_dataset_examples(
@@ -423,8 +480,8 @@ def train_dataset(
     spec = get_dataset_spec(dataset)
     seed = seed if seed is not None else int(config.get("optimize.seed", 42))
     sizes = sizes or get_split_sizes(dataset)
-    train_cap = train_blocks or int(config.get("optimize.train_blocks", 40))
-    val_cap = val_blocks or int(config.get("optimize.val_blocks", 20))
+    train_cap = _example_cap(train_blocks, "optimize.train_blocks")
+    val_cap = _example_cap(val_blocks, "optimize.val_blocks")
     instructions_before = spec.signature.instructions
 
     benchmark = BenchmarkDataset.download(dataset, data_dir)
@@ -445,8 +502,15 @@ def train_dataset(
     )
     train_all, _ = blocker.run(splits.train_records)
     val_all, _ = blocker.run(splits.val_records)
-    trainset = blocks_to_dataset_examples(train_all, benchmark.ground_truth, spec)[:train_cap]
-    valset = blocks_to_dataset_examples(val_all, benchmark.ground_truth, spec)[:val_cap]
+    trainset = _apply_cap(
+        blocks_to_dataset_examples(train_all, benchmark.ground_truth, spec),
+        train_cap,
+        seed,
+        "train",
+    )
+    valset = _apply_cap(
+        blocks_to_dataset_examples(val_all, benchmark.ground_truth, spec), val_cap, seed, "val"
+    )
     logger.info(
         f"Training {dataset} on {spec.signature.__name__}: "
         f"{len(splits.train_records)} train records in {len(train_all)} blocks "

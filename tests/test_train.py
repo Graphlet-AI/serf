@@ -11,6 +11,8 @@ from serf.dspy.dataset_signatures import get_dataset_spec
 from serf.dspy.train import (
     GOLD_PAIRS_FIELD,
     MAX_ENUMERATED_ERRORS,
+    _apply_cap,
+    _example_cap,
     blocks_to_dataset_examples,
     candidate_pairs,
     gold_pairs_in_block,
@@ -102,6 +104,46 @@ def _prediction(pairs: list[tuple[int, int]], is_match: bool = True) -> dspy.Pre
         for left, right in pairs
     ]
     return dspy.Prediction(candidates=candidates)
+
+
+def test_train_examples_are_uncapped_by_default() -> None:
+    """DSPy asks for as large a trainset as possible, and a larger one costs nothing.
+
+    Each GEPA step draws only ``reflection_minibatch_size`` examples from the
+    trainset, so capping it discards data without saving any metric calls.
+    """
+    assert _example_cap(None, "optimize.train_blocks") is None
+
+
+def test_validation_examples_are_capped_at_dspys_own_threshold() -> None:
+    """Below 35 GEPA already scores the whole valset every step."""
+    assert _example_cap(None, "optimize.val_blocks") == 35
+
+
+def test_a_cap_smaller_than_the_split_samples_rather_than_slices() -> None:
+    """Block order carries no meaning, so a head slice would drop a systematic part."""
+    examples = [dspy.Example(n=i) for i in range(40)]
+
+    kept = _apply_cap(examples, 10, 42, "val")
+
+    assert len(kept) == 10
+    assert kept != examples[:10]
+    assert all(example in examples for example in kept)
+
+
+def test_the_same_seed_reduces_the_same_way() -> None:
+    """A run has to be reproducible even when it is sampling."""
+    examples = [dspy.Example(n=i) for i in range(40)]
+
+    assert _apply_cap(examples, 10, 42, "val") == _apply_cap(examples, 10, 42, "val")
+
+
+def test_a_cap_at_or_above_the_split_keeps_every_example() -> None:
+    """Nothing is dropped, and nothing is reordered, when the cap does not bite."""
+    examples = [dspy.Example(n=i) for i in range(12)]
+
+    assert _apply_cap(examples, 35, 42, "val") == examples
+    assert _apply_cap(examples, None, 42, "val") == examples
 
 
 def test_gold_pairs_in_block_keeps_only_pairs_wholly_inside_the_block() -> None:

@@ -36,12 +36,17 @@ optimize:
   # Where `serf train` writes the program it trained and where the matcher looks
   # for one. A dataset with no file here matches with its signature as written.
   trained_dir: "data/trained_prompts"
-  # Blocks GEPA rolls out on and selects candidates against. Both are small on
-  # purpose: GEPA reached its optimum in 79 to 737 rollouts in the paper, and
-  # DSPy warns above 35 validation examples because most of the budget is spent
-  # re-scoring the validation set rather than learning from the training one.
-  train_blocks: 40
-  val_blocks: 20
+  # Optional caps on the examples GEPA rolls out on and selects candidates
+  # against. Leave train uncapped: DSPy asks for "as large a trainset as
+  # possible", and a larger one costs nothing, because each step draws only
+  # reflection_minibatch_size (3) examples from it no matter how big it is.
+  # The validation cap is 35 because that is DSPy's own threshold. At or below
+  # it GEPA already scores the whole valset every step, so cutting further buys
+  # no extra exploration and only makes Pareto selection noisier; above it DSPy
+  # suggests subsampling. Over the cap the examples are sampled at `seed`, not
+  # sliced off the front, so the kept set is not an artifact of block order.
+  train_blocks: null
+  val_blocks: 35
 
 er:
   # One matching pass can only pair records that blocking already put together,

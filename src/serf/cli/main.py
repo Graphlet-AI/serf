@@ -1190,13 +1190,13 @@ def prompts(
     "--train-blocks",
     type=int,
     default=None,
-    help="Cap on training blocks (from config.yml optimize.train_blocks)",
+    help="Sample this many training examples instead of using every one",
 )
 @click.option(
     "--val-blocks",
     type=int,
     default=None,
-    help="Cap on validation blocks (from config.yml optimize.val_blocks)",
+    help="Sample this many validation examples instead of using every one",
 )
 @click.option(
     "--train-records",

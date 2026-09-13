@@ -1,0 +1,53 @@
+# Example entity schema.
+#
+# A schema states the things field detection cannot read off the values: that a
+# column of two-letter codes is a jurisdiction rather than a name, that two
+# part numbers differing in one character are different products, that a column
+# of prose must never be collapsed. It drives three things at once: the
+# Pydantic classes that go into DSPy signatures, the field descriptions that
+# reach the prompt, and the merge policy canonicalization applies.
+#
+# Load with `serf schema show schemas/person.yml`.
+
+entity: Person
+description: A person resolved across contact and profile sources.
+
+fields:
+  - name: name
+    type: name
+    description: >-
+      Full name of the person, given name first. Sources abbreviate given names
+      and drop middle initials, so spellings vary.
+    required: true
+
+  - name: state
+    type: address
+    description: Two-letter code of the state or province the person lives in.
+    # Two-letter codes are not names. Fuzzy matching them would merge "CA" and
+    # "GA" on a single character, so compare them exactly.
+    merge:
+      dedupe: exact
+
+  - name: nation
+    type: address
+    description: Two-letter ISO country code.
+    merge:
+      dedupe: exact
+
+  - name: email
+    type: email
+    description: Email address. A person legitimately has several.
+
+  - name: phone
+    type: phone
+    description: Telephone number in any format; only the digits are compared.
+
+  - name: employer
+    type: name
+    description: Name of the organisation the person works for.
+
+  - name: bio
+    type: text
+    description: >-
+      Freeform biography. Two sources write two different biographies of one
+      person, and both are true, so these are never merged into one.

@@ -21,7 +21,7 @@ from pydantic import BaseModel, Field
 from serf.analyze.field_detection import detect_field_type
 from serf.config import config
 from serf.logs import get_logger
-from serf.merge.semantics import merge_values
+from serf.merge.semantics import MergePolicy, merge_values
 
 logger = get_logger(__name__)
 
@@ -163,6 +163,7 @@ def canonicalize(
     records: list[dict[str, Any]],
     allocator: IdAllocator,
     field_types: dict[str, str] | None = None,
+    policies: dict[str, MergePolicy] | None = None,
 ) -> CanonicalRecord:
     """Combine a group of matched records into the single entity they denote.
 
@@ -180,6 +181,9 @@ def canonicalize(
     field_types : dict[str, str] | None
         Field name to inferred type, overriding detection. Supply this from a
         schema when the values alone would be read wrongly.
+    policies : dict[str, MergePolicy] | None
+        Field name to merge policy, overriding the one the field's type would
+        get. Supply this from a schema.
 
     Returns
     -------
@@ -210,10 +214,11 @@ def canonicalize(
             collected[key].extend(value if isinstance(value, list) else [value])
 
     overrides = field_types or {}
+    policy_overrides = policies or {}
     fields: dict[str, list[Any]] = {}
     for key in ordered_fields:
         field_type = overrides.get(key) or detect_field_type(key, collected[key])
-        merged = merge_values(collected[key], field_type)
+        merged = merge_values(collected[key], field_type, policy_overrides.get(key))
         if merged:
             fields[key] = merged
 
@@ -229,6 +234,7 @@ def canonicalize_groups(
     field_types: dict[str, str] | None = None,
     allocator: IdAllocator | None = None,
     reserved: Iterable[int] | None = None,
+    policies: dict[str, MergePolicy] | None = None,
 ) -> list[CanonicalRecord]:
     """Canonicalize every group of a partition against one id space.
 
@@ -252,6 +258,8 @@ def canonicalize_groups(
     reserved : Iterable[int] | None
         Every id in the wider dataset. Defaults to the ids inside ``groups``,
         which is only enough when ``groups`` is the whole dataset.
+    policies : dict[str, MergePolicy] | None
+        Field name to merge policy, overriding the field type's
 
     Returns
     -------
@@ -262,4 +270,4 @@ def canonicalize_groups(
         seed = known_ids(record for group in groups for record in group)
         seed.update(int(value) for value in reserved or ())
         allocator = IdAllocator(seed)
-    return [canonicalize(group, allocator, field_types) for group in groups]
+    return [canonicalize(group, allocator, field_types, policies) for group in groups]

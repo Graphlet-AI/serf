@@ -214,7 +214,11 @@ def completeness(value: Any, field_type: str = FIELD_TYPE_TEXT) -> tuple[int, in
     return (len(normalize(value, field_type).split()), len(str(value).strip()))
 
 
-def merge_values(values: list[Any], field_type: str = FIELD_TYPE_TEXT) -> list[Any]:
+def merge_values(
+    values: list[Any],
+    field_type: str = FIELD_TYPE_TEXT,
+    policy: MergePolicy | None = None,
+) -> list[Any]:
     """Combine every value one field held across a group of merged records.
 
     Values that are spellings of one another collapse to the most complete of
@@ -228,6 +232,9 @@ def merge_values(values: list[Any], field_type: str = FIELD_TYPE_TEXT) -> list[A
         Every value the field held, in record order, blanks included
     field_type : str
         Type from ``serf.analyze.field_detection.detect_field_type``
+    policy : MergePolicy | None
+        Policy to apply, overriding the one configured for ``field_type``.
+        A schema passes its per-field override here.
 
     Returns
     -------
@@ -239,7 +246,7 @@ def merge_values(values: list[Any], field_type: str = FIELD_TYPE_TEXT) -> list[A
     if not populated:
         return []
 
-    policy = policy_for(field_type)
+    policy = policy or policy_for(field_type)
 
     if policy.dedupe == DEDUPE_NONE:
         seen: dict[str, Any] = {}

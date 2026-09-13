@@ -226,6 +226,153 @@ def sample_random_splits(
     return splits
 
 
+EVAL_SPLIT_HOLDOUT = "holdout"
+EVAL_SPLIT_VAL = "val"
+EVAL_SPLIT_TRAIN = "train"
+EVAL_SPLIT_ALL = "all"
+EVAL_SPLITS = (EVAL_SPLIT_HOLDOUT, EVAL_SPLIT_VAL, EVAL_SPLIT_TRAIN, EVAL_SPLIT_ALL)
+
+# The splits a prompt is fitted to. Training reads train, GEPA selects on val,
+# so a score on either is reading the fit back. Only holdout answers the
+# question a benchmark is asked.
+FITTED_SPLITS = (EVAL_SPLIT_VAL, EVAL_SPLIT_TRAIN, EVAL_SPLIT_ALL)
+
+
+@dataclass
+class EvalSelection:
+    """The records one benchmark run will score, and where they came from.
+
+    Parameters
+    ----------
+    split : str
+        Which split was selected
+    records : list[Entity]
+        Records to score, sorted by id
+    ground_truth : set[tuple[int, int]]
+        Ground truth restricted to pairs with both records inside ``records``
+    total : int
+        Records in the whole dataset
+    gold_pairs : int
+        Gold pairs that survived the restriction
+    overlaps_training : bool
+        Whether these records are ones ``serf train`` reads or selects on
+    """
+
+    split: str
+    records: list[Entity]
+    ground_truth: set[tuple[int, int]]
+    total: int
+    gold_pairs: int
+    overlaps_training: bool
+
+    def describe(self) -> str:
+        """Render the selection as one line for a CLI.
+
+        Returns
+        -------
+        str
+            Split, record count, gold pairs, and whether training saw it
+        """
+        seen = "training saw these records" if self.overlaps_training else "unseen by training"
+        return (
+            f"{self.split}: {len(self.records)} of {self.total} records, "
+            f"{self.gold_pairs} gold pairs, {seen}"
+        )
+
+
+def select_eval_split(
+    dataset: str,
+    entities: list[Entity],
+    ground_truth: set[tuple[int, int]],
+    split: str | None = None,
+    seed: int | None = None,
+    sizes: SplitSizes | None = None,
+) -> EvalSelection:
+    """Pick the records a benchmark run should score.
+
+    The partition is the one ``serf train`` draws, from the same budgets and
+    the same seed, so the holdout selected here is exactly the holdout training
+    left alone. That is the whole point: evaluation data and training data are
+    separated once, by construction, rather than being kept apart by whoever
+    remembers to pass the right flags.
+
+    Parameters
+    ----------
+    dataset : str
+        Benchmark dataset name, used to look up the configured budgets
+    entities : list[Entity]
+        Every record in the dataset
+    ground_truth : set[tuple[int, int]]
+        True matching pairs over the full dataset
+    split : str | None
+        One of ``EVAL_SPLITS``. Defaults to config ``benchmarks.eval_split``.
+    seed : int | None
+        RNG seed. Defaults to config ``optimize.seed``, which is what
+        ``serf train`` uses.
+    sizes : SplitSizes | None
+        Record budgets. Defaults to this dataset's configured budgets.
+
+    Returns
+    -------
+    EvalSelection
+        The records to score and their provenance
+
+    Raises
+    ------
+    ValueError
+        If the split name is not one SERF knows
+    """
+    split = split or str(config.get("benchmarks.eval_split", EVAL_SPLIT_HOLDOUT))
+    if split not in EVAL_SPLITS:
+        raise ValueError(f"Unknown eval split {split!r}. Available: {EVAL_SPLITS}")
+
+    if split == EVAL_SPLIT_ALL:
+        return EvalSelection(
+            split=split,
+            records=sorted(entities, key=lambda entity: entity.id),
+            ground_truth=set(ground_truth),
+            total=len(entities),
+            gold_pairs=count_gold_pairs(entities, ground_truth),
+            overlaps_training=True,
+        )
+
+    sizes = sizes or get_split_sizes(dataset)
+    splits = sample_random_splits(
+        entities,
+        ground_truth,
+        train_records=sizes.train_records,
+        val_records=sizes.val_records,
+        holdout_records=sizes.holdout_records,
+        seed=seed,
+    )
+    chosen = {
+        EVAL_SPLIT_HOLDOUT: splits.holdout_records,
+        EVAL_SPLIT_VAL: splits.val_records,
+        EVAL_SPLIT_TRAIN: splits.train_records,
+    }[split]
+
+    ids = {entity.id for entity in chosen}
+    kept = {(left, right) for left, right in ground_truth if left in ids and right in ids}
+    selection = EvalSelection(
+        split=split,
+        records=sorted(chosen, key=lambda entity: entity.id),
+        ground_truth=kept,
+        total=len(entities),
+        gold_pairs=len(kept),
+        overlaps_training=split in FITTED_SPLITS,
+    )
+    logger.info(f"Evaluation split selected for {dataset}: {selection.describe()}")
+    if not selection.records:
+        logger.warning(
+            f"Split {split} of {dataset} is empty; raise benchmarks.{split}_records"
+        )
+    elif not kept:
+        logger.warning(
+            f"Split {split} of {dataset} holds no gold pair and cannot be scored"
+        )
+    return selection
+
+
 def training_overlap(
     dataset: str,
     scored: list[Entity],

@@ -143,6 +143,32 @@ that, `serf benchmark` checks at the end of a run that every input record is
 still reachable from some output record, adds back any that are not, and reports
 the coverage it achieved.
 
+### Training and evaluation data are separated by construction
+
+`sample_random_splits` draws three disjoint splits from one dataset: train,
+validation and holdout. `serf train` reads train and lets GEPA select on
+validation, so a score on either reads the fit back rather than measuring
+anything. `serf benchmark` therefore scores the **holdout** split by default,
+drawing the same partition from the same budgets and the same seed, so the
+records it scores are exactly the ones training reserved.
+
+Naming a split that training read is refused, not warned about:
+
+```console
+$ serf benchmark --dataset dblp-acm --eval-split val
+Error: Refusing to evaluate on training data: the 'val' split holds records
+`serf train` reads or selects on, so a score on it reports the fit rather than
+a result. Use --eval-split holdout, or set benchmarks.require_disjoint_eval to
+false in config.yml to measure the fit deliberately.
+```
+
+Measuring the fit is sometimes what you want — to see how far a prompt has been
+bent to its validation set, say — so `benchmarks.require_disjoint_eval: false`
+allows it, and the run then says so in its output. `serf train` closes the same
+loop from the other side: it ends by scoring both the shipped prompt and the one
+GEPA kept on the holdout, and that comparison, not the validation one GEPA
+selected on, decides whether it reports an improvement.
+
 ## Quick Start
 
 ### Installation
@@ -211,9 +237,16 @@ serf benchmark --dataset dblp-acm --output data/results/
 serf benchmark --dataset dblp-acm --max-iterations 1 --output data/results/
 
 # Match with the typed signature written for one dataset instead of the shared
-# BlockMatch signature, on a 1000-record sample drawn by ground-truth match group
+# BlockMatch signature. Scores the holdout split: the records `serf train`
+# reserves and never reads, drawn from the same budgets and seed, so training
+# and evaluation data are separated by construction
 serf benchmark --dataset dblp-acm --signature-mode per-dataset \
-  --sample-records 1000 --seed 42 --output data/results/
+  --output data/results/
+
+# Scoring a split training read is refused, because the number would report the
+# fit rather than a result. Set benchmarks.require_disjoint_eval to false to
+# measure the fit on purpose
+serf benchmark --dataset dblp-acm --eval-split val   # Error: refusing to evaluate on training data
 
 # Exploratory analysis of the benchmark datasets, in Spark SQL and with no LLM
 # calls. Reports attribute discriminativeness, common values, how often each
@@ -270,8 +303,7 @@ serf train --dataset dblp-acm --train-records 1000 --val-records 200 \
 serf train --dataset dblp-acm --no-holdout
 
 # Then measure the trained prompt end to end, and read what GEPA wrote
-serf benchmark --dataset dblp-acm --signature-mode per-dataset --trained-prompts \
-  --sample-records 1000 --seed 42
+serf benchmark --dataset dblp-acm --signature-mode per-dataset --trained-prompts
 serf prompts --dataset dblp-acm --trained --instructions-only
 ```
 

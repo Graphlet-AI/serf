@@ -17,7 +17,12 @@ from serf.dspy.dataset_signatures import (
     SIGNATURE_MODES,
 )
 from serf.eval.benchmarks import DATASET_REGISTRY
-from serf.eval.splits import SplitSizes, get_split_sizes, training_overlap
+from serf.eval.splits import (
+    EVAL_SPLITS,
+    SplitSizes,
+    get_split_sizes,
+    select_eval_split,
+)
 from serf.logs import get_logger, setup_logging
 from serf.match.run import entity_members, expand_pairs, merge_matched_entities
 from serf.merge.canonical import IdAllocator
@@ -1682,10 +1687,16 @@ def optimize(
     help="Matching contract: the shared BlockMatch signature or this dataset's typed signature",
 )
 @click.option(
+    "--eval-split",
+    type=click.Choice(EVAL_SPLITS, case_sensitive=False),
+    default=None,
+    help="Which split to score (from config.yml benchmarks.eval_split)",
+)
+@click.option(
     "--sample-records",
     type=int,
     default=None,
-    help="Sample this many records, keeping ground-truth match groups whole",
+    help="Subsample the split to this many records, keeping match groups whole",
 )
 @click.option(
     "--seed",
@@ -1717,6 +1728,7 @@ def benchmark(
     concurrency: int,
     max_iterations: int,
     signature_mode: str,
+    eval_split: str | None,
     sample_records: int | None,
     seed: int | None,
     blocking_strategy: str | None,
@@ -1732,11 +1744,15 @@ def benchmark(
     signature written for this dataset instead of the shared BlockMatch one.
     With --trained-prompts it matches with the instructions `serf train` left in
     config.yml optimize.trained_dir, which requires per-dataset mode.
-    With --sample-records the dataset is sampled by ground-truth match group, so
-    gold pairs survive, and metrics are scored against the surviving pairs. A
-    sample at the default seed and size draws the same records as the validation
-    split `serf train` selects on, so --trained-prompts warns when the records
-    being scored are ones GEPA was allowed to see.
+    Scoring happens on the holdout split by default: the records `serf train`
+    reserves and never reads. Training and evaluation are therefore separated
+    once, by construction, rather than staying apart because someone remembered
+    the right flag. --eval-split names a different split, and scoring one that
+    training touched is refused unless benchmarks.require_disjoint_eval is off.
+
+    With --sample-records the chosen split is subsampled by ground-truth match
+    group, so gold pairs survive, and metrics are scored against the surviving
+    pairs.
     """
     from serf.eval.benchmarks import BenchmarkDataset
 
@@ -1780,10 +1796,33 @@ def benchmark(
 
     seed = seed if seed is not None else int(serf_config.get("optimize.seed", 42))
 
-    full_entities = all_entities
-    full_ground_truth = set(benchmark_data.ground_truth)
+    selection = select_eval_split(
+        dataset, all_entities, benchmark_data.ground_truth, split=eval_split, seed=seed
+    )
+    all_entities = selection.records
+    benchmark_data.ground_truth = selection.ground_truth
+    click.echo(f"  Eval split: {selection.describe()} (seed {seed})")
 
-    if sample_records:
+    if selection.overlaps_training:
+        message = (
+            f"the '{selection.split}' split holds records `serf train` reads or selects on, "
+            "so a score on it reports the fit rather than a result"
+        )
+        if bool(serf_config.get("benchmarks.require_disjoint_eval", True)):
+            raise click.UsageError(
+                f"Refusing to evaluate on training data: {message}. Use --eval-split holdout, "
+                "or set benchmarks.require_disjoint_eval to false in config.yml to measure the "
+                "fit deliberately."
+            )
+        click.echo(f"  WARNING: {message}")
+
+    if not all_entities:
+        raise click.UsageError(
+            f"The '{selection.split}' split of {dataset} is empty. Raise "
+            f"benchmarks.{selection.split}_records in config.yml."
+        )
+
+    if sample_records and sample_records < len(all_entities):
         from serf.eval.sample import sample_records as sample_benchmark_records
 
         record_sample = sample_benchmark_records(
@@ -1795,17 +1834,9 @@ def benchmark(
         all_entities = record_sample.records
         benchmark_data.ground_truth = record_sample.ground_truth
         click.echo(
-            f"  Sampled {len(all_entities)} of {record_sample.total} records "
-            f"(seed {seed}) with {record_sample.gold_pairs} gold pairs retained"
+            f"  Subsampled to {len(all_entities)} of {record_sample.total} split records "
+            f"with {record_sample.gold_pairs} gold pairs retained"
         )
-
-    if trained_prompts:
-        seen = training_overlap(dataset, all_entities, full_entities, full_ground_truth, seed=seed)
-        if seen:
-            click.echo(
-                f"  WARNING: {seen:.0%} of these records are in the splits `serf train` "
-                "optimized on, so this reports the score GEPA selected the prompt by"
-            )
 
     click.echo(f"  Total entities: {len(all_entities)}")
 
@@ -1906,6 +1937,9 @@ def benchmark(
                     "dataset": dataset,
                     "model": model,
                     "signature_mode": signature_mode,
+                    "eval_split": selection.split,
+                    "eval_split_records": len(selection.records),
+                    "eval_split_overlaps_training": selection.overlaps_training,
                     "sample_records": sample_records,
                     "seed": seed,
                     "trained_prompts": trained_prompts,

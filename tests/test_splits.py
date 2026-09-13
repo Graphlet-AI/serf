@@ -6,11 +6,17 @@ from serf.config import config
 from serf.dspy.types import Entity
 from serf.eval.sample import sample_records
 from serf.eval.splits import (
+    EVAL_SPLIT_ALL,
+    EVAL_SPLIT_HOLDOUT,
+    EVAL_SPLIT_TRAIN,
+    EVAL_SPLIT_VAL,
+    SplitSizes,
     count_gold_pairs,
     get_all_split_sizes,
     get_split_sizes,
     match_groups,
     sample_random_splits,
+    select_eval_split,
     training_overlap,
 )
 
@@ -273,3 +279,106 @@ def test_sample_random_splits_uses_config_defaults() -> None:
     assert len(splits.train_records) == 1000
     assert len(splits.val_records) == 200
     assert len(splits.holdout_records) == 1000
+
+
+def test_the_eval_split_defaults_to_the_one_training_never_reads() -> None:
+    """Separation by construction: the default is holdout, not whatever is convenient."""
+    assert config.get("benchmarks.eval_split") == EVAL_SPLIT_HOLDOUT
+    assert config.get("benchmarks.require_disjoint_eval") is True
+
+
+def test_selecting_the_holdout_gives_records_training_never_sees() -> None:
+    entities = _entities(4000)
+    ground_truth = {(i, i + 2000) for i in range(400)}
+    sizes = SplitSizes(train_records=1000, val_records=200, holdout_records=1000)
+
+    selection = select_eval_split(
+        "dblp-acm", entities, ground_truth, split=EVAL_SPLIT_HOLDOUT, seed=11, sizes=sizes
+    )
+    splits = sample_random_splits(
+        entities,
+        ground_truth,
+        train_records=1000,
+        val_records=200,
+        holdout_records=1000,
+        seed=11,
+    )
+
+    scored = {entity.id for entity in selection.records}
+    trained = {e.id for e in splits.train_records} | {e.id for e in splits.val_records}
+    assert scored & trained == set()
+    assert selection.overlaps_training is False
+
+
+def test_the_holdout_selected_for_evaluation_is_the_one_training_reserved() -> None:
+    """Both sides draw the same partition from the same budgets and seed."""
+    entities = _entities(4000)
+    sizes = SplitSizes(train_records=1000, val_records=200, holdout_records=1000)
+
+    selection = select_eval_split(
+        "dblp-acm", entities, set(), split=EVAL_SPLIT_HOLDOUT, seed=11, sizes=sizes
+    )
+    splits = sample_random_splits(
+        entities, set(), train_records=1000, val_records=200, holdout_records=1000, seed=11
+    )
+
+    assert [e.id for e in selection.records] == sorted(e.id for e in splits.holdout_records)
+
+
+def test_ground_truth_is_restricted_to_pairs_inside_the_split() -> None:
+    """Scoring a pair whose partner is in another split would count a guaranteed miss."""
+    entities = _entities(4000)
+    ground_truth = {(i, i + 2000) for i in range(400)}
+    sizes = SplitSizes(train_records=1000, val_records=200, holdout_records=1000)
+
+    selection = select_eval_split(
+        "dblp-acm", entities, ground_truth, split=EVAL_SPLIT_HOLDOUT, seed=11, sizes=sizes
+    )
+
+    ids = {entity.id for entity in selection.records}
+    assert selection.gold_pairs == len(selection.ground_truth)
+    assert all(left in ids and right in ids for left, right in selection.ground_truth)
+
+
+def test_the_fitted_splits_declare_that_training_saw_them() -> None:
+    entities = _entities(4000)
+    sizes = SplitSizes(train_records=1000, val_records=200, holdout_records=1000)
+
+    for split in (EVAL_SPLIT_TRAIN, EVAL_SPLIT_VAL, EVAL_SPLIT_ALL):
+        selection = select_eval_split(
+            "dblp-acm", entities, set(), split=split, seed=11, sizes=sizes
+        )
+        assert selection.overlaps_training is True, split
+
+
+def test_selecting_everything_returns_the_whole_dataset() -> None:
+    entities = _entities(100)
+
+    selection = select_eval_split("dblp-acm", entities, set(), split=EVAL_SPLIT_ALL, seed=1)
+
+    assert len(selection.records) == 100
+    assert selection.total == 100
+
+
+def test_an_unknown_split_name_is_rejected() -> None:
+    with pytest.raises(ValueError, match="Unknown eval split"):
+        select_eval_split("dblp-acm", _entities(10), set(), split="nonsense")
+
+
+def test_the_three_splits_partition_the_records_they_cover() -> None:
+    """No record is scored by one split and trained on by another."""
+    entities = _entities(4000)
+    sizes = SplitSizes(train_records=1000, val_records=200, holdout_records=1000)
+    chosen = {
+        split: {
+            e.id
+            for e in select_eval_split(
+                "dblp-acm", entities, set(), split=split, seed=11, sizes=sizes
+            ).records
+        }
+        for split in (EVAL_SPLIT_TRAIN, EVAL_SPLIT_VAL, EVAL_SPLIT_HOLDOUT)
+    }
+
+    assert chosen[EVAL_SPLIT_TRAIN] & chosen[EVAL_SPLIT_VAL] == set()
+    assert chosen[EVAL_SPLIT_TRAIN] & chosen[EVAL_SPLIT_HOLDOUT] == set()
+    assert chosen[EVAL_SPLIT_VAL] & chosen[EVAL_SPLIT_HOLDOUT] == set()

@@ -199,6 +199,19 @@ benchmarks:
   train_records: 1000
   val_records: 200
   holdout_records: 1000
+
+  # Which split `serf benchmark` scores. Training reads `train` and GEPA
+  # selects candidates on `val`, so a score on either reads the fit back
+  # rather than measuring anything. `holdout` is the only split that answers
+  # the question a benchmark is asked, so it is the default and the other
+  # splits have to be asked for by name.
+  eval_split: holdout
+
+  # Refuse to score records that training touched, rather than warning about
+  # it. Turning this off is how you deliberately measure the fit - to see how
+  # far a prompt has been bent to its validation set, say - and the run then
+  # says so in its output.
+  require_disjoint_eval: true
   # Candidates for `serf blocking-sweep`. Small CPU-friendly models only, since
   # blocking embeds every record on every ER iteration. The e5 and bge families
   # need their instruction prefix; the others are trained without one.

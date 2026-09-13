@@ -38,11 +38,17 @@ score GEPA selected the prompt by. `training_overlap` now computes this share
 and `serf benchmark` warns when it is nonzero — treat that warning as a failed
 run, not a note.
 
-**Known gap.** `serf benchmark` cannot currently target the holdout split; it
-samples, then warns about the overlap it finds. So every trained-prompt figure
-published so far is a validation score, including the 0.9906-versus-0.9737
-DBLP-ACM comparison. Until benchmark can select the holdout, a trained prompt
-has no generalization evidence, and no table should imply it does.
+**How it is enforced.** `serf benchmark` scores the holdout split by default,
+drawing the same partition from the same budgets and seed that `serf train`
+uses, so the records it scores are the ones training reserved. Naming a split
+training read is refused outright rather than warned about, unless
+`benchmarks.require_disjoint_eval` is turned off to measure the fit on purpose.
+`serf train` ends by scoring both prompts on the holdout, and that comparison
+decides whether it reports an improvement.
+
+Figures published before this landed are validation scores, including the
+0.9906-versus-0.9737 DBLP-ACM comparison, and are labelled as such wherever
+they appear.
 
 ## 2. Two independent draws need two independent seeds
 

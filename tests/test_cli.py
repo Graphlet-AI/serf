@@ -387,3 +387,44 @@ def test_schema_merge_rejects_a_payload_that_is_not_a_list(tmp_path: Path) -> No
 
     assert result.exit_code != 0
     assert "non-empty JSON list" in result.output
+
+
+def test_benchmark_help_documents_the_eval_split() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["benchmark", "--help"])
+    assert result.exit_code == 0
+    assert "--eval-split" in result.output
+    assert "holdout" in result.output
+
+
+def test_benchmark_refuses_to_score_a_split_training_read() -> None:
+    """Separation is enforced, not merely warned about."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["benchmark", "--dataset", "dblp-acm", "--eval-split", "val", "--limit", "1"],
+    )
+    assert result.exit_code != 0
+    assert "Refusing to evaluate on training data" in result.output
+    assert "--eval-split holdout" in result.output
+
+
+def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Measuring the fit on purpose is allowed; it just has to be asked for."""
+    from serf.cli import main as cli_main
+
+    real_get = cli_main.serf_config.get
+
+    def fake_get(key: str, default: object = None) -> object:
+        if key == "benchmarks.require_disjoint_eval":
+            return False
+        return real_get(key, default)
+
+    monkeypatch.setattr(cli_main.serf_config, "get", fake_get)
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["benchmark", "--dataset", "dblp-acm", "--eval-split", "val", "--limit", "1"],
+    )
+    assert "Refusing to evaluate on training data" not in result.output
+    assert "WARNING" in result.output

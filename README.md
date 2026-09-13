@@ -369,6 +369,10 @@ SERF is a 1,000-record sample at seed 42, three ER iterations, `--signature-mode
 | gpt-4o-mini            | 87.68      | pair classification       | no                       |
 | Llama-3.1-70B          | 79.12      | pair classification       | no                       |
 
+The best verified published figure for each of the five datasets, with its evaluation protocol and
+the spread near the top, is collected in
+[experiments/state-of-the-art.md](experiments/state-of-the-art.md).
+
 The comparison is indicative, not like-for-like. Every leaderboard entry scores pair classification:
 the candidate pairs are handed to the model and it labels each one. SERF does the whole task, so its
 recall carries every pair blocking never proposed, which a pair classifier never pays for. Read the

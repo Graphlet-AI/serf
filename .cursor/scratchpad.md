@@ -213,6 +213,22 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 
 ## Lessons
 
+- **Experimental guidelines now live in `.cursor/rules/ml-experiments.mdc`.** Fifteen rules, each
+  tied to the incident in this repo that motivated it, with the split-contamination rule first.
+  `CLAUDE.md` carries the one-paragraph version under "Critical Rules" because Claude Code does not
+  read `.cursor/rules/`. Every factual claim in it is re-derived by
+  `/opt/cursor/artifacts/verify_rule_claims.py` (12/12 reproduce) rather than trusted from the
+  writeups.
+- **`_scaled_budgets` can still starve validation, and this is unfixed.** Writing the rule above
+  surfaced it: `sample_random_splits` fills val first, but when the requested budgets exceed the
+  dataset `_scaled_budgets` scales all three _proportionally_, so a dominant train budget zeroes
+  evaluation — `_scaled_budgets(4910, 200, 200, 10**9)` returns `(0, 0, 4909)`, which is exactly the
+  1-record-val failure from the first GEPA run coming back through another door. Latent only because
+  the configured budgets are of similar size; Abt-Buy's 2,173 records already scale 1000/1000/2000
+  down to `(543, 543, 1086)`. Not fixed because honoring fill order under scaling would cut Abt-Buy's
+  train split from 1,086 records to 173, which is a planner decision, not a cleanup. The function's
+  docstring asserts both "val is never starved" and proportional scaling; the second wins.
+
 - **Benchmark with `--max-iterations 3`, always.** Standing instruction from the planner. The earlier
   prompt A/B arms used `--max-iterations 1` to keep the six runs affordable, which measures a
   single-pass pipeline rather than the shipping one and makes those F1 numbers incomparable to the

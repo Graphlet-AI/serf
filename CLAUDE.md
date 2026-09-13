@@ -125,6 +125,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 **NEVER use embedding cosine similarity for entity matching.** Embeddings are used ONLY for semantic blocking (FAISS clustering to group similar entities into blocks). ALL matching decisions MUST go through an LLM via DSPy BlockMatch signatures. Do not write embedding-based matching code, do not write cosine similarity thresholding for match decisions, do not create an "embedding mode" for matching. The only matching mode is LLM matching.
 
+### Never Score On Data Training Touched
+
+**Report benchmark numbers on the holdout split only, and name the split next to every figure.** Selection counts as training: a prompt GEPA chose because it scored best on validation is fitted to validation. `serf benchmark` warns when the records it is about to score overlap the splits `serf train` used — treat that warning as a failed run. The full set of experimental guidelines, each with the incident in this repository that motivated it, is in @.cursor/rules/ml-experiments.mdc. Read it before designing an experiment, changing a metric, or publishing a number.
+
 ## Important Notes
 
 ### Configuration Management

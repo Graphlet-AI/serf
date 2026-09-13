@@ -14,9 +14,9 @@ from serf.dspy.dataset_signatures import (
 )
 from serf.dspy.schemas import (
     AmazonElectronicsProduct,
-    WalmartAmazonCandidate,
     WalmartProduct,
 )
+from serf.dspy.schemas.base import ResolvedEntity
 from serf.dspy.signatures import BlockMatch
 from serf.dspy.types import Entity, EntityBlock
 from serf.match.dataset_matcher import SINGLE_SOURCE_SKIP_REASON, DatasetMatcher, typed_sides
@@ -68,25 +68,22 @@ def _block(entities: list[Entity]) -> EntityBlock:
 
 
 class _StubPredict:
-    """Stand-in for dspy.Predict that returns fixed candidates."""
+    """Stand-in for dspy.Predict that returns a fixed partition."""
 
-    def __init__(self, candidates: list[WalmartAmazonCandidate]) -> None:
-        self.candidates = candidates
+    def __init__(self, resolved: list[ResolvedEntity]) -> None:
+        self.resolved = resolved
         self.calls: list[dict[str, Any]] = []
 
     def __call__(self, **kwargs: Any) -> dspy.Prediction:
-        """Record the call and return the fixed candidates."""
+        """Record the call and return the fixed partition."""
         self.calls.append(kwargs)
-        return dspy.Prediction(candidates=self.candidates)
+        return dspy.Prediction(resolved=self.resolved)
 
 
-def _candidate(left_id: int, right_id: int) -> WalmartAmazonCandidate:
-    """Build a matched candidate over two mapped record ids."""
-    return WalmartAmazonCandidate(
-        left=WalmartProduct(record_id=left_id, source_id="7", modelno="121066"),
-        right=AmazonElectronicsProduct(record_id=right_id, source_id="12", modelno="121066"),
-        is_match=True,
-        confidence=0.95,
+def _group(*record_ids: int) -> ResolvedEntity:
+    """Build one group of the partition over mapped record ids."""
+    return ResolvedEntity(
+        record_ids=list(record_ids),
         justification="identical model number 121066",
     )
 
@@ -116,12 +113,13 @@ def test_resolve_block_returns_matches_with_original_ids() -> None:
     """Candidates over mapped ids come back as matches over the original ids."""
     matcher = DatasetMatcher("walmart-amazon")
     block = _block([_walmart_entity(7), _amazon_entity(RIGHT_ID_OFFSET + 12)])
-    stub = _StubPredict([_candidate(0, 1)])
+    stub = _StubPredict([_group(0, 1)])
     matcher._predictor = stub  # type: ignore[assignment]
 
     with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
         resolution = matcher.resolve_block(block)
 
+    assert resolution.groups == [[7, RIGHT_ID_OFFSET + 12]]
     assert len(resolution.matches) == 1
     match = resolution.matches[0]
     assert {match.entity_a_id, match.entity_b_id} == {7, RIGHT_ID_OFFSET + 12}
@@ -151,7 +149,7 @@ def test_single_source_block_skips_the_llm_call() -> None:
     """A block holding one source only cannot contain a cross-source pair."""
     matcher = DatasetMatcher("walmart-amazon")
     block = _block([_walmart_entity(1), _walmart_entity(2)])
-    stub = _StubPredict([_candidate(0, 1)])
+    stub = _StubPredict([_group(0, 1)])
     matcher._predictor = stub  # type: ignore[assignment]
 
     with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
@@ -166,11 +164,11 @@ def test_single_source_block_skips_the_llm_call() -> None:
     )
 
 
-def test_candidates_with_unknown_record_ids_are_dropped() -> None:
-    """A hallucinated record id is dropped instead of becoming a match."""
+def test_a_hallucinated_record_id_is_dropped_without_taking_the_block_with_it() -> None:
+    """The invented id goes; the record it was grouped with stays, unmatched."""
     matcher = DatasetMatcher("walmart-amazon")
     block = _block([_walmart_entity(5), _amazon_entity(RIGHT_ID_OFFSET + 6)])
-    stub = _StubPredict([_candidate(0, 99)])
+    stub = _StubPredict([_group(0, 99)])
     matcher._predictor = stub  # type: ignore[assignment]
 
     with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
@@ -178,6 +176,43 @@ def test_candidates_with_unknown_record_ids_are_dropped() -> None:
 
     assert resolution.matches == []
     assert matcher.unknown_record_ids == 1
+    assert resolution.groups == [[5], [RIGHT_ID_OFFSET + 6]]
+
+
+def test_a_record_the_model_left_out_is_recovered_as_unmatched() -> None:
+    """Abzu's guarantee, one level earlier: a dropped record is not a deleted record."""
+    matcher = DatasetMatcher("walmart-amazon")
+    block = _block([_walmart_entity(5), _amazon_entity(RIGHT_ID_OFFSET + 6)])
+    stub = _StubPredict([_group(0)])
+    matcher._predictor = stub  # type: ignore[assignment]
+
+    with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
+        resolution = matcher.resolve_block(block)
+
+    assert resolution.groups == [[5], [RIGHT_ID_OFFSET + 6]]
+    assert resolution.recovered_ids == [RIGHT_ID_OFFSET + 6]
+    assert matcher.recovered_record_ids == 1
+
+
+def test_a_record_named_in_two_groups_is_kept_once() -> None:
+    """A partition cannot hold a record twice, and the contradiction is counted."""
+    matcher = DatasetMatcher("walmart-amazon")
+    block = _block(
+        [
+            _walmart_entity(5),
+            _amazon_entity(RIGHT_ID_OFFSET + 6),
+            _amazon_entity(RIGHT_ID_OFFSET + 7),
+        ]
+    )
+    stub = _StubPredict([_group(0, 1), _group(1, 2)])
+    matcher._predictor = stub  # type: ignore[assignment]
+
+    with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
+        resolution = matcher.resolve_block(block)
+
+    assert matcher.duplicate_record_ids == 1
+    covered = [record_id for group in resolution.groups for record_id in group]
+    assert sorted(covered) == [5, RIGHT_ID_OFFSET + 6, RIGHT_ID_OFFSET + 7]
 
 
 def test_llm_failure_falls_back_to_error_recovery() -> None:
@@ -289,7 +324,7 @@ def test_collect_pairs_counts_blocks_that_fell_back_to_error_recovery() -> None:
     good_block = _block([_walmart_entity(1), _amazon_entity(RIGHT_ID_OFFSET + 2)])
     bad_block = _block([_walmart_entity(3), _amazon_entity(RIGHT_ID_OFFSET + 4)])
 
-    matcher._predictor = _StubPredict([_candidate(0, 1)])  # type: ignore[assignment]
+    matcher._predictor = _StubPredict([_group(0, 1)])  # type: ignore[assignment]
     with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
         good = matcher.resolve_block(good_block)
 
@@ -310,7 +345,7 @@ def test_collect_pairs_reports_no_failures_for_healthy_blocks() -> None:
     """A run where every block answered reports zero failed blocks."""
     matcher = DatasetMatcher("walmart-amazon")
     block = _block([_walmart_entity(1), _amazon_entity(RIGHT_ID_OFFSET + 2)])
-    matcher._predictor = _StubPredict([_candidate(0, 1)])  # type: ignore[assignment]
+    matcher._predictor = _StubPredict([_group(0, 1)])  # type: ignore[assignment]
 
     with patch.object(EntityMatcher, "_ensure_lm", return_value=None):
         resolution = matcher.resolve_block(block)

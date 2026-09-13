@@ -17,6 +17,8 @@ from serf.dspy.types import BlockResolution, Entity, EntityBlock
 from serf.logs import get_logger
 from serf.match.dataset_matcher import DatasetMatcher
 from serf.match.matcher import EntityMatcher
+from serf.match.partition import partition_from_pairs
+from serf.merge.canonical import IdAllocator
 from serf.merge.merger import EntityMerger
 
 logger = get_logger(__name__)
@@ -43,6 +45,9 @@ class MatchOutcome:
     failed_blocks : int
         Blocks whose LLM call failed and fell back to error recovery, so they
         contributed no matches
+    recovered_records : int
+        Records the matcher left out of every group and that were put back as
+        unmatched rather than dropped from the dataset
     """
 
     predicted_pairs: set[tuple[int, int]] = field(default_factory=set)
@@ -51,6 +56,7 @@ class MatchOutcome:
     single_source_blocks: int = 0
     dropped_candidates: int = 0
     failed_blocks: int = 0
+    recovered_records: int = 0
 
 
 def create_matcher(
@@ -176,24 +182,38 @@ def match_blocks(
     return outcome
 
 
-def entity_members(entities: list[Entity]) -> dict[int, set[int]]:
+def entity_members(
+    entities: list[Entity], original_ids: set[int] | None = None
+) -> dict[int, set[int]]:
     """Map each entity id to the original record ids it stands for.
 
     An entity merged in an earlier iteration keeps the records it absorbed in
     ``source_ids``, so a later match against that entity is really a match
     against every one of them.
 
+    A merged entity carries a minted id that belongs to no source record, and
+    a pair naming one would be a pair about a record the ground truth has
+    never heard of. Pass ``original_ids`` to keep the expansion inside the
+    universe the data actually has.
+
     Parameters
     ----------
     entities : list[Entity]
         Entities handed to the current iteration
+    original_ids : set[int] | None
+        Ids of the records the run started from. When given, minted ids are
+        excluded from the expansion.
 
     Returns
     -------
     dict[int, set[int]]
         Entity id to the set of record ids it covers, including its own
     """
-    return {e.id: {e.id, *(e.source_ids or [])} for e in entities}
+    members: dict[int, set[int]] = {}
+    for entity in entities:
+        covered = {entity.id, *(entity.source_ids or [])}
+        members[entity.id] = covered if original_ids is None else covered & original_ids
+    return members
 
 
 def expand_pairs(pairs: set[tuple[int, int]], members: dict[int, set[int]]) -> set[tuple[int, int]]:
@@ -224,13 +244,21 @@ def expand_pairs(pairs: set[tuple[int, int]], members: dict[int, set[int]]) -> s
     return expanded
 
 
-def merge_matched_entities(entities: list[Entity], pairs: set[tuple[int, int]]) -> list[Entity]:
+def merge_matched_entities(
+    entities: list[Entity],
+    pairs: set[tuple[int, int]],
+    allocator: IdAllocator | None = None,
+) -> list[Entity]:
     """Collapse every connected component of matched entities into one entity.
 
-    The result is what the next iteration re-blocks: a record that was matched is
-    now carried by its merged entity, whose name and attributes are the fullest of
-    the group, so it can land in a different block and meet records the first
-    round of blocking kept away from it.
+    The result is what the next iteration re-blocks: a record that was matched
+    is now carried by its merged entity, whose name and attributes are the
+    fullest of the group, so it can land in a different block and meet records
+    the first round of blocking kept away from it.
+
+    A merge produces a new entity, so it gets a minted id and every id it
+    absorbed, transitively, moves into ``source_ids``. An entity that merged
+    with nothing keeps its own id.
 
     Parameters
     ----------
@@ -238,33 +266,43 @@ def merge_matched_entities(entities: list[Entity], pairs: set[tuple[int, int]]) 
         Entities handed to the current iteration
     pairs : set[tuple[int, int]]
         Pairs the matcher predicted over those entities
+    allocator : IdAllocator | None
+        Source of minted ids. One seeded from every id and lineage entry in
+        ``entities`` is built when omitted, which is correct as long as
+        ``entities`` is the whole working set.
 
     Returns
     -------
     list[Entity]
         One entity per connected component, sorted by id
     """
-    parent = {e.id: e.id for e in entities}
-
-    def find(node: int) -> int:
-        while parent[node] != node:
-            parent[node] = parent[parent[node]]
-            node = parent[node]
-        return node
-
-    for left, right in pairs:
-        if left not in parent or right not in parent:
-            continue
-        left_root, right_root = find(left), find(right)
-        if left_root != right_root:
-            parent[max(left_root, right_root)] = min(left_root, right_root)
-
-    components: dict[int, list[Entity]] = {}
-    for entity in entities:
-        components.setdefault(find(entity.id), []).append(entity)
+    groups = partition_from_pairs(pairs, {e.id for e in entities})
+    by_id = {e.id: e for e in entities}
+    if allocator is None:
+        allocator = IdAllocator(
+            {
+                entity_id
+                for entity in entities
+                for entity_id in (entity.id, *(entity.source_ids or []))
+            }
+        )
 
     merger = EntityMerger()
-    merged = [merger.merge_entities(group) for group in components.values()]
+    merged: list[Entity] = []
+    for group in groups:
+        members = [by_id[entity_id] for entity_id in group]
+        combined = merger.merge_entities(members)
+        if len(members) == 1:
+            merged.append(combined)
+            continue
+        lineage = sorted(
+            {
+                entity_id
+                for member in members
+                for entity_id in (member.id, *(member.source_ids or []))
+            }
+        )
+        merged.append(combined.model_copy(update={"id": allocator.mint(), "source_ids": lineage}))
     return sorted(merged, key=lambda e: e.id)
 
 
@@ -288,20 +326,29 @@ def collect_pairs(resolutions: list[BlockResolution]) -> MatchOutcome:
     predicted_pairs: set[tuple[int, int]] = set()
     resolved_entities: list[Entity] = []
     failed_blocks = 0
+    recovered_records = 0
     for resolution in resolutions:
         if any(e.match_skip_reason == ERROR_RECOVERY_REASON for e in resolution.resolved_entities):
             failed_blocks += 1
-        for match in resolution.matches:
-            if match.is_match:
-                left, right = match.entity_a_id, match.entity_b_id
-                predicted_pairs.add((min(left, right), max(left, right)))
-        for entity in resolution.resolved_entities:
-            for source_id in entity.source_ids or []:
-                predicted_pairs.add((min(entity.id, source_id), max(entity.id, source_id)))
+        recovered_records += len(resolution.recovered_ids)
+        if resolution.groups:
+            for group in resolution.groups:
+                for index, left in enumerate(group):
+                    for right in group[index + 1 :]:
+                        predicted_pairs.add((min(left, right), max(left, right)))
+        else:
+            for match in resolution.matches:
+                if match.is_match:
+                    left, right = match.entity_a_id, match.entity_b_id
+                    predicted_pairs.add((min(left, right), max(left, right)))
+            for entity in resolution.resolved_entities:
+                for source_id in entity.source_ids or []:
+                    predicted_pairs.add((min(entity.id, source_id), max(entity.id, source_id)))
         resolved_entities.extend(resolution.resolved_entities)
     return MatchOutcome(
         predicted_pairs=predicted_pairs,
         resolved_entities=resolved_entities,
         resolutions=list(resolutions),
         failed_blocks=failed_blocks,
+        recovered_records=recovered_records,
     )

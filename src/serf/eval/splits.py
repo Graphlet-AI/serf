@@ -150,7 +150,8 @@ def sample_random_splits(
     record transitively matched to it, so gold pairs are never split across two
     splits and never lost to independent uniform sampling. Val is filled first,
     then holdout, then train, so val is never starved. When the dataset is
-    smaller than the requested budgets, all three are scaled down proportionally.
+    smaller than the requested budgets, val and holdout are still honoured in
+    full and train takes whatever is left.
 
     Parameters
     ----------
@@ -189,7 +190,7 @@ def sample_random_splits(
     )
     seed = seed if seed is not None else int(config.get("optimize.seed", _DEFAULT_SEED))
 
-    val_n, holdout_n, train_n = _scaled_budgets(len(entities), val_n, holdout_n, train_n)
+    val_n, holdout_n, train_n = _fit_budgets(len(entities), val_n, holdout_n, train_n)
     groups = match_groups(entities, ground_truth)
 
     order = list(entities)
@@ -281,8 +282,18 @@ def training_overlap(
     return len({entity.id for entity in scored} & seen) / len(scored)
 
 
-def _scaled_budgets(total: int, *budgets: int) -> tuple[int, ...]:
-    """Scale record budgets down proportionally when the dataset is too small.
+def _fit_budgets(total: int, *budgets: int) -> tuple[int, ...]:
+    """Trim record budgets to the records available, honouring fill order.
+
+    Each budget is satisfied in full before the next one gets anything, so the
+    shortfall always lands on the last split rather than being spread across
+    all of them. Fill order is val, holdout, train, which makes train the split
+    that absorbs a small dataset.
+
+    Scaling all three proportionally, which is what this used to do, keeps
+    their ratio but lets a large train budget push validation towards zero -
+    the same starvation that once left a GEPA run with a single validation
+    record and no way to tell its candidates apart.
 
     Parameters
     ----------
@@ -294,17 +305,23 @@ def _scaled_budgets(total: int, *budgets: int) -> tuple[int, ...]:
     Returns
     -------
     tuple[int, ...]
-        Budgets that fit within ``total``, keeping their relative ratio
+        Budgets that fit within ``total``
     """
     requested = sum(budgets)
-    if requested <= total or requested == 0:
+    if requested <= total:
         return budgets
-    scale = total / requested
-    scaled = tuple(int(budget * scale) for budget in budgets)
+
+    remaining = total
+    fitted: list[int] = []
+    for budget in budgets:
+        taken = min(budget, remaining)
+        fitted.append(taken)
+        remaining -= taken
     logger.warning(
-        f"Dataset has {total} records but {requested} were requested; scaling budgets to {scaled}"
+        f"Dataset has {total} records but {requested} were requested; filling in order to "
+        f"{tuple(fitted)}, so the shortfall falls on the last split rather than on evaluation"
     )
-    return scaled
+    return tuple(fitted)
 
 
 def _dataset_int(dataset: str, key: str, default: int) -> int:

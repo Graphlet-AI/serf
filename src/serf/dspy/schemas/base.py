@@ -244,8 +244,52 @@ class EntitySide(BaseModel):
         return cls.model_validate(values)
 
 
+class ResolvedEntity(BaseModel):
+    """One real-world entity, named by the records in a block that denote it.
+
+    The matcher returns a partition of the block rather than a list of pairwise
+    verdicts. A pair list can contradict itself - a matched to b, b matched to
+    c, a not matched to c - and something downstream then has to decide what
+    the model meant. A partition cannot: the grouping is the answer. It also
+    makes a dropped record visible, because a record missing from every group
+    is a hole in the cover rather than an absent pair nobody was counting.
+
+    Only ids cross the wire. Which value of a field the merged record should
+    carry is decided by ``serf.merge.canonical`` from the field's type, not by
+    the model, so there is nothing here for it to copy wrongly.
+
+    Parameters
+    ----------
+    record_ids : list[int]
+        Every record_id in this block that denotes this one entity. A record
+        matching nothing forms a group of one.
+    justification : str
+        Short explanation naming the evidence that grouped these records
+    """
+
+    record_ids: list[int] = Field(
+        default_factory=list,
+        description=(
+            "Every record_id from the block that denotes this one real-world "
+            "entity. A record that matches nothing gets a group of its own. "
+            "Copy the ids exactly; never invent or renumber one."
+        ),
+    )
+    justification: str = Field(
+        default="",
+        description=(
+            "One or two sentences naming the specific field values that put "
+            "these records together, so the decision explains itself. Leave "
+            "empty for a group of one."
+        ),
+    )
+
+
 class EntityMatchCandidate(BaseModel):
     """A pair of records, one from each source, judged by the LLM.
+
+    Superseded as the matcher's output contract by ``ResolvedEntity``; kept
+    because the per-dataset subclasses document each task's record shape.
 
     Parameters
     ----------

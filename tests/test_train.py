@@ -8,15 +8,16 @@ import dspy
 import pytest
 
 from serf.dspy.dataset_signatures import get_dataset_spec
+from serf.dspy.schemas.base import ResolvedEntity
 from serf.dspy.train import (
     GOLD_PAIRS_FIELD,
     MAX_ENUMERATED_ERRORS,
     _apply_cap,
     _example_cap,
     blocks_to_dataset_examples,
-    candidate_pairs,
     gold_pairs_in_block,
     make_dataset_metric,
+    predicted_pairs,
     train_dataset,
 )
 from serf.dspy.trained import (
@@ -26,6 +27,7 @@ from serf.dspy.trained import (
     trained_program_path,
 )
 from serf.dspy.types import Entity, EntityBlock
+from serf.match.partition import partition_from_pairs
 
 SPEC = get_dataset_spec("dblp-acm")
 
@@ -80,30 +82,27 @@ def _block(entities: list[Entity], key: str = "block-0") -> EntityBlock:
     return EntityBlock(block_key=key, entities=entities, block_size=len(entities))
 
 
-def _prediction(pairs: list[tuple[int, int]], is_match: bool = True) -> dspy.Prediction:
-    """Build a prediction carrying typed candidates for the given pairs.
+def _prediction(pairs: list[tuple[int, int]]) -> dspy.Prediction:
+    """Build a prediction carrying the partition those pairs imply.
+
+    The matcher returns groups, so a test that wants to assert a pair has to
+    hand over the group containing it.
 
     Parameters
     ----------
     pairs : list[tuple[int, int]]
-        Record id pairs to emit
-    is_match : bool
-        Whether each candidate is marked as a match
+        Record id pairs the partition should claim
 
     Returns
     -------
     dspy.Prediction
         Prediction shaped like the per-dataset signature's output
     """
-    candidates = [
-        SPEC.candidate_type(
-            left=SPEC.left_type(record_id=left),
-            right=SPEC.right_type(record_id=right),
-            is_match=is_match,
-        )
-        for left, right in pairs
-    ]
-    return dspy.Prediction(candidates=candidates)
+    known = {record_id for pair in pairs for record_id in pair}
+    groups = partition_from_pairs(pairs, known)
+    return dspy.Prediction(
+        resolved=[ResolvedEntity(record_ids=group) for group in groups if len(group) > 1]
+    )
 
 
 def test_train_examples_are_uncapped_by_default() -> None:
@@ -181,11 +180,23 @@ def test_blocks_without_a_gold_pair_are_not_trainable() -> None:
     assert blocks_to_dataset_examples([block], set(), SPEC) == []
 
 
-def test_candidate_pairs_ignores_rejections_and_normalizes_order() -> None:
-    """Only the pairs marked as matches count, smaller id first."""
-    assert candidate_pairs(_prediction([(4, 2)])) == {(2, 4)}
-    assert candidate_pairs(_prediction([(2, 4)], is_match=False)) == set()
-    assert candidate_pairs(dspy.Prediction()) == set()
+def test_predicted_pairs_reads_the_grouping_and_normalizes_order() -> None:
+    """Pairs come from the partition, smaller id first."""
+    assert predicted_pairs(_prediction([(4, 2)])) == {(2, 4)}
+    assert predicted_pairs(dspy.Prediction()) == set()
+
+
+def test_predicted_pairs_counts_the_pair_the_model_never_wrote_down() -> None:
+    """A group of three asserts three pairs, which is the point of a partition."""
+    prediction = dspy.Prediction(resolved=[ResolvedEntity(record_ids=[1, 2, 3])])
+
+    assert predicted_pairs(prediction) == {(1, 2), (1, 3), (2, 3)}
+
+
+def test_a_group_of_one_asserts_nothing() -> None:
+    prediction = dspy.Prediction(resolved=[ResolvedEntity(record_ids=[1])])
+
+    assert predicted_pairs(prediction) == set()
 
 
 def test_metric_scores_a_perfect_block_and_says_so() -> None:

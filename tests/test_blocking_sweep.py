@@ -112,13 +112,23 @@ def test_rounds_stop_early_when_nothing_merges() -> None:
 
 
 def test_rounds_accumulate_recall_across_rounds() -> None:
-    """A pair separated in round one but co-blocked later counts as recovered."""
+    """A pair separated in round one but co-blocked later counts as recovered.
+
+    Round two blocks whatever the merge produced, which is an entity with a
+    minted id standing for records 1 and 2, so the fixture has to find it in
+    the entities it is handed rather than assume it kept id 1.
+    """
     a, b, c, d = _entity(1, "a"), _entity(2, "b"), _entity(3, "c"), _entity(4, "d")
     first = ([_block([a, b]), _block([c, d])], BlockingMetrics(total_blocks=2))
-    second = ([_block([a, c])], BlockingMetrics(total_blocks=1))
+
+    def _run(current: list[Entity]) -> tuple[list[EntityBlock], BlockingMetrics]:
+        if pipeline.run.call_count == 1:
+            return first
+        merged = next(e for e in current if {1, 2} <= set(e.source_ids or []))
+        return ([_block([merged, c])], BlockingMetrics(total_blocks=1))
 
     pipeline = MagicMock()
-    pipeline.run.side_effect = [first, second]
+    pipeline.run.side_effect = _run
 
     with patch("serf.eval.blocking_sweep.SemanticBlockingPipeline", return_value=pipeline):
         results = evaluate_blocking_rounds(

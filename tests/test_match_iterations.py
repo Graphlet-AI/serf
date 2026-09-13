@@ -65,13 +65,17 @@ def test_expand_pairs_drops_self_pairs() -> None:
 
 
 def test_merge_matched_entities_collapses_a_connected_component() -> None:
-    """Records joined transitively by predicted pairs become one entity."""
+    """Records joined transitively by predicted pairs become one entity with a new id."""
     entities = [_entity(1, "acme"), _entity(2, "acme inc"), _entity(3, "other")]
 
     merged = merge_matched_entities(entities, {(1, 2)})
 
-    assert [e.id for e in merged] == [1, 3]
-    assert set(merged[0].source_ids or []) == {2}
+    by_id = {e.id: e for e in merged}
+    assert len(merged) == 2
+    assert 3 in by_id, "an entity that merged with nothing keeps its id"
+    new_id = next(entity_id for entity_id in by_id if entity_id != 3)
+    assert new_id not in {1, 2}, "a merge is a new entity, so it gets a new id"
+    assert set(by_id[new_id].source_ids or []) == {1, 2}
 
 
 def test_merge_matched_entities_chains_pairs_through_a_shared_record() -> None:
@@ -81,8 +85,8 @@ def test_merge_matched_entities_chains_pairs_through_a_shared_record() -> None:
     merged = merge_matched_entities(entities, {(1, 2), (2, 3)})
 
     assert len(merged) == 1
-    assert merged[0].id == 1
-    assert set(merged[0].source_ids or []) == {2, 3}
+    assert merged[0].id not in {1, 2, 3}
+    assert set(merged[0].source_ids or []) == {1, 2, 3}
 
 
 def test_merge_matched_entities_keeps_earlier_source_ids() -> None:
@@ -92,7 +96,28 @@ def test_merge_matched_entities_keeps_earlier_source_ids() -> None:
     merged = merge_matched_entities(entities, {(1, 2)})
 
     assert len(merged) == 1
-    assert set(merged[0].source_ids or []) == {2, 100_001, 100_002}
+    assert set(merged[0].source_ids or []) == {1, 2, 100_001, 100_002}
+    assert merged[0].id not in {1, 2, 100_001, 100_002}
+
+
+def test_a_merged_entity_never_takes_an_id_another_record_already_holds() -> None:
+    """Minting inside a gap in the id space would silently overwrite a real record."""
+    entities = [_entity(1, "a"), _entity(2, "a"), _entity(4, "other"), _entity(5, "other too")]
+
+    merged = merge_matched_entities(entities, {(1, 2)})
+
+    assert {e.id for e in merged} & {1, 2} == set()
+    assert {4, 5} <= {e.id for e in merged}
+
+
+def test_every_original_record_is_still_reachable_after_a_merge() -> None:
+    """Conservation: nothing the pipeline was handed may become unreachable."""
+    entities = [_entity(1, "a", [100_001]), _entity(2, "b"), _entity(3, "c")]
+
+    merged = merge_matched_entities(entities, {(1, 2)})
+
+    reachable = {entity_id for e in merged for entity_id in (e.id, *(e.source_ids or []))}
+    assert {1, 2, 3, 100_001} <= reachable
 
 
 def test_merge_matched_entities_without_pairs_is_a_no_op() -> None:

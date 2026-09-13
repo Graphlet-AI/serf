@@ -302,6 +302,11 @@ class BlockResolution(BaseModel):
         The block key this resolution belongs to
     matches : list[MatchDecision]
         All pairwise match decisions made
+    groups : list[list[int]]
+        Partition of the block: every record id in exactly one group. This is
+        what a partition-emitting matcher returns, and it says more than
+        ``matches`` does, because a group of three asserts all three of its
+        pairs whether or not the model mentioned each one.
     resolved_entities : list[Entity]
         Entities after merging (merged + non-matched)
     was_resolved : bool
@@ -310,14 +315,19 @@ class BlockResolution(BaseModel):
         Number of entities before resolution
     resolved_count : int
         Number of entities after resolution
+    recovered_ids : list[int]
+        Record ids the matcher left out of every group and that were put back
+        as unmatched, rather than being dropped from the dataset
     """
 
     block_key: str = ""
     matches: list[MatchDecision] = Field(default_factory=list)
+    groups: list[list[int]] = Field(default_factory=list)
     resolved_entities: list[Entity] = Field(default_factory=list)
     was_resolved: bool = False
     original_count: int = 0
     resolved_count: int = 0
+    recovered_ids: list[int] = Field(default_factory=list)
 
 
 class FieldProfile(BaseModel):

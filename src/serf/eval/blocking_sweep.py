@@ -285,6 +285,11 @@ def evaluate_blocking_rounds(
         cumulative recall through it
     """
     current = entities
+    # Recall is measured over the records the sweep started from. A merged
+    # entity carries a minted id that is not one of them, so the expansion has
+    # to be held to this universe or a pair would be attributed to a record
+    # that never existed.
+    original_ids = {entity.id for entity in entities}
     covered: set[tuple[int, int]] = set()
     results: list[BlockingSweepResult] = []
 
@@ -303,7 +308,7 @@ def evaluate_blocking_rounds(
         blocks, metrics = pipeline.run(current)
         elapsed = time.time() - start
 
-        members = entity_members(current)
+        members = entity_members(current, original_ids)
         owner = {record: entity for entity, records in members.items() for record in records}
         membership = block_membership(blocks)
 

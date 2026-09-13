@@ -33,7 +33,7 @@ def test_report_instructions_are_the_signature_docstring(dataset: str) -> None:
 
 
 @pytest.mark.parametrize("dataset", DATASETS)
-def test_report_names_both_typed_sides_and_the_candidate_output(dataset: str) -> None:
+def test_report_names_both_typed_sides_and_the_partition_output(dataset: str) -> None:
     """Field reports keep the element type, which is what the adapter renders."""
     spec = get_dataset_spec(dataset)
     report = dataset_prompt_report(dataset)
@@ -41,7 +41,7 @@ def test_report_names_both_typed_sides_and_the_candidate_output(dataset: str) ->
     assert inputs[spec.left_field] == f"list[{spec.left_type.__name__}]"
     assert inputs[spec.right_field] == f"list[{spec.right_type.__name__}]"
     outputs = {field.name: field.annotation for field in report.output_fields}
-    assert outputs[spec.candidates_field] == f"list[{spec.candidate_type.__name__}]"
+    assert outputs[spec.resolved_field] == "list[ResolvedEntity]"
 
 
 @pytest.mark.parametrize("dataset", DATASETS)
@@ -60,8 +60,11 @@ def test_user_prompt_holds_both_input_fields_and_the_output_skeleton(dataset: st
     report = dataset_prompt_report(dataset)
     assert f"<{spec.left_field}>" in report.user_prompt
     assert f"<{spec.right_field}>" in report.user_prompt
-    assert f"<{spec.candidates_field}>" in report.user_prompt
-    assert "<record_id>" in report.user_prompt
+    assert f"<{spec.resolved_field}>" in report.user_prompt
+    # The answer skeleton is ids and a justification. Under the old pairwise
+    # contract the model had to copy every field of both records into every
+    # candidate, so the shape it had to fill was larger than the block itself.
+    assert "<record_ids>" in report.user_prompt
 
 
 @pytest.mark.parametrize("dataset", DATASETS)

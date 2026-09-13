@@ -8,7 +8,7 @@ for that match task and is therefore the text worth rewriting.
 Three things make this different from optimizing the generic signature.
 
 The examples are typed. A per-dataset signature takes each source as its own
-list of typed records and returns typed candidate pairs, so training examples
+list of typed records and returns a partition of the block, so training examples
 have to be built the same way ``DatasetMatcher`` builds a live call, or the
 optimized instructions would be tuned against a prompt shape that never ships.
 
@@ -253,30 +253,33 @@ def _normalize(pairs: Any) -> set[tuple[int, int]]:
     return out
 
 
-def candidate_pairs(prediction: Any, candidates_field: str = "candidates") -> set[tuple[int, int]]:
+def predicted_pairs(prediction: Any, resolved_field: str = "resolved") -> set[tuple[int, int]]:
     """Extract the matched pairs from a per-dataset prediction.
+
+    The matcher returns a partition, and a group of three asserts all three of
+    its pairs, so the pairs come from the grouping rather than from anything
+    the model listed. Scoring the groups against pair-shaped gold is what lets
+    a partition-emitting prompt be trained on a pairwise gold standard.
 
     Parameters
     ----------
     prediction : Any
-        Prediction carrying a list of typed candidates
-    candidates_field : str
-        Output field holding the candidates
+        Prediction carrying the partition of a block
+    resolved_field : str
+        Output field holding the groups
 
     Returns
     -------
     set[tuple[int, int]]
-        Record id pairs the model marked as matches
+        Record id pairs the partition claims are the same entity
     """
     pairs: set[tuple[int, int]] = set()
-    for candidate in getattr(prediction, candidates_field, None) or []:
-        if not getattr(candidate, "is_match", False):
-            continue
-        left = getattr(getattr(candidate, "left", None), "record_id", None)
-        right = getattr(getattr(candidate, "right", None), "record_id", None)
-        if left is None or right is None or left == right:
-            continue
-        pairs.add((min(int(left), int(right)), max(int(left), int(right))))
+    for group in getattr(prediction, resolved_field, None) or []:
+        ids = [int(value) for value in getattr(group, "record_ids", None) or []]
+        for index, left in enumerate(ids):
+            for right in ids[index + 1 :]:
+                if left != right:
+                    pairs.add((min(left, right), max(left, right)))
     return pairs
 
 
@@ -370,7 +373,7 @@ def make_dataset_metric(spec: DatasetSignatureSpec) -> Callable[..., ScoreWithFe
         gold : dspy.Example
             Example carrying the gold pairs for this block
         pred : dspy.Prediction
-            Model prediction carrying typed candidates
+            Model prediction carrying the partition of a block
         trace : Any
             DSPy trace (unused)
         pred_name : str | None
@@ -384,7 +387,7 @@ def make_dataset_metric(spec: DatasetSignatureSpec) -> Callable[..., ScoreWithFe
             F1 over match pairs, and feedback enumerating the errors
         """
         gold_set = _normalize(getattr(gold, GOLD_PAIRS_FIELD, None))
-        pred_set = candidate_pairs(pred, spec.candidates_field)
+        pred_set = predicted_pairs(pred, spec.resolved_field)
         missed = gold_set - pred_set
         extra = pred_set - gold_set
 

@@ -18,14 +18,15 @@ from serf.dspy.dataset_signatures import DatasetSignatureSpec, get_dataset_spec
 from serf.dspy.schemas.base import (
     SIDE_LEFT,
     SIDE_RIGHT,
-    EntityMatchCandidate,
     EntitySide,
+    ResolvedEntity,
     entity_side,
 )
 from serf.dspy.trained import load_trained_predictor
 from serf.dspy.types import BlockResolution, Entity, EntityBlock, MatchDecision
 from serf.logs import get_logger
 from serf.match.matcher import EntityMatcher
+from serf.match.partition import build_partition
 from serf.match.uuid_mapper import UUIDMapper
 
 logger = get_logger(__name__)
@@ -74,6 +75,8 @@ class DatasetMatcher(EntityMatcher):
         self.trained_dir = trained_dir
         self.single_source_blocks = 0
         self.unknown_record_ids = 0
+        self.duplicate_record_ids = 0
+        self.recovered_record_ids = 0
 
     @property
     def predictor(self) -> dspy.Predict:
@@ -127,73 +130,74 @@ class DatasetMatcher(EntityMatcher):
             lm = self._ensure_lm()
             with dspy.context(lm=lm, adapter=self._adapter):
                 result = self.predictor(**inputs)
-            candidates: list[EntityMatchCandidate] = (
-                getattr(result, self.spec.candidates_field, None) or []
-            )
+            resolved: list[ResolvedEntity] = getattr(result, self.spec.resolved_field, None) or []
         except Exception as e:
             logger.error(f"LLM failure for block {block.block_key}: {e}")
             return self._assign_uuids(self._error_recovery_resolution(block, iteration))
 
         known_ids = {e.id for e in mapped_block.entities}
+        outcome = build_partition(
+            (group.record_ids for group in resolved), known_ids, block.block_key
+        )
+        self.unknown_record_ids += len(outcome.unknown_ids)
+        self.duplicate_record_ids += len(outcome.duplicate_ids)
+        self.recovered_record_ids += len(outcome.recovered_ids)
+
         resolution = BlockResolution(
             block_key=block.block_key,
-            matches=self._candidate_matches(candidates, known_ids, block.block_key),
+            matches=self._group_matches(outcome.groups, resolved),
+            groups=outcome.groups,
             resolved_entities=list(mapped_block.entities),
-            was_resolved=False,
+            was_resolved=bool(outcome.matched_groups),
             original_count=mapped_block.block_size,
-            resolved_count=mapped_block.block_size,
+            resolved_count=len(outcome.groups),
+            recovered_ids=outcome.recovered_ids,
         )
-        resolution.was_resolved = bool(resolution.matches)
         resolution = mapper.unmap_block(resolution, block)
         return self._assign_uuids(resolution)
 
-    def _candidate_matches(
+    def _group_matches(
         self,
-        candidates: list[EntityMatchCandidate],
-        known_ids: set[int],
-        block_key: str,
+        groups: list[list[int]],
+        resolved: list[ResolvedEntity],
     ) -> list[MatchDecision]:
-        """Convert typed candidates into match decisions.
+        """Expand the partition into the pairwise decisions it asserts.
+
+        A group of three asserts all three of its pairs, including the one the
+        model never wrote down, so the decisions come from the grouping rather
+        than from what it happened to mention.
 
         Parameters
         ----------
-        candidates : list[EntityMatchCandidate]
-            Candidate pairs returned by the LLM
-        known_ids : set[int]
-            Record ids that actually exist in the block
-        block_key : str
-            Block identifier, for logging
+        groups : list[list[int]]
+            Repaired partition of the block
+        resolved : list[ResolvedEntity]
+            What the model returned, read only for its justifications
 
         Returns
         -------
         list[MatchDecision]
-            One decision per candidate the LLM marked as a match
+            One decision per within-group pair
         """
-        matches: list[MatchDecision] = []
-        for candidate in candidates:
-            if not candidate.is_match:
-                continue
-            left_id = candidate.left.record_id
-            right_id = candidate.right.record_id
-            if left_id not in known_ids or right_id not in known_ids:
-                self.unknown_record_ids += 1
-                logger.warning(
-                    f"Block {block_key}: candidate ({left_id}, {right_id}) references a "
-                    "record id that is not in the block; dropping it"
-                )
-                continue
-            if left_id == right_id:
-                continue
-            matches.append(
-                MatchDecision(
-                    entity_a_id=left_id,
-                    entity_b_id=right_id,
-                    is_match=True,
-                    confidence=candidate.confidence,
-                    reasoning=candidate.justification,
-                )
-            )
-        return matches
+        reasons: dict[int, str] = {}
+        for group in resolved:
+            for record_id in group.record_ids:
+                reasons.setdefault(record_id, group.justification)
+
+        decisions: list[MatchDecision] = []
+        for group in groups:
+            for index, left in enumerate(group):
+                for right in group[index + 1 :]:
+                    decisions.append(
+                        MatchDecision(
+                            entity_a_id=left,
+                            entity_b_id=right,
+                            is_match=True,
+                            confidence=1.0,
+                            reasoning=reasons.get(left) or reasons.get(right) or "",
+                        )
+                    )
+        return decisions
 
     def _single_source_resolution(self, block: EntityBlock) -> BlockResolution:
         """Build a pass-through resolution for a block with only one source in it.
@@ -220,6 +224,7 @@ class DatasetMatcher(EntityMatcher):
         return BlockResolution(
             block_key=block.block_key,
             matches=[],
+            groups=[[e.id] for e in entities],
             resolved_entities=entities,
             was_resolved=False,
             original_count=len(entities),

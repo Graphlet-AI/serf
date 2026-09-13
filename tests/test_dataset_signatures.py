@@ -17,6 +17,7 @@ from serf.dspy.dataset_signatures import (
     WalmartAmazonBlockMatch,
     get_dataset_spec,
 )
+from serf.dspy.schemas.base import ResolvedEntity
 from serf.dspy.signatures import BlockMatch
 from serf.eval.benchmarks import DATASET_REGISTRY
 
@@ -56,12 +57,12 @@ def test_get_dataset_spec_rejects_unknown_datasets() -> None:
 
 @pytest.mark.parametrize("dataset", DATASETS)
 def test_signature_fields_are_typed_per_side(dataset: str) -> None:
-    """Each signature takes one typed list per source and returns typed candidates."""
+    """Each signature takes one typed list per source and returns a partition."""
     spec = get_dataset_spec(dataset)
     signature = spec.signature
 
     assert set(signature.input_fields) == {spec.left_field, spec.right_field}
-    assert set(signature.output_fields) == {spec.candidates_field}
+    assert set(signature.output_fields) == {spec.resolved_field}
     for field_name, item_type in (
         (spec.left_field, spec.left_type),
         (spec.right_field, spec.right_type),
@@ -69,9 +70,9 @@ def test_signature_fields_are_typed_per_side(dataset: str) -> None:
         annotation = signature.input_fields[field_name].annotation
         assert get_origin(annotation) is list
         assert get_args(annotation) == (item_type,)
-    candidates = signature.output_fields[spec.candidates_field].annotation
-    assert get_origin(candidates) is list
-    assert get_args(candidates) == (spec.candidate_type,)
+    resolved = signature.output_fields[spec.resolved_field].annotation
+    assert get_origin(resolved) is list
+    assert get_args(resolved) == (ResolvedEntity,)
 
 
 @pytest.mark.parametrize("dataset", DATASETS)
@@ -104,10 +105,26 @@ def test_signature_instructions_carry_the_field_guide(dataset: str) -> None:
 
 @pytest.mark.parametrize("dataset", DATASETS)
 def test_signature_instructions_forbid_same_source_pairs(dataset: str) -> None:
-    """The shared block rules make the bipartite structure of the task explicit."""
+    """The shared block rules make the bipartite structure of the task explicit.
+
+    Two records from one source can still end up in one group, but only via a
+    record on the other side. Similarity between them is never itself evidence.
+    """
     instructions = " ".join(get_dataset_spec(dataset).signature.instructions.split())
 
-    assert "two records from the same source are never a match" in instructions
+    assert (
+        "similarity between two records from the same source is never on its own a reason "
+        "to put them together"
+    ) in instructions
+
+
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_signature_instructions_ask_for_a_full_partition(dataset: str) -> None:
+    """Conservation starts in the prompt: every record must land in exactly one group."""
+    instructions = " ".join(get_dataset_spec(dataset).signature.instructions.split())
+
+    assert "every record_id you were given must appear in exactly one group" in instructions
+    assert "A record that matches nothing still gets a group" in instructions
 
 
 # DBLP-Scholar and Walmart-Amazon keep the shorter literature-derived prompt.

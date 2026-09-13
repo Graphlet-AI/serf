@@ -71,8 +71,8 @@ def test_training_overlap_of_nothing_is_zero() -> None:
     assert training_overlap("dblp-acm", [], _entities(100), set(), seed=42) == 0.0
 
 
-def test_split_sizes_are_2k_train_records_per_dataset() -> None:
-    """Every benchmark dataset asks for 2000 train, 1000 val, 1000 holdout records."""
+def test_split_sizes_are_1k_train_200_val_1k_holdout_per_dataset() -> None:
+    """Train and val sit at roughly 80/20, with an equally large holdout GEPA never sees."""
     expected = get_all_split_sizes()
     assert set(expected) == {
         "walmart-amazon",
@@ -82,12 +82,12 @@ def test_split_sizes_are_2k_train_records_per_dataset() -> None:
         "dblp-scholar",
     }
     for name, sizes in expected.items():
-        assert sizes.train_records == 2000, name
-        assert sizes.val_records == 1000, name
+        assert sizes.train_records == 1000, name
+        assert sizes.val_records == 200, name
         assert sizes.holdout_records == 1000, name
         assert get_split_sizes(name) == sizes
-    assert config.get("benchmarks.train_records") == 2000
-    assert config.get("benchmarks.val_records") == 1000
+    assert config.get("benchmarks.train_records") == 1000
+    assert config.get("benchmarks.val_records") == 200
     assert config.get("benchmarks.holdout_records") == 1000
     with pytest.raises(KeyError):
         config.get("benchmarks.train_blocks")
@@ -175,38 +175,54 @@ def test_sample_random_splits_preserves_gold_pairs_in_a_sparse_dataset() -> None
     assert count_gold_pairs(splits.val_records, ground_truth) >= 20
 
 
-def test_sample_random_splits_scales_budgets_for_small_datasets() -> None:
-    """abt-buy has 2173 records, so 2000/1000/1000 scales down keeping the 2:1:1 ratio."""
+def test_a_small_dataset_shorts_train_and_never_evaluation() -> None:
+    """abt-buy has 2173 records, so val and holdout are paid in full and train takes the rest."""
     entities = _entities(2173)
     splits = sample_random_splits(
         entities,
         ground_truth=set(),
-        train_records=2000,
-        val_records=1000,
+        train_records=1000,
+        val_records=200,
         holdout_records=1000,
         seed=3,
     )
-    assert len(splits.train_records) == 1086
-    assert len(splits.val_records) == 543
-    assert len(splits.holdout_records) == 543
+    assert len(splits.val_records) == 200
+    assert len(splits.holdout_records) == 1000
+    assert len(splits.train_records) == 973
     total = len(splits.train_records) + len(splits.val_records) + len(splits.holdout_records)
     assert total <= len(entities)
 
 
+def test_an_oversized_train_budget_cannot_starve_evaluation() -> None:
+    """The failure that once left GEPA one validation record, now impossible by construction."""
+    entities = _entities(4910)
+    splits = sample_random_splits(
+        entities,
+        ground_truth=set(),
+        train_records=10**9,
+        val_records=200,
+        holdout_records=200,
+        seed=5,
+    )
+    assert len(splits.val_records) == 200
+    assert len(splits.holdout_records) == 200
+    assert len(splits.train_records) == 4510
+
+
 def test_sample_random_splits_fills_val_before_holdout_and_train() -> None:
-    """A tiny dataset keeps the 2:1:1 ratio and still fills val first."""
+    """A dataset too small for any budget spends itself on val, then holdout, then train."""
     entities = _entities(40)
     splits = sample_random_splits(
         entities,
         ground_truth=set(),
-        train_records=2000,
-        val_records=1000,
-        holdout_records=1000,
+        train_records=1000,
+        val_records=25,
+        holdout_records=10,
         seed=4,
     )
-    assert len(splits.val_records) == 10
+    assert len(splits.val_records) == 25
     assert len(splits.holdout_records) == 10
-    assert len(splits.train_records) == 20
+    assert len(splits.train_records) == 5
 
 
 def test_sample_random_splits_fills_val_when_records_run_out() -> None:
@@ -254,6 +270,6 @@ def test_sample_random_splits_uses_config_defaults() -> None:
     """Omitted budgets fall back to the configured record counts."""
     entities = _entities(8000)
     splits = sample_random_splits(entities, ground_truth=set(), seed=2)
-    assert len(splits.train_records) == 2000
-    assert len(splits.val_records) == 1000
+    assert len(splits.train_records) == 1000
+    assert len(splits.val_records) == 200
     assert len(splits.holdout_records) == 1000

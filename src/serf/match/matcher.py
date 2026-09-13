@@ -169,6 +169,7 @@ class EntityMatcher:
         return BlockResolution(
             block_key=block.block_key,
             matches=[],
+            groups=[[e.id] for e in entities],
             resolved_entities=entities,
             was_resolved=False,
             original_count=len(entities),

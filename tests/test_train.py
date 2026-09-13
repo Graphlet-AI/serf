@@ -19,6 +19,7 @@ from serf.dspy.train import (
     gold_pairs_in_block,
     make_dataset_metric,
     predicted_pairs,
+    run_log_dir,
     train_dataset,
 )
 from serf.dspy.trained import (
@@ -439,3 +440,28 @@ def test_train_result_reports_no_improvement_when_gepa_did_not_find_one() -> Non
         instructions_after="b",
     )
     assert result.improved is False
+
+
+def test_each_dataset_and_prompt_gets_its_own_gepa_state_directory() -> None:
+    """GEPA resumes from its log dir, so a shared one inherits the wrong candidates."""
+    a = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs")
+    b = run_log_dir("abt-buy", "instructions A", log_dir="/tmp/logs")
+    c = run_log_dir("dblp-acm", "instructions B", log_dir="/tmp/logs")
+
+    assert a != b, "two datasets must not share state"
+    assert a != c, "a rewritten prompt must not resume the old prompt's candidates"
+    assert a.startswith("/tmp/logs/dblp-acm/")
+
+
+def test_the_same_dataset_and_prompt_resumes_the_same_directory() -> None:
+    """The useful half of resuming: an interrupted run of one prompt picks up again."""
+    assert run_log_dir("dblp-acm", "same", log_dir="/tmp/logs") == run_log_dir(
+        "dblp-acm", "same", log_dir="/tmp/logs"
+    )
+
+
+def test_the_state_directory_root_comes_from_config_by_default() -> None:
+    from serf.config import config
+
+    root = str(config.get("optimize.log_dir"))
+    assert run_log_dir("dblp-acm", "x").startswith(root)

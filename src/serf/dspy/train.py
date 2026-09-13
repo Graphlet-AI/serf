@@ -22,9 +22,11 @@ and ``DatasetMatcher`` reads it back, so a trained prompt reaches the benchmark
 without anyone editing a docstring.
 """
 
+import hashlib
 import random
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, cast
 
 import dspy
@@ -445,6 +447,40 @@ def make_dataset_metric(spec: DatasetSignatureSpec) -> Callable[..., ScoreWithFe
     return metric
 
 
+def run_log_dir(dataset: str, instructions: str, log_dir: str | None = None) -> str:
+    """Return a GEPA state directory unique to this dataset and prompt.
+
+    GEPA writes ``gepa_state.bin`` into its log directory and silently resumes
+    from it, which is what makes a long run restartable. With one shared
+    directory that becomes a hazard rather than a feature: a run inherits the
+    candidate programs of whichever run used the directory last, even one on a
+    different dataset or written against a different signature. A resumed
+    candidate whose instructions no longer match the signature is optimising
+    something that does not ship.
+
+    Keying on the dataset and on a fingerprint of the instructions keeps the
+    useful half: an interrupted run of the same prompt resumes, and a changed
+    prompt starts clean.
+
+    Parameters
+    ----------
+    dataset : str
+        Benchmark dataset name
+    instructions : str
+        Instructions the run starts from
+    log_dir : str | None
+        Root directory. Defaults to config ``optimize.log_dir``.
+
+    Returns
+    -------
+    str
+        Path under the root, namespaced by dataset and instruction fingerprint
+    """
+    root = log_dir or str(config.get("optimize.log_dir", "data/gepa_logs"))
+    fingerprint = hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:12]
+    return str(Path(root) / dataset / fingerprint)
+
+
 def score_on_examples(
     program: dspy.Module,
     examples: list[dspy.Example],
@@ -611,7 +647,7 @@ def train_dataset(
         student_model=student_model,
         teacher_model=teacher_model,
         auto=auto,
-        log_dir=log_dir,
+        log_dir=log_dir or run_log_dir(dataset, instructions_before),
     )
 
     path = trained_program_path(dataset, output_dir)

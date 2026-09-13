@@ -16,17 +16,6 @@ _DEFAULT_VAL_RECORDS = 1000
 _DEFAULT_HOLDOUT_RECORDS = 1000
 _DEFAULT_SEED = 42
 
-BENCHMARK_SPLIT_SAMPLE = "sample"
-BENCHMARK_SPLIT_TRAIN = "train"
-BENCHMARK_SPLIT_VAL = "val"
-BENCHMARK_SPLIT_HOLDOUT = "holdout"
-BENCHMARK_SPLITS = (
-    BENCHMARK_SPLIT_SAMPLE,
-    BENCHMARK_SPLIT_TRAIN,
-    BENCHMARK_SPLIT_VAL,
-    BENCHMARK_SPLIT_HOLDOUT,
-)
-
 
 @dataclass(frozen=True)
 class SplitSizes:
@@ -236,56 +225,60 @@ def sample_random_splits(
     return splits
 
 
-def split_records(
+def training_overlap(
     dataset: str,
-    entities: list[Entity],
+    scored: list[Entity],
+    all_entities: list[Entity],
     ground_truth: set[tuple[int, int]],
-    split: str,
     seed: int | None = None,
-) -> tuple[list[Entity], set[tuple[int, int]]]:
-    """Return one named split's records and the gold pairs inside it.
+) -> float:
+    """Share of ``scored`` that ``serf train`` would put in train or val.
 
-    The splits are the same partition ``serf train`` optimizes against, so
-    ``holdout`` is the only one GEPA never saw. Scoring a trained prompt on
-    ``val`` reports the score GEPA selected the prompt by, which is not a
-    measurement of anything the prompt has not already been fitted to.
+    A trained prompt measured on records GEPA trained or selected on is reading
+    its own fit, not a result. This reports how much of that has happened, so a
+    benchmark run can say so. The default 1,000-record sample overlaps
+    validation entirely, because ``sample_records`` and ``sample_random_splits``
+    shuffle the same list with the same seed and splits fill validation first.
+
+    The partition is drawn over ``all_entities``, since that is what training
+    sees; comparing against a partition of the sample alone would answer a
+    different question.
 
     Parameters
     ----------
     dataset : str
         Benchmark dataset name, used to look up the configured budgets
-    entities : list[Entity]
-        Full record list, both sources concatenated
+    scored : list[Entity]
+        Records about to be scored
+    all_entities : list[Entity]
+        Every record in the dataset, which is what ``serf train`` partitions
     ground_truth : set[tuple[int, int]]
-        True matching pairs over the full dataset
-    split : str
-        One of ``train``, ``val`` or ``holdout``
+        True matching pairs over the full dataset, used to keep match groups
+        whole as training does
     seed : int | None
         RNG seed. Defaults to config ``optimize.seed``, which is what
         ``serf train`` uses, so the partition matches the one it trained on.
 
     Returns
     -------
-    tuple[list[Entity], set[tuple[int, int]]]
-        The split's records and the ground truth restricted to them
+    float
+        Fraction of ``scored`` in the train or val split, 0.0 when none are
     """
+    if not scored:
+        return 0.0
     sizes = get_split_sizes(dataset)
     splits = sample_random_splits(
-        entities,
+        all_entities,
         ground_truth,
         train_records=sizes.train_records,
         val_records=sizes.val_records,
         holdout_records=sizes.holdout_records,
         seed=seed,
     )
-    records = {
-        BENCHMARK_SPLIT_TRAIN: splits.train_records,
-        BENCHMARK_SPLIT_VAL: splits.val_records,
-        BENCHMARK_SPLIT_HOLDOUT: splits.holdout_records,
-    }[split]
-    record_ids = {entity.id for entity in records}
-    kept = {pair for pair in ground_truth if pair[0] in record_ids and pair[1] in record_ids}
-    return sorted(records, key=lambda entity: entity.id), kept
+    seen = {entity.id for entity in splits.train_records} | {
+        entity.id for entity in splits.val_records
+    }
+    return len({entity.id for entity in scored} & seen) / len(scored)
 
 
 def _scaled_budgets(total: int, *budgets: int) -> tuple[int, ...]:

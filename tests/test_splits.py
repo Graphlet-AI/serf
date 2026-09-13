@@ -6,14 +6,12 @@ from serf.config import config
 from serf.dspy.types import Entity
 from serf.eval.sample import sample_records
 from serf.eval.splits import (
-    BENCHMARK_SPLIT_HOLDOUT,
-    BENCHMARK_SPLIT_VAL,
     count_gold_pairs,
     get_all_split_sizes,
     get_split_sizes,
     match_groups,
     sample_random_splits,
-    split_records,
+    training_overlap,
 )
 
 
@@ -32,38 +30,45 @@ def _ids(records: list[Entity]) -> set[int]:
     return {record.id for record in records}
 
 
-def test_split_records_returns_only_gold_pairs_inside_the_split() -> None:
-    """A split's ground truth holds a pair only when both of its records are in it."""
-    entities = _entities(60)
-    ground_truth = {(i, i + 1) for i in range(0, 60, 2)}
-
-    records, gold = split_records("dblp-acm", entities, ground_truth, BENCHMARK_SPLIT_HOLDOUT)
-
-    record_ids = _ids(records)
-    assert records
-    for pair in gold:
-        assert pair[0] in record_ids and pair[1] in record_ids
-    assert gold == {pair for pair in ground_truth if set(pair) <= record_ids}
-
-
-def test_holdout_split_shares_no_record_with_the_default_benchmark_sample() -> None:
+def test_the_default_benchmark_sample_is_entirely_training_data() -> None:
     """A plain sample at the default seed and size is the validation split itself.
 
     `sample_records` and `sample_random_splits` shuffle the same list with the
     same seed and walk it in order, and splits fill validation first, so a
     1000-record sample draws exactly the records GEPA selected its prompt on.
-    Only the holdout split is untouched by training.
     """
     entities = _entities(4000)
     ground_truth = {(i, i + 1) for i in range(0, 4000, 2)}
     val_budget = get_split_sizes("dblp-acm").val_records
 
     sample = sample_records(entities, ground_truth, val_budget, seed=42)
-    val, _ = split_records("dblp-acm", entities, ground_truth, BENCHMARK_SPLIT_VAL, seed=42)
-    holdout, _ = split_records("dblp-acm", entities, ground_truth, BENCHMARK_SPLIT_HOLDOUT, seed=42)
 
-    assert _ids(sample.records) == _ids(val)
-    assert not _ids(sample.records) & _ids(holdout)
+    assert training_overlap("dblp-acm", sample.records, entities, ground_truth, seed=42) == 1.0
+
+
+def test_records_outside_train_and_val_report_no_overlap() -> None:
+    """The holdout split is the part training never saw, so it reports 0.0."""
+    entities = _entities(4000)
+    ground_truth = {(i, i + 1) for i in range(0, 4000, 2)}
+    sizes = get_split_sizes("dblp-acm")
+    splits = sample_random_splits(
+        entities,
+        ground_truth,
+        train_records=sizes.train_records,
+        val_records=sizes.val_records,
+        holdout_records=sizes.holdout_records,
+        seed=42,
+    )
+
+    overlap = training_overlap("dblp-acm", splits.holdout_records, entities, ground_truth, seed=42)
+
+    assert splits.holdout_records
+    assert overlap == 0.0
+
+
+def test_training_overlap_of_nothing_is_zero() -> None:
+    """An empty scored set cannot be contaminated."""
+    assert training_overlap("dblp-acm", [], _entities(100), set(), seed=42) == 0.0
 
 
 def test_split_sizes_are_2k_train_records_per_dataset() -> None:

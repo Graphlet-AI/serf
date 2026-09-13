@@ -17,13 +17,7 @@ from serf.dspy.dataset_signatures import (
     SIGNATURE_MODES,
 )
 from serf.eval.benchmarks import DATASET_REGISTRY
-from serf.eval.splits import (
-    BENCHMARK_SPLIT_SAMPLE,
-    BENCHMARK_SPLITS,
-    SplitSizes,
-    get_split_sizes,
-    split_records,
-)
+from serf.eval.splits import SplitSizes, get_split_sizes, training_overlap
 from serf.logs import get_logger, setup_logging
 from serf.match.run import entity_members, expand_pairs, merge_matched_entities
 from serf.tracking import setup_mlflow
@@ -1598,12 +1592,6 @@ def optimize(
     help="Random seed for record sampling (from config.yml optimize.seed)",
 )
 @click.option(
-    "--split",
-    type=click.Choice(list(BENCHMARK_SPLITS), case_sensitive=False),
-    default=BENCHMARK_SPLIT_SAMPLE,
-    help="Score a plain record sample, or the val or holdout split `serf train` partitions",
-)
-@click.option(
     "--blocking-strategy",
     type=click.Choice(["name", "json", "union"], case_sensitive=False),
     default=None,
@@ -1629,7 +1617,6 @@ def benchmark(
     signature_mode: str,
     sample_records: int | None,
     seed: int | None,
-    split: str,
     blocking_strategy: str | None,
     trained_prompts: bool,
 ) -> None:
@@ -1644,12 +1631,10 @@ def benchmark(
     With --trained-prompts it matches with the instructions `serf train` left in
     config.yml optimize.trained_dir, which requires per-dataset mode.
     With --sample-records the dataset is sampled by ground-truth match group, so
-    gold pairs survive, and metrics are scored against the surviving pairs.
-
-    --split holdout scores the records `serf train` reserved and never showed
-    GEPA. Pair it with --trained-prompts: a plain sample at the default seed and
-    size draws the same records as the validation split GEPA selected on, so a
-    trained prompt measured there is reading its own validation score.
+    gold pairs survive, and metrics are scored against the surviving pairs. A
+    sample at the default seed and size draws the same records as the validation
+    split `serf train` selects on, so --trained-prompts warns when the records
+    being scored are ones GEPA was allowed to see.
     """
     from serf.eval.benchmarks import BenchmarkDataset
 
@@ -1693,17 +1678,10 @@ def benchmark(
 
     seed = seed if seed is not None else int(serf_config.get("optimize.seed", 42))
 
-    if split != BENCHMARK_SPLIT_SAMPLE:
-        total = len(all_entities)
-        all_entities, split_gold = split_records(
-            dataset, all_entities, benchmark_data.ground_truth, split, seed=seed
-        )
-        benchmark_data.ground_truth = split_gold
-        click.echo(
-            f"  Split {split}: {len(all_entities)} of {total} records "
-            f"(seed {seed}) with {len(split_gold)} gold pairs inside it"
-        )
-    elif sample_records:
+    full_entities = all_entities
+    full_ground_truth = set(benchmark_data.ground_truth)
+
+    if sample_records:
         from serf.eval.sample import sample_records as sample_benchmark_records
 
         record_sample = sample_benchmark_records(
@@ -1718,6 +1696,14 @@ def benchmark(
             f"  Sampled {len(all_entities)} of {record_sample.total} records "
             f"(seed {seed}) with {record_sample.gold_pairs} gold pairs retained"
         )
+
+    if trained_prompts:
+        seen = training_overlap(dataset, all_entities, full_entities, full_ground_truth, seed=seed)
+        if seen:
+            click.echo(
+                f"  WARNING: {seen:.0%} of these records are in the splits `serf train` "
+                "optimized on, so this reports the score GEPA selected the prompt by"
+            )
 
     click.echo(f"  Total entities: {len(all_entities)}")
 
@@ -1801,7 +1787,6 @@ def benchmark(
                     "signature_mode": signature_mode,
                     "sample_records": sample_records,
                     "seed": seed,
-                    "split": split,
                     "trained_prompts": trained_prompts,
                     "max_iterations": max_iterations,
                     "iterations_run": iterations_run,

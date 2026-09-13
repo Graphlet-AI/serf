@@ -69,17 +69,14 @@ records, covering nearly the whole table, so train took 81 blocks / 4,909
 records and left **1 record for val and 0 for holdout**. Neither budget was
 honored and nothing failed. See rule 4 for what that did.
 
-**Live hazard, not yet fixed.** Fill order only protects val inside whatever
-total `_scaled_budgets` allows. When the requested budgets exceed the dataset it
-scales all three _proportionally_, so a dominant train budget still starves
-evaluation: `_scaled_budgets(4910, 200, 200, 10**9)` returns `(0, 0, 4909)`,
-reproducing the original failure through a different door. It is only latent
-because the configured budgets are of similar size — on Abt-Buy's 2,173 records
-the default 1000/1000/2000 request scales to `(543, 543, 1086)`. Read the
-"scaling budgets" warning the function logs, and check the per-split record and
-gold-pair counts before trusting a run. `sample_random_splits`'s own docstring
-asserts both "val is never starved" and proportional scaling; those two
-sentences contradict each other and the second one wins.
+**How it is enforced.** Writing this rule surfaced that fill order alone was
+not enough: `_scaled_budgets` used to scale all three budgets _proportionally_
+when they exceeded the dataset, so a dominant train budget still starved
+evaluation. `_scaled_budgets(4910, 200, 200, 10**9)` returned `(0, 0, 4909)` —
+the same 1-record-validation failure through a different door. It is now
+`_fit_budgets`, which pays each budget in full before the next one gets
+anything, in the order val, holdout, train. The shortfall always lands on
+train, because train is the split that can absorb it.
 
 ## 4. Prove the metric can discriminate before trusting a run
 

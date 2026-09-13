@@ -42,6 +42,107 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 | Linting/Formatting | **Ruff**                                        |
 | Type Checking      | **zuban** (mypy-compatible)                     |
 
+## The Resolved Record
+
+Resolution is the one pipeline stage allowed to delete rows, which makes a bug
+there look exactly like success: fewer records out than in is the point. So the
+record format is built around the question "is everything still reachable?"
+rather than around convenience.
+
+A merge produces a new entity, so it gets a **new id**, and every id it
+absorbed — including the ids its inputs had already absorbed — moves into
+`source_ids`. Nothing that went in is ever unreachable from what comes out.
+A record that matched nothing keeps its id and gains no lineage.
+
+Every field except `id` holds a **list**, ordered most complete first. A merged
+record can legitimately carry two states, and a scalar field would force a
+lossy choice at exactly the moment the data got richer. A consumer that wants
+one value takes the head and gets the fullest one rather than an arbitrary one.
+The idea is Senzing's — multi-valued features, explicit lineage — without its
+wire format.
+
+```python
+# in
+{"id": 1, "name": "Russell Jurney"}
+{"id": 2, "name": "Bob Dorf"}
+{"id": 3, "name": "Russell H Jurney", "source_ids": [5, 6], "state": "WA", "nation": "US"}
+{"id": 7, "name": "Russ Journey", "state": "CA"}
+
+# out
+{"id": 4, "name": ["Russell H Jurney"], "state": ["CA", "WA"], "nation": ["US"],
+ "source_ids": [1, 3, 5, 6, 7]}
+{"id": 2, "name": ["Bob Dorf"]}
+```
+
+Three things decide that output. The new id is the lowest integer no record and
+no lineage entry has claimed, so `4` rather than `8`. The three spellings of the
+name collapse because `name` is compared by similarity, and the fullest spelling
+survives. `CA` and `WA` both survive because they are two states, not two
+spellings of one.
+
+Which of those happens is decided by the **field type**, inferred by
+`serf.analyze.field_detection` or declared in a schema:
+
+| Type                                             | Values collapse when              |
+| ------------------------------------------------ | --------------------------------- |
+| `name`, `address`                                | they are similar enough           |
+| `identifier`, `url`, `email`, `phone`, `numeric` | they normalise to the same string |
+| `text`                                           | never                             |
+
+`text` is the exception that proves the rule: two descriptions of one company
+are two facts, not two spellings, so nothing merges them.
+
+### Declaring a schema
+
+Field detection guesses from values. A schema states what the values cannot
+show — that a column of two-letter codes is a jurisdiction rather than a name,
+that two part numbers differing in one character are different products. One
+schema drives the Pydantic classes that go into DSPy signatures, the field
+descriptions that reach the prompt, and the merge policy resolution applies.
+
+```yaml
+entity: Person
+fields:
+  - name: name
+    type: name
+    description: Full name, given name first. Sources abbreviate given names.
+    required: true
+  - name: state
+    type: address
+    description: Two-letter state code.
+    # Fuzzy matching two-letter codes would merge "CA" and "GA" on one
+    # character, so compare them exactly.
+    merge:
+      dedupe: exact
+  - name: bio
+    type: text
+    description: Freeform biography, never merged.
+```
+
+`serf schema schemas/person.yml` renders the policy each field resolves to, and
+`--merge records.json` resolves real records against it.
+
+### The matcher returns a partition
+
+The LLM is asked for the grouping, not for a list of pairwise verdicts — the
+contract Abzu uses. A pair list can contradict itself, saying a matches b and b
+matches c but a does not match c, and something downstream then has to decide
+what the model meant. A partition cannot. It also makes a dropped record
+visible: a record missing from every group is a hole in the cover, rather than
+an absent pair nobody was counting.
+
+Only ids cross the wire. Which value of a field the resolved record carries is
+decided afterwards from the field's type, so there is nothing for the model to
+copy wrongly — and the answer skeleton is smaller than the block, where the old
+pairwise contract had it copy every field of both records into every candidate.
+
+Three things can be wrong with the answer, and all three are repaired rather
+than reported: an invented id is discarded, an id named twice is kept where it
+was first named, and an id named nowhere comes back as its own group. On top of
+that, `serf benchmark` checks at the end of a run that every input record is
+still reachable from some output record, adds back any that are not, and reports
+the coverage it achieved.
+
 ## Quick Start
 
 ### Installation
@@ -139,10 +240,16 @@ serf benchmark --dataset amazon-google --blocking-strategy union \
   --sample-records 1000 --output data/results/
 
 # Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
-# Randomly samples 2000 train / 1000 val / 1000 holdout records, keeping
+# Randomly samples 1000 train / 200 val / 1000 holdout records, keeping
 # ground-truth match groups whole so gold pairs survive, then blocks within
 # each split to build the BlockMatch examples. Val is filled first.
 serf optimize --dataset dblp-acm --signature block-match
+
+# Show an entity schema, the merge policy each field resolves to, and the
+# Pydantic classes generated from it for DSPy signatures. With --merge, resolve
+# a partition of records so a policy can be checked before a run depends on it
+serf schema schemas/person.yml
+serf schema schemas/person.yml --merge records.json
 
 # Show the signatures and prompts matching actually sends, before any tuning.
 # A signature's docstring is its prompt, so this prints the instructions, the
@@ -152,8 +259,15 @@ serf prompts --output data/signatures.md
 
 # Optimize the per-dataset signature with GEPA, which is the prompt the
 # benchmark runs. `serf optimize` covers the shared BlockMatch, EntityMerge and
-# EdgeResolve signatures instead. Writes to optimize.trained_dir
+# EdgeResolve signatures instead. Writes to optimize.trained_dir.
+# Trains on 1000 records, selects on 200, then scores both the shipped prompt
+# and the one GEPA kept on 1000 held-out records GEPA never saw
 serf train --dataset dblp-acm --auto light
+
+# Override the record budgets, or skip the holdout pass to save the LLM calls
+serf train --dataset dblp-acm --train-records 1000 --val-records 200 \
+  --holdout-records 1000
+serf train --dataset dblp-acm --no-holdout
 
 # Then measure the trained prompt end to end, and read what GEPA wrote
 serf benchmark --dataset dblp-acm --signature-mode per-dataset --trained-prompts \

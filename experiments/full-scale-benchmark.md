@@ -21,17 +21,24 @@ Logs: `/opt/cursor/artifacts/full_<dataset>.log`.
 | abt-buy        |   2,173 |      1,097 |    0.9749 | 0.8861 | 0.9284 |  972 |  25 |         100.0000% |
 | walmart-amazon |  24,628 |        962 |    0.7098 | 0.8441 | 0.7711 |  812 | 332 |         100.0000% |
 | amazon-google  |   4,589 |      1,300 |    0.5611 | 0.7592 | 0.6453 |  886 | 693 |         100.0000% |
-| dblp-scholar   |  66,879 |      5,347 |         — |      — |      — |    — |   — |           running |
+| dblp-scholar   |  66,879 |      5,347 |    0.9374 | 0.8255 | 0.8779 | 4414 | 295 |         100.0000% |
 
-DBLP-Scholar is still running and is the one gap. It is the largest table by a
-factor of three, 2,268 blocks on the first iteration and 4,143 on the second,
-and the Vertex endpoint throttles at concurrency 20, so it is taking hours per
-iteration. Its first iteration predicted **10,646 pairs against 5,347 gold**
-and reduced 66,879 entities to 62,125, which is roughly twice as many pairs as
-there are true ones — the same over-merging the product tasks show, on the
-dataset whose sampled score was the second highest of the five. The interim
-signal therefore points the same way as the rest of the table rather than
-against it.
+DBLP-Scholar's row is **one iteration**, not three, so it is not directly
+comparable to the four above it. Its three-iteration run is re-running; the
+first attempt was abandoned partway through iteration two when the Vertex
+endpoint was throttling hard enough to project seventeen more hours. That was
+the wrong call — cloud spend on this project is a tenth of agent spend, so the
+run should have been left alone (`.cursor/rules/cost.mdc`). The throttle has
+since eased: a full-table iteration that took 48 minutes during the bad window
+completed in 204 seconds afterwards.
+
+An interim note here previously read DBLP-Scholar's 10,646 predicted pairs
+against 5,347 gold pairs as over-merging on the scale of the product tasks.
+That was wrong, and wrong in an avoidable way: predicted pairs are counted
+before the cross-source projection, and 10,646 raw pairs project to 4,709
+scored ones at 0.9374 precision. Comparing a pre-projection count to a gold
+count compares two different things, which is exactly what the "report the
+denominator you actually scored" rule exists to prevent.
 
 ## Answering the question: no, not yet
 

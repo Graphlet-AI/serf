@@ -125,6 +125,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 **NEVER use embedding cosine similarity for entity matching.** Embeddings are used ONLY for semantic blocking (FAISS clustering to group similar entities into blocks). ALL matching decisions MUST go through an LLM via DSPy BlockMatch signatures. Do not write embedding-based matching code, do not write cosine similarity thresholding for match decisions, do not create an "embedding mode" for matching. The only matching mode is LLM matching.
 
+### Cursor Tokens Cost 10x The Cloud Bill
+
+**Agent token spend on this project is roughly ten times the Google Cloud and Gemini spend.** The expensive resource is the agent's own reasoning and output, not the LLM calls a benchmark or GEPA run makes. So: run the experiment rather than deliberating about whether to run it, let long jobs run and check back rarely in large waits, batch tool calls, prefer the wider experiment over the ambiguous narrow one, and keep summaries terse. Never kill a long cloud job to save cloud time — that trades the expensive resource for the cheap one. The only reason to watch a long run is to catch a hang. Full guidance in @.cursor/rules/cost.mdc.
+
 ### Never Score On Data Training Touched
 
 **Report benchmark numbers on the holdout split only, and name the split next to every figure.** Selection counts as training: a prompt GEPA chose because it scored best on validation is fitted to validation. `serf benchmark` warns when the records it is about to score overlap the splits `serf train` used — treat that warning as a failed run. The full set of experimental guidelines, each with the incident in this repository that motivated it, is in @.cursor/rules/ml-experiments.mdc. Read it before designing an experiment, changing a metric, or publishing a number.

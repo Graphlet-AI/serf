@@ -81,28 +81,33 @@ recall and its candidate-set size stated alongside.
 
 ## Where SERF currently sits
 
-End-to-end resolution, 1,000-record sample at seed 42, three iterations,
-`gpt-oss-120b`, per-dataset signatures, **no training**, partition contract.
+Measured on the **complete tables**, not a sample: end-to-end resolution, three
+iterations, `gpt-oss-120b`, per-dataset signatures, no training, partition
+contract. Full breakdown in `full-scale-benchmark.md`.
 
-| Dataset        | SERF E2E | SC-Block E2E | Best PC-full | Note                                            |
-| -------------- | -------: | -----------: | -----------: | ----------------------------------------------- |
-| DBLP-ACM       |    99.26 |            — |        99.32 | saturated; no end-to-end figure published       |
-| DBLP-Scholar   |    96.65 |            — |        98.51 | SERF's sample is 1k of 66,879 records           |
-| Walmart-Amazon |    94.67 |         86.0 |        91.62 | SERF's sample is 1k of 24,628 records           |
-| Abt-Buy        |    93.18 |         92.9 |        95.15 | SERF's sample is 1k of 2,173, so nearly the set |
-| Amazon-Google  |    83.90 |         80.3 |        81.69 | hardest of the five for everyone                |
+| Dataset        | SERF full table | SC-Block E2E | Best PC-full | Gap to the nearest comparable                         |
+| -------------- | --------------: | -----------: | -----------: | ----------------------------------------------------- |
+| DBLP-ACM       |           97.86 |            — |        99.32 | -1.5 against pair classification, on a saturated task |
+| Abt-Buy        |           92.84 |         92.9 |        95.15 | level with the only published end-to-end result       |
+| Walmart-Amazon |           77.11 |         86.0 |        91.62 | -8.9 against end-to-end                               |
+| Amazon-Google  |           64.53 |         80.3 |        81.69 | -15.8 against end-to-end                              |
+| DBLP-Scholar   |     in progress |            — |        98.51 | —                                                     |
 
-Abt-Buy is the honest comparison: SERF's sample is nearly the whole table, and
-93.18 against SC-Block's 92.9 is a genuine like-for-like tie, with both about
-two points under the best pair-classification result.
+**SERF is not state of the art.** It ties the one genuine like-for-like
+comparison on Abt-Buy, sits 1.5 off a ceiling six years of work has crowded
+into a single point on DBLP-ACM, and is well behind on both product tasks. The
+gap is precision in both cases, not recall.
 
-The other two end-to-end comparisons flatter SERF and should be discounted.
-Walmart-Amazon and DBLP-Scholar are exactly where SERF's sample is the smallest
-fraction of the full table, and sampling by match group removes most of the
-non-matching records a full run has to reject. Ordering the datasets by how
-much of the table SERF actually saw puts the least trustworthy numbers at the
-top of the apparent-win list, which is the pattern to expect from a sampling
-artifact rather than from capability.
+An earlier version of this section carried 1,000-record samples and read
+99.26 / 96.65 / 94.67 / 93.18 / 83.90. It warned that the two rows where SERF
+read highest were the two whose samples were the smallest fraction of the
+table, and that was right as far as it went: Walmart-Amazon fell 0.176 on the
+full table. It was also incomplete, because Amazon-Google fell further, 0.194,
+from a sample the same size as DBLP-ACM's, which fell 0.014. Sample fraction is
+not the mechanism. Sampling by match group is: it keeps the true pairs and
+throws away most of the records that merely resemble them, so it removes the
+hard negatives, and a task decided by rejecting near-misses gets much easier
+while a task decided by an exact filter barely moves.
 
 ## What this says about the GEPA target
 

@@ -399,20 +399,28 @@ handed to the model and it labels each one. SERF does the whole task from the ra
 recall carries every pair blocking never proposed, which a pair classifier never pays for. One
 paper does publish genuine end-to-end pipelines, and that is the row worth reading:
 
-| Dataset        | SERF end-to-end | SC-Block end-to-end | Best pair classification, full test split |
+| Dataset        | SERF full table | SC-Block end-to-end | Best pair classification, full test split |
 | -------------- | --------------- | ------------------- | ----------------------------------------- |
-| DBLP-ACM       | **99.26**       | not published       | 99.32 (EM-Join)                           |
-| DBLP-Scholar   | **96.65**       | not published       | 98.51 (Jellyfish-13B)                     |
-| Walmart-Amazon | **94.67**       | 86.0                | 91.62 (Qwen3-4B cross-encoder)            |
-| Abt-Buy        | **93.18**       | 92.9                | 95.15 (Qwen3-8B cross-encoder)            |
-| Amazon-Google  | **83.90**       | 80.3                | 81.69 (Jellyfish-7B)                      |
+| DBLP-ACM       | **97.86**       | not published       | 99.32 (EM-Join)                           |
+| Abt-Buy        | **92.84**       | 92.9                | 95.15 (Qwen3-8B cross-encoder)            |
+| Walmart-Amazon | **77.11**       | 86.0                | 91.62 (Qwen3-4B cross-encoder)            |
+| Amazon-Google  | **64.53**       | 80.3                | 81.69 (Jellyfish-7B)                      |
+| DBLP-Scholar   | in progress     | not published       | 98.51 (Jellyfish-13B)                     |
 
-Abt-Buy is the honest comparison: SERF's 1,000-record sample is nearly the whole 2,173-record
-table, and 93.18 against SC-Block's 92.9 is a like-for-like tie with both about two points under
-the best pair-classification result. The Walmart-Amazon and DBLP-Scholar rows flatter SERF and
-should be discounted — those are exactly the datasets where its sample is the smallest fraction of
-the table, and sampling by match group removes most of the non-matching records a full run has to
-reject.
+**SERF is not state of the art.** It is level with the only published
+end-to-end pipeline on Abt-Buy (92.84 against SC-Block's 92.9), 1.5 points off a
+saturated DBLP-ACM, and clearly behind on the two product tasks — 8.9 points on
+Walmart-Amazon and 15.8 on Amazon-Google. The gap on both is precision, not
+recall: 0.5611 and 0.7098 precision against 0.7592 and 0.8441 recall. The
+matcher finds the true pairs and then adds too many wrong ones.
+
+Earlier revisions of this table reported 1,000-record samples, which overstated
+every dataset — by 0.003 on Abt-Buy and 0.194 on Amazon-Google. Sampling by
+ground-truth match group keeps the true pairs and discards most of the records
+that merely look like them, so it removes exactly the hard negatives the
+product tasks are scored on.
+[experiments/full-scale-benchmark.md](experiments/full-scale-benchmark.md) has
+the per-dataset breakdown.
 
 Two further cautions, both documented in
 [experiments/state-of-the-art.md](experiments/state-of-the-art.md) with sources. The widely-quoted

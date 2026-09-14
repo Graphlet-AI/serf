@@ -1811,13 +1811,25 @@ def benchmark(
             f"the '{selection.split}' split holds records `serf train` reads or selects on, "
             "so a score on it reports the fit rather than a result"
         )
-        if bool(serf_config.get("benchmarks.require_disjoint_eval", True)):
+        # Only a trained prompt can be reading its own fit back. The shipped
+        # signature was never optimized against these splits, so scoring it
+        # over all the data measures something real - and it is the only way to
+        # get a full-table number to compare against published results, which
+        # are not reported on a holdout of anybody's choosing.
+        if trained_prompts and bool(serf_config.get("benchmarks.require_disjoint_eval", True)):
             raise click.UsageError(
-                f"Refusing to evaluate on training data: {message}. Use --eval-split holdout, "
-                "or set benchmarks.require_disjoint_eval to false in config.yml to measure the "
-                "fit deliberately."
+                f"Refusing to evaluate a trained prompt on training data: {message}. Use "
+                "--eval-split holdout, or set benchmarks.require_disjoint_eval to false in "
+                "config.yml to measure the fit deliberately."
             )
-        click.echo(f"  WARNING: {message}")
+        if trained_prompts:
+            click.echo(f"  WARNING: {message}")
+        else:
+            click.echo(
+                f"  Note: scoring the shipped prompt over the '{selection.split}' split. "
+                "Nothing was optimized against it, though its instructions were written "
+                "against these benchmarks by hand."
+            )
 
     if not all_entities:
         raise click.UsageError(

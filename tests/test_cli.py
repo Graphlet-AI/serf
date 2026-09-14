@@ -399,16 +399,38 @@ def test_benchmark_help_documents_the_eval_split() -> None:
     assert "holdout" in result.output
 
 
-def test_benchmark_refuses_to_score_a_split_training_read() -> None:
+def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data() -> None:
     """Separation is enforced, not merely warned about."""
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["benchmark", "--dataset", "dblp-acm", "--eval-split", "val", "--limit", "1"],
+        [
+            "benchmark",
+            "--dataset",
+            "dblp-acm",
+            "--signature-mode",
+            "per-dataset",
+            "--trained-prompts",
+            "--eval-split",
+            "val",
+            "--limit",
+            "1",
+        ],
     )
     assert result.exit_code != 0
-    assert "Refusing to evaluate on training data" in result.output
+    assert "Refusing to evaluate a trained prompt on training data" in result.output
     assert "--eval-split holdout" in result.output
+
+
+def test_the_shipped_prompt_may_be_scored_over_all_the_data() -> None:
+    """Nothing was optimized against it, and a full-table number needs every record."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["benchmark", "--dataset", "dblp-acm", "--eval-split", "all", "--limit", "1"],
+    )
+    assert "Refusing to evaluate" not in result.output
+    assert "scoring the shipped prompt" in result.output
 
 
 def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -426,7 +448,18 @@ def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.Mo
     runner = CliRunner()
     result = runner.invoke(
         cli,
-        ["benchmark", "--dataset", "dblp-acm", "--eval-split", "val", "--limit", "1"],
+        [
+            "benchmark",
+            "--dataset",
+            "dblp-acm",
+            "--signature-mode",
+            "per-dataset",
+            "--trained-prompts",
+            "--eval-split",
+            "val",
+            "--limit",
+            "1",
+        ],
     )
-    assert "Refusing to evaluate on training data" not in result.output
+    assert "Refusing to evaluate" not in result.output
     assert "WARNING" in result.output

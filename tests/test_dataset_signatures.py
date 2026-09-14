@@ -1,5 +1,6 @@
 """Tests for the per-dataset DSPy signatures and their registry."""
 
+from pathlib import Path
 from typing import get_args, get_origin
 
 import dspy
@@ -282,3 +283,85 @@ def test_generic_block_match_signature_is_unchanged() -> None:
         "few_shot_examples",
     }
     assert set(BlockMatch.output_fields) == {"resolution"}
+
+
+def test_every_dataset_has_its_own_signature_class() -> None:
+    """Two datasets sharing a class would mean optimizing one rewrote the other."""
+    classes = [get_dataset_spec(name).signature for name in DATASETS]
+
+    assert len({id(cls) for cls in classes}) == len(DATASETS)
+    assert len({cls.instructions for cls in classes}) == len(DATASETS)
+
+
+def test_the_shared_block_rules_are_interpolated_not_referenced() -> None:
+    """Each docstring holds its own copy, so a rewrite cannot reach another dataset."""
+    texts = [get_dataset_spec(name).signature.instructions for name in DATASETS]
+
+    assert all("Return a partition of the block" in text for text in texts)
+    # Same fragment, different surrounding text: copies, not a shared object.
+    assert len(set(texts)) == len(texts)
+
+
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_building_a_predictor_does_not_mutate_the_signature_class(dataset: str) -> None:
+    """A mutated class would make a later run read trained text as "as written"."""
+    signature = get_dataset_spec(dataset).signature
+    before = signature.instructions
+
+    dspy.Predict(signature)
+
+    assert signature.instructions == before
+
+
+@pytest.mark.parametrize("dataset", DATASETS)
+def test_loading_a_trained_program_does_not_mutate_the_signature_class(
+    dataset: str, tmp_path: Path
+) -> None:
+    """Trained instructions belong to the predictor instance, never to the class."""
+    from serf.dspy.trained import load_trained_predictor, trained_program_path
+
+    signature = get_dataset_spec(dataset).signature
+    before = signature.instructions
+
+    trained = dspy.Predict(signature.with_instructions("Rewritten by GEPA for this dataset."))
+    path = trained_program_path(dataset, str(tmp_path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    trained.save(str(path))
+
+    loaded = load_trained_predictor(dataset, str(tmp_path))
+
+    assert loaded is not None
+    loaded_signature = loaded.signature
+    assert loaded_signature is not None
+    assert loaded_signature.instructions == "Rewritten by GEPA for this dataset."
+    assert signature.instructions == before, "the class kept the shipped instructions"
+
+
+def test_training_one_dataset_cannot_reach_another(tmp_path: Path) -> None:
+    """Load a trained program for one dataset; every other signature is untouched."""
+    from serf.dspy.trained import load_trained_predictor, trained_program_path
+
+    target = DATASETS[0]
+    others = {name: get_dataset_spec(name).signature.instructions for name in DATASETS[1:]}
+
+    signature = get_dataset_spec(target).signature
+    path = trained_program_path(target, str(tmp_path))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    dspy.Predict(signature.with_instructions("Only for this one dataset.")).save(str(path))
+    load_trained_predictor(target, str(tmp_path))
+
+    for name, instructions in others.items():
+        assert get_dataset_spec(name).signature.instructions == instructions, name
+
+
+def test_gepa_state_directories_are_disjoint_across_datasets() -> None:
+    """One shared directory let a run resume another dataset's candidate programs."""
+    from serf.dspy.train import run_log_dir
+
+    directories = {
+        name: run_log_dir(name, get_dataset_spec(name).signature.instructions) for name in DATASETS
+    }
+
+    assert len(set(directories.values())) == len(DATASETS)
+    for name, directory in directories.items():
+        assert f"/{name}/" in f"{directory}/"

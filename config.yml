@@ -3,6 +3,14 @@ logs:
     path: logs
 
 models:
+  # Per-request timeout, in seconds. A request with no timeout can wait
+  # forever, and one that does takes the whole run with it: a full
+  # DBLP-Scholar benchmark stalled for ten hours at zero CPU because a few
+  # in-flight calls never returned and the async gather they belonged to could
+  # not finish. LiteLLM retries a timeout, so a bounded wait costs a retry
+  # where an unbounded one costs the run.
+  request_timeout_seconds: 180
+
   # The blocking embedding. It won `serf blocking-sweep` over the five Leipzig
   # benchmarks against every candidate that fits 3B parameters and 1024
   # dimensions, and it does so at a sixth of the CPU of the large models, which

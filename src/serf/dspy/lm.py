@@ -195,6 +195,23 @@ def vertex_access_token() -> str:
     return str(credentials.token)
 
 
+def request_timeout() -> int:
+    """Return the per-request timeout in seconds.
+
+    A request with no timeout can wait forever, and one that does takes the
+    whole run with it: a full DBLP-Scholar benchmark stalled for ten hours at
+    zero CPU because a handful of in-flight calls never returned and the async
+    gather they belonged to could not finish. LiteLLM retries a timeout, so a
+    bounded wait costs a retry where an unbounded one costs the run.
+
+    Returns
+    -------
+    int
+        Seconds from ``models.request_timeout_seconds``
+    """
+    return int(config.get("models.request_timeout_seconds", 180))
+
+
 def create_lm(
     model: str | None = None,
     *,
@@ -372,6 +389,7 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
             api_key=vertex_access_token(),
             temperature=temperature,
             max_tokens=max_tokens,
+            timeout=request_timeout(),
         )
 
     credentials = service_account.Credentials.from_service_account_info(
@@ -387,6 +405,7 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
         api_base=api_base,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout=request_timeout(),
     )
     lm.refresh_token_if_needed()
     return lm
@@ -422,4 +441,5 @@ def _create_gemini_lm(model: str, *, temperature: float, max_tokens: int) -> dsp
         api_key=api_key,
         temperature=temperature,
         max_tokens=max_tokens,
+        timeout=request_timeout(),
     )

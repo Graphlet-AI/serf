@@ -322,3 +322,31 @@ def test_create_lm_student_raw_token_is_not_refreshable(monkeypatch: pytest.Monk
     lm = create_lm(role="student")
     assert not isinstance(lm, VertexRefreshingLM)
     assert lm.kwargs["api_key"] == "ya29.fake-access-token"
+
+
+def test_a_request_timeout_is_configured() -> None:
+    """An unbounded request can hang a whole run; a bounded one costs a retry."""
+    from serf.dspy.lm import request_timeout
+
+    assert request_timeout() == 180
+
+
+def test_every_lm_carries_the_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    """All three construction paths, because the one that misses it is the one that hangs."""
+    import dspy
+
+    from serf.dspy import lm as lm_module
+
+    captured: list[dict[str, Any]] = []
+
+    class _Recorder(dspy.LM):
+        def __init__(self, model: str, **kwargs: Any) -> None:
+            captured.append(kwargs)
+            super().__init__(model, **kwargs)
+
+    monkeypatch.setattr(lm_module.dspy, "LM", _Recorder)
+    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    lm_module._create_gemini_lm("gemini/gemini-3.5-flash-lite", temperature=0.0, max_tokens=64)
+
+    assert captured, "no LM was constructed"
+    assert all(kwargs.get("timeout") == 180 for kwargs in captured)

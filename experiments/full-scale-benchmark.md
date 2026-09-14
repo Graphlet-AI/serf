@@ -23,6 +23,16 @@ Logs: `/opt/cursor/artifacts/full_<dataset>.log`.
 | amazon-google  |   4,589 |      1,300 |    0.5611 | 0.7592 | 0.6453 |  886 | 693 |         100.0000% |
 | dblp-scholar   |  66,879 |      5,347 |         — |      — |      — |    — |   — |           running |
 
+DBLP-Scholar is still running and is the one gap. It is the largest table by a
+factor of three, 2,268 blocks on the first iteration and 4,143 on the second,
+and the Vertex endpoint throttles at concurrency 20, so it is taking hours per
+iteration. Its first iteration predicted **10,646 pairs against 5,347 gold**
+and reduced 66,879 entities to 62,125, which is roughly twice as many pairs as
+there are true ones — the same over-merging the product tasks show, on the
+dataset whose sampled score was the second highest of the five. The interim
+signal therefore points the same way as the rest of the table rather than
+against it.
+
 ## Answering the question: no, not yet
 
 | Dataset        | SERF full table | SC-Block end-to-end | Best pair classification, full split |                                         Verdict |

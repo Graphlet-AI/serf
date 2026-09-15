@@ -97,7 +97,7 @@ The concept of **Knowledge Graph Factories** ([blog post](https://blog.graphlet.
 | --------- | ------------------------- | --------------------------------- | ---------------------------------- | --------------------------- |
 | 2019-2022 | Deep Discovery / Graphlet | Sentence-transformers             | Embedding similarity + classifiers | Rule-based field resolution |
 | 2023-2025 | Abzu                      | FAISS IVF + sentence-transformers | Gemini via BAML (block-level)      | LLM-guided via BAML         |
-| 2026+     | **SERF**                  | FAISS IVF + Qwen3 embeddings      | DSPy agents + Gemini models        | DSPy-optimized LLM merging  |
+| 2026+     | **SERF**                  | FAISS IVF + BGE embeddings        | DSPy agents + Gemini models        | DSPy-optimized LLM merging  |
 
 ---
 
@@ -217,7 +217,7 @@ During implementation, fetch and reference the Abzu repository directly and map 
 | **Table Format**        | **Apache Iceberg**                                                                                                                                                                                                                        | ACID transactions, time travel for iteration tracking, schema evolution                                                                                                                                                                                               |
 | **LLM Framework**       | **DSPy 3.x** with `dspy.XMLAdapter` for structured outputs                                                                                                                                                                                | Programming-not-prompting, automatic optimization, Pydantic integration; `XMLAdapter` (not a BAML-styled adapter, decision #18) is native, tested DSPy code                                                                                                           |
 | **Prompt Optimization** | **`dspy.GEPA`** (reflective optimizer); **`dspy.Flex`** (secondary, experimental)                                                                                                                                                         | Reflection-driven instruction/code evolution against a feedback metric                                                                                                                                                                                                |
-| **Embeddings**          | **Qwen3-Embedding** via sentence-transformers                                                                                                                                                                                             | Top MTEB leaderboard, multilingual support                                                                                                                                                                                                                            |
+| **Embeddings**          | **`BAAI/bge-small-en-v1.5`** via sentence-transformers                                                                                                                                                                                    | Best blocking recall per unit of CPU across the five Leipzig benchmarks; blocking re-embeds every record each ER round, so a 33M-parameter model matters                                                                                                              |
 | **Vector Search**       | **FAISS IndexIVFFlat**                                                                                                                                                                                                                    | Fast approximate nearest neighbor for semantic blocking                                                                                                                                                                                                               |
 | **Graph Processing**    | **GraphFrames**                                                                                                                                                                                                                           | Connected components for transitive closure of match decisions                                                                                                                                                                                                        |
 | **LLM Models**          | **Gemini 3.5 Flash-Lite** (block-size calibration + general pipeline default), **Gemini 3.7 Flash** (limited validation/GEPA reflection), **`gpt-oss-120b-maas`** (primary paper-reported model + benchmark comparison, Sections 7.9/9.7) | Flash-Lite calibrates the operating block size cheaply, then hands off to open-weight `gpt-oss-120b-maas` for reproducible published results (decision #17); GA Flash for constrained quality workflows; open-weight OSS model chosen for the paper's reproducibility |
@@ -710,10 +710,11 @@ The agent has access to tools for each pipeline phase:
 ### 7.2 Phase 1: Semantic Blocking
 
 ```
-Raw Entities -> Embed (Qwen3) -> FAISS IVF Cluster -> Blocks
+Raw Entities -> Embed (BGE) -> FAISS IVF Cluster -> Blocks
 ```
 
-- Embed entity records using sentence-transformers (Qwen3 or multilingual-e5-base)
+- Embed entity records using sentence-transformers (`BAAI/bge-small-en-v1.5` by default), prefixing
+  each text with `models.embedding_prompt` because the bge and e5 families are trained with one
 - Cluster using FAISS `IndexIVFFlat` with configurable `target_block_size`
 - Auto-scale target_block_size by iteration (tighter in later rounds)
 - Subprocess isolation for PyTorch/FAISS to avoid memory conflicts

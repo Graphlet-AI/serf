@@ -173,11 +173,28 @@ class UUIDMapper:
             else:
                 restored_matches.append(m)
 
+        # Restore the partition, which is stated over the same mapped ints.
+        # A group that loses a member here would be a record dropped between
+        # the model's answer and the pipeline, so unmappable ids are kept as
+        # they are rather than silently discarded.
+        restored_groups: list[list[int]] = []
+        for group in resolution.groups:
+            members = [self._int_to_original.get(member, {}).get("id", member) for member in group]
+            restored_groups.append(sorted(members))
+        restored_groups.sort(key=min)
+
+        restored_recovered = sorted(
+            self._int_to_original.get(record_id, {}).get("id", record_id)
+            for record_id in resolution.recovered_ids
+        )
+
         return BlockResolution(
             block_key=resolution.block_key,
             matches=restored_matches,
+            groups=restored_groups,
             resolved_entities=restored,
             was_resolved=resolution.was_resolved,
             original_count=resolution.original_count,
             resolved_count=len(restored),
+            recovered_ids=restored_recovered,
         )

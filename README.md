@@ -20,7 +20,7 @@ DSPy ReAct agents dynamically orchestrate the entire pipeline, adjusting blockin
 
 ### Phase 1 — Semantic Blocking
 
-Clusters records using **Qwen3 sentence embeddings** and **FAISS IVF** to create efficient blocks for comparison. Auto-scales block size across iterations.
+Clusters records using **bge-small-en-v1.5 sentence embeddings** and **FAISS IVF** to create efficient blocks for comparison. Auto-scales block size across iterations. Records can be embedded as JSON with all field names inline instead of by name with `--blocking-strategy json`.
 
 ### Phase 2 — Schema Alignment, Matching and Merging
 
@@ -32,15 +32,151 @@ For knowledge graphs: deduplicate edges that result from merging nodes using LLM
 
 ## Architecture
 
-| Component          | Technology                                         |
-| ------------------ | -------------------------------------------------- |
-| Package Manager    | **uv**                                             |
-| Data Processing    | **PySpark 4.x**                                    |
-| LLM Framework      | **DSPy 3.x** with `XMLAdapter`                     |
-| Embeddings         | **multilingual-e5-base** via sentence-transformers |
-| Vector Search      | **FAISS IndexIVFFlat**                             |
-| Linting/Formatting | **Ruff**                                           |
-| Type Checking      | **zuban** (mypy-compatible)                        |
+| Component          | Technology                                      |
+| ------------------ | ----------------------------------------------- |
+| Package Manager    | **uv**                                          |
+| Data Processing    | **PySpark 4.x**                                 |
+| LLM Framework      | **DSPy 3.x** with `XMLAdapter`                  |
+| Embeddings         | **bge-small-en-v1.5** via sentence-transformers |
+| Vector Search      | **FAISS IndexIVFFlat**                          |
+| Linting/Formatting | **Ruff**                                        |
+| Type Checking      | **zuban** (mypy-compatible)                     |
+
+## The Resolved Record
+
+Resolution is the one pipeline stage allowed to delete rows, which makes a bug
+there look exactly like success: fewer records out than in is the point. So the
+record format is built around the question "is everything still reachable?"
+rather than around convenience.
+
+Identity is a **UUID** throughout. Integer identifiers exist in exactly one
+place: `UUIDMapper` renumbers a block's records 1..n before the LLM sees them,
+because small integers are cheap tokens a model copies back reliably, and maps
+them straight back afterwards. Outside that boundary an integer identifier is
+either a key belonging to some source system or a bug.
+
+A merge produces a new entity, so it gets a **minted uuid**, and every uuid it
+absorbed — including the ones its inputs had already absorbed — moves into
+`source_uuids`. Nothing that went in is ever unreachable from what comes out.
+A record that matched nothing keeps its uuid and gains no lineage. A minted
+uuid also cannot collide with a record the current process has not seen, which
+an integer minted from the ids in one block always could.
+
+Every field except `id` holds a **list**, ordered most complete first. A merged
+record can legitimately carry two states, and a scalar field would force a
+lossy choice at exactly the moment the data got richer. A consumer that wants
+one value takes the head and gets the fullest one rather than an arbitrary one.
+The idea is Senzing's — multi-valued features, explicit lineage — without its
+wire format.
+
+Abbreviating the uuids to make it readable:
+
+```python
+# in
+{"uuid": "A", "name": "Russell Jurney"}
+{"uuid": "B", "name": "Bob Dorf"}
+{"uuid": "C", "name": "Russell H Jurney", "source_uuids": ["E", "F"], "state": "WA", "nation": "US"}
+{"uuid": "D", "name": "Russ Journey", "state": "CA"}
+
+# out
+{"uuid": "<minted>", "name": ["Russell H Jurney"], "state": ["CA", "WA"], "nation": ["US"],
+ "source_uuids": ["A", "C", "D", "E", "F"]}
+{"uuid": "B", "name": ["Bob Dorf"]}
+```
+
+Two things decide the field values. The three spellings of the name collapse
+because `name` is compared by similarity, and the fullest spelling survives.
+`CA` and `WA` both survive because they are two states, not two spellings of
+one.
+
+Which of those happens is decided by the **field type**, inferred by
+`serf.analyze.field_detection` or declared in a schema:
+
+| Type                                             | Values collapse when              |
+| ------------------------------------------------ | --------------------------------- |
+| `name`, `address`                                | they are similar enough           |
+| `identifier`, `url`, `email`, `phone`, `numeric` | they normalise to the same string |
+| `text`                                           | never                             |
+
+`text` is the exception that proves the rule: two descriptions of one company
+are two facts, not two spellings, so nothing merges them.
+
+### Declaring a schema
+
+Field detection guesses from values. A schema states what the values cannot
+show — that a column of two-letter codes is a jurisdiction rather than a name,
+that two part numbers differing in one character are different products. One
+schema drives the Pydantic classes that go into DSPy signatures, the field
+descriptions that reach the prompt, and the merge policy resolution applies.
+
+```yaml
+entity: Person
+fields:
+  - name: name
+    type: name
+    description: Full name, given name first. Sources abbreviate given names.
+    required: true
+  - name: state
+    type: address
+    description: Two-letter state code.
+    # Fuzzy matching two-letter codes would merge "CA" and "GA" on one
+    # character, so compare them exactly.
+    merge:
+      dedupe: exact
+  - name: bio
+    type: text
+    description: Freeform biography, never merged.
+```
+
+`serf schema schemas/person.yml` renders the policy each field resolves to, and
+`--merge records.json` resolves real records against it.
+
+### The matcher returns a partition
+
+The LLM is asked for the grouping, not for a list of pairwise verdicts — the
+contract Abzu uses. A pair list can contradict itself, saying a matches b and b
+matches c but a does not match c, and something downstream then has to decide
+what the model meant. A partition cannot. It also makes a dropped record
+visible: a record missing from every group is a hole in the cover, rather than
+an absent pair nobody was counting.
+
+Only ids cross the wire. Which value of a field the resolved record carries is
+decided afterwards from the field's type, so there is nothing for the model to
+copy wrongly — and the answer skeleton is smaller than the block, where the old
+pairwise contract had it copy every field of both records into every candidate.
+
+Three things can be wrong with the answer, and all three are repaired rather
+than reported: an invented id is discarded, an id named twice is kept where it
+was first named, and an id named nowhere comes back as its own group. On top of
+that, `serf benchmark` checks at the end of a run that every input record is
+still reachable from some output record, adds back any that are not, and reports
+the coverage it achieved.
+
+### Training and evaluation data are separated by construction
+
+`sample_random_splits` draws three disjoint splits from one dataset: train,
+validation and holdout. `serf train` reads train and lets GEPA select on
+validation, so a score on either reads the fit back rather than measuring
+anything. `serf benchmark` therefore scores the **holdout** split by default,
+drawing the same partition from the same budgets and the same seed, so the
+records it scores are exactly the ones training reserved.
+
+Naming a split that training read is refused, not warned about:
+
+```console
+$ serf benchmark --dataset dblp-acm --eval-split val
+Error: Refusing to evaluate on training data: the 'val' split holds records
+`serf train` reads or selects on, so a score on it reports the fit rather than
+a result. Use --eval-split holdout, or set benchmarks.require_disjoint_eval to
+false in config.yml to measure the fit deliberately.
+```
+
+Measuring the fit is sometimes what you want — to see how far a prompt has been
+bent to its validation set, say — so `benchmarks.require_disjoint_eval: false`
+allows it, and the run then says so in its output. `serf train` closes the same
+loop from the other side: it ends by scoring both the shipped prompt and the one
+GEPA kept on the holdout, and that comparison, not the validation one GEPA
+selected on, decides whether it reports an improvement.
 
 ## Quick Start
 
@@ -71,10 +207,12 @@ docker compose --profile test up
 docker compose run serf analyze --input data/input.csv --output data/er_config.yml
 ```
 
-Set your API key in a `.env` file or export it:
+Set your API keys in a `.env` file or export them:
 
 ```bash
 echo "GEMINI_API_KEY=your-key" > .env
+echo "VERTEX_AI_TOKEN=your-vertex-token" >> .env
+echo "GOOGLE_CLOUD_PROJECT=your-gcp-project" >> .env
 ```
 
 ### System Requirements
@@ -98,8 +236,84 @@ serf match --input data/blocks/ --output data/matches/ --iteration 1
 serf eval --input data/matches/
 
 # Benchmark against standard datasets
+# (walmart-amazon, abt-buy, amazon-google, dblp-acm, dblp-scholar)
 serf download --dataset dblp-acm
 serf benchmark --dataset dblp-acm --output data/results/
+
+# Each run does er.max_iterations rounds (3 by default): every round re-blocks
+# the entities merged by the previous one, so records the first round of
+# blocking kept apart get another chance to meet. Override per run:
+serf benchmark --dataset dblp-acm --max-iterations 1 --output data/results/
+
+# Match with the typed signature written for one dataset instead of the shared
+# BlockMatch signature. Scores the holdout split: the records `serf train`
+# reserves and never reads, drawn from the same budgets and seed, so training
+# and evaluation data are separated by construction
+serf benchmark --dataset dblp-acm --signature-mode per-dataset \
+  --output data/results/
+
+# Scoring a split training read is refused, because the number would report the
+# fit rather than a result. Set benchmarks.require_disjoint_eval to false to
+# measure the fit on purpose
+serf benchmark --dataset dblp-acm --eval-split val   # Error: refusing to evaluate on training data
+
+# Exploratory analysis of the benchmark datasets, in Spark SQL and with no LLM
+# calls. Reports attribute discriminativeness, common values, how often each
+# attribute agrees on a true match against the hardest non-matches, and worked
+# examples of both. This is what BENCHMARKS.md is built from
+serf profile-benchmark --dataset abt-buy --output data/abt_buy_profile.md
+
+# Compare embedding models on blocking recall alone, no LLM calls and no cost.
+# Candidates default to benchmarks.embedding_candidates in config.yml
+serf blocking-sweep --dataset dblp-acm --output data/blocking_sweep.json
+
+# Sweep the large candidates instead, scoring name blocking, JSON blocking and
+# the union of the two, with the pair count each would hand the matcher
+serf blocking-sweep --candidate-set large --blocking-strategy all --sample 2000 \
+  --output data/blocking_sweep_large.json
+
+# Rank candidate embeddings by their published MTEB scores, and check which
+# category actually orders them the way measured blocking recall does
+serf mteb-rank --candidate-set all --sweep data/blocking_sweep_large.json
+
+# Block twice, on the name and on the whole record as JSON, and keep both sets
+# of blocks so a pair only has to be caught by one of them
+serf benchmark --dataset amazon-google --blocking-strategy union \
+  --sample-records 1000 --output data/results/
+
+# Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
+# Randomly samples 1000 train / 200 val / 1000 holdout records, keeping
+# ground-truth match groups whole so gold pairs survive, then blocks within
+# each split to build the BlockMatch examples. Val is filled first.
+serf optimize --dataset dblp-acm --signature block-match
+
+# Show an entity schema, the merge policy each field resolves to, and the
+# Pydantic classes generated from it for DSPy signatures. With --merge, resolve
+# a partition of records so a policy can be checked before a run depends on it
+serf schema schemas/person.yml
+serf schema schemas/person.yml --merge records.json
+
+# Show the signatures and prompts matching actually sends, before any tuning.
+# A signature's docstring is its prompt, so this prints the instructions, the
+# field list and the XML skeleton the answer has to fill. Makes no LLM call
+serf prompts --dataset abt-buy
+serf prompts --output data/signatures.md
+
+# Optimize the per-dataset signature with GEPA, which is the prompt the
+# benchmark runs. `serf optimize` covers the shared BlockMatch, EntityMerge and
+# EdgeResolve signatures instead. Writes to optimize.trained_dir.
+# Trains on 1000 records, selects on 200, then scores both the shipped prompt
+# and the one GEPA kept on 1000 held-out records GEPA never saw
+serf train --dataset dblp-acm --auto light
+
+# Override the record budgets, or skip the holdout pass to save the LLM calls
+serf train --dataset dblp-acm --train-records 1000 --val-records 200 \
+  --holdout-records 1000
+serf train --dataset dblp-acm --no-holdout
+
+# Then measure the trained prompt end to end, and read what GEPA wrote
+serf benchmark --dataset dblp-acm --signature-mode per-dataset --trained-prompts
+serf prompts --dataset dblp-acm --trained --instructions-only
 ```
 
 ### Python API
@@ -114,7 +328,7 @@ pipeline = SemanticBlockingPipeline(target_block_size=50)
 blocks, metrics = pipeline.run(entities)
 
 # Match
-matcher = EntityMatcher(model="gemini/gemini-3.5-flash-lite")
+matcher = EntityMatcher(model="openai/gpt-oss-120b-maas")
 resolutions = await matcher.resolve_blocks(blocks)
 
 # Evaluate
@@ -127,35 +341,365 @@ metrics = evaluate_resolution(predicted_pairs, ground_truth_pairs)
 import dspy
 from serf.dspy.signatures import BlockMatch
 
-lm = dspy.LM("gemini/gemini-3.5-flash-lite", api_key=GEMINI_API_KEY)
+from serf.dspy.lm import create_lm
+
+lm = create_lm(role="student")  # openai/gpt-oss-120b-maas via VERTEX_AI_TOKEN
 dspy.configure(lm=lm, adapter=dspy.XMLAdapter())
 
 matcher = dspy.ChainOfThought(BlockMatch)
 result = matcher(block_records=block_json, schema_info=schema, few_shot_examples=examples)
 ```
 
+### Per-Dataset Typed Signatures
+
+`BlockMatch` describes one anonymous `Entity` type and is shared by every dataset.
+Each benchmark match task also has its own signature with two typed side models,
+one per source, whose field descriptions come from the entity resolution
+literature for that task. Select them with `--signature-mode per-dataset`.
+
+```python
+from serf.dspy.dataset_signatures import get_dataset_spec
+from serf.match.dataset_matcher import DatasetMatcher
+
+spec = get_dataset_spec("walmart-amazon")  # WalmartProduct / AmazonElectronicsProduct
+resolutions = await DatasetMatcher("walmart-amazon").resolve_blocks(blocks)
+```
+
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Blocking uses multilingual-e5-base name-only embeddings + FAISS IVF. Matching uses Gemini 3.5 Flash-Lite via DSPy BlockMatch.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.5 Flash-Lite as the teacher/reflection LM for GEPA.
+
+What each of these datasets actually contains — its quirks, its common values, which attributes
+carry signal, and real examples of the match and mismatch patterns a prompt has to handle — is
+written up one page per dataset in [BENCHMARKS.md](BENCHMARKS.md), alongside the lessons from the
+two technical reports that defined them.
+
+These rows were measured with the former multilingual-e5-base default, before the FAISS cluster-count fix and before the XML adapter fix, so they understate what the current config reaches — see [Blocking Recall](#blocking-recall) for the gap and `experiments/embedding-blocking-sweep.md` for the measurements.
 
 | Dataset      | Domain        | Left  | Right | Matches | Precision | Recall | F1         |
 | ------------ | ------------- | ----- | ----- | ------- | --------- | ------ | ---------- |
 | **DBLP-ACM** | Bibliographic | 2,616 | 2,294 | 2,224   | 0.8849    | 0.5809 | **0.7014** |
 
-Blocking uses name-only embeddings for tighter semantic clusters. All matching decisions are made by the LLM — no embedding similarity thresholds.
+Blocking embeds the name alone by default, for tighter semantic clusters; `--blocking-strategy union`
+adds a second blocking over the whole record as JSON and keeps both. All matching decisions are made by
+the LLM — no embedding similarity thresholds.
+
+Every number below the full-table row is post-fix. Until recently `dspy.XMLAdapter` rejected 27 of every
+33 blocks over unescaped ampersands and XML's missing null literal, which sent them through DSPy's JSON
+fallback at double the inference cost and lost the ones the fallback also failed. The investigation and
+the before/after are in [experiments/xml-adapter-block-loss.md](experiments/xml-adapter-block-loss.md).
+
+### Against the Published Results
+
+SERF is a 1,000-record sample at seed 42, three ER iterations, `--signature-mode per-dataset`,
+`gpt-oss-120b` matching, no training, and the partition matcher contract.
+
+Almost every published figure on these datasets is **pair classification**: candidate pairs are
+handed to the model and it labels each one. SERF does the whole task from the raw tables, so its
+recall carries every pair blocking never proposed, which a pair classifier never pays for. One
+paper does publish genuine end-to-end pipelines, and that is the row worth reading:
+
+| Dataset        | SERF full table | SC-Block end-to-end | Best pair classification, full test split |
+| -------------- | --------------- | ------------------- | ----------------------------------------- |
+| DBLP-ACM       | **97.86**       | not published       | 99.32 (EM-Join)                           |
+| Abt-Buy        | **92.84**       | 92.9                | 95.15 (Qwen3-8B cross-encoder)            |
+| Walmart-Amazon | **77.11**       | 86.0                | 91.62 (Qwen3-4B cross-encoder)            |
+| Amazon-Google  | **64.53**       | 80.3                | 81.69 (Jellyfish-7B)                      |
+| DBLP-Scholar   | **88.91**       | not published       | 98.51 (Jellyfish-13B)                     |
+
+**SERF is not state of the art.** It is level with the only published
+end-to-end pipeline on Abt-Buy (92.84 against SC-Block's 92.9), 1.5 points off a
+saturated DBLP-ACM, and clearly behind on the two product tasks — 8.9 points on
+Walmart-Amazon and 15.8 on Amazon-Google. The gap on both is precision, not
+recall: 0.5611 and 0.7098 precision against 0.7592 and 0.8441 recall. The
+matcher finds the true pairs and then adds too many wrong ones.
+
+Earlier revisions of this table reported 1,000-record samples, which overstated
+every dataset — by 0.003 on Abt-Buy and 0.194 on Amazon-Google. Sampling by
+ground-truth match group keeps the true pairs and discards most of the records
+that merely look like them, so it removes exactly the hard negatives the
+product tasks are scored on.
+[experiments/full-scale-benchmark.md](experiments/full-scale-benchmark.md) has
+the per-dataset breakdown.
+
+Two further cautions, both documented in
+[experiments/state-of-the-art.md](experiments/state-of-the-art.md) with sources. The widely-quoted
+"SOTA" figures for Abt-Buy (95.78) and Amazon-Google (85.21) are measured on a **down-sampled**
+test split capped at 250 positives and 1,000 negatives, which inflates F1 by roughly four points,
+so they are not in the table above. And a harsher post-blocking protocol collapses the leaderboard
+ordering entirely: asked to pick a match from ten retrieved candidates rather than to label a
+curated pair file, Ditto falls from 86.76 to 57.75 on Walmart-Amazon.
+
+The row moved up from 90.38, which was measured with the shared `BlockMatch` signature before the
+per-dataset signatures existed. Two changes account for the difference and both are recorded
+elsewhere in this README: the typed per-dataset signatures rewritten from the `BENCHMARKS.md`
+profiling, and running the three ER iterations the pipeline is designed around. A single pass scores
+0.8413 on the same sample, because one matching pass can only pair records blocking already put
+together — which is also why single-pass blocking recall of 0.8912 is not the ceiling it looks like.
+Re-blocking the entities merged by the previous round gives separated records another chance to meet,
+and end-to-end recall here reaches 0.9114.
+
+### Blocking Recall
+
+Blocking recall is the share of ground-truth pairs whose two records land in the same block. Matching
+never sees the rest, so this is a hard ceiling on end-to-end recall. Measured with `serf blocking-sweep`
+on the full tables, one pass, `target_block_size: 30`. Full results and the two blocking bugs this
+uncovered are in [experiments/embedding-blocking-sweep.md](experiments/embedding-blocking-sweep.md).
+
+| Embedding                         | DBLP-ACM | DBLP-Scholar | Abt-Buy | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
+| --------------------------------- | -------- | ------------ | ------- | ------------- | -------------- | ---------- | ---------- |
+| **bge-small-en-v1.5** _(default)_ | 0.9654   | 0.9048       | 0.8952  | 0.6512        | 0.8545         | **0.8542** | **273**    |
+| gte-base                          | 0.9708   | 0.9211       | 0.8724  | 0.6821        | 0.8514         | 0.8595     | 661        |
+| gte-small                         | 0.9604   | 0.9233       | 0.8824  | 0.6410        | 0.8410         | 0.8496     | 228        |
+| bge-base-en-v1.5                  | 0.9856   | 0.9020       | 0.8569  | 0.6461        | 0.8545         | 0.8490     | 898        |
+| all-MiniLM-L6-v2                  | 0.9717   | 0.9205       | 0.8551  | 0.6435        | 0.7775         | 0.8337     | 133        |
+| all-mpnet-base-v2                 | 0.9793   | 0.9278       | 0.8323  | 0.6590        | 0.7391         | 0.8275     | 697        |
+| multilingual-e5-base _(former)_   | 0.9735   | 0.8898       | 0.8724  | 0.5047        | 0.8025         | 0.8086     | 718        |
+
+`gte-base` edges out the default by 0.005 mean recall for 2.4x the embedding time. Blocking re-embeds
+every record on every ER round, so the smaller model is the better default; set `models.embedding` to
+trade back.
+
+### Large Embeddings Do Not Pay
+
+Large candidates were chosen from MTEB(eng, v2) _clustering_ — the task category blocking appears to
+perform — among models within 3B parameters and 1,024 dimensions. Measured on 2,000-record samples
+per dataset, name-only blocking, one pass. Full protocol, the JSON results and the four large models
+that will not run on transformers 5.16 are in
+[experiments/low-high-embeddings-and-json-blocking.md](experiments/low-high-embeddings-and-json-blocking.md).
+
+| Embedding                         | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Walmart-Amazon | Amazon-Google | Mean       | Embed secs |
+| --------------------------------- | ---------- | ------------ | ---------- | -------------- | ------------- | ---------- | ---------- |
+| mxbai-embed-large-v1              | 0.9904     | **0.9744**   | **0.9001** | **0.9236**     | 0.6323        | **0.8842** | 291        |
+| **bge-small-en-v1.5** _(default)_ | 0.9745     | 0.9659       | 0.8912     | 0.8750         | **0.6756**    | 0.8765     | **47**     |
+| multilingual-e5-large-instruct    | **0.9947** | 0.9455       | 0.8952     | 0.9028         | 0.6143        | 0.8705     | 334        |
+| bge-large-en-v1.5                 | 0.9936     | 0.9489       | 0.8813     | 0.8750         | 0.6338        | 0.8665     | 324        |
+| F2LLM-0.6B                        | 0.9172     | 0.8944       | 0.7636     | 0.7708         | 0.5979        | 0.7888     | 183        |
+| Qwen3-Embedding-0.6B              | 0.9299     | 0.8739       | 0.7280     | 0.7847         | 0.6099        | 0.7853     | 186        |
+
+Going big does not buy blocking recall. Only one large model beats the 33M default, by 0.0077 for six
+times the CPU, and two finish below it. This is why there is one blocking embedding rather than a
+small and a large tier: the large one lost on the mean and cost six times the CPU to do it. A large
+model only leads on the bibliographic datasets, `bge-large-en-v1.5` by 0.019 on DBLP-ACM, which is
+not worth a second code path. Point `models.embedding` at another model to trade.
+
+### Which MTEB Category Predicts Blocking Recall
+
+Clustering was the wrong category to select candidates on, and this is now measured rather than
+suspected. `serf mteb-rank` reads published scores from the `mteb/results` dataset, averages the tasks
+in a category, and correlates that against measured blocking recall. Run over all thirteen candidates
+on one set of 2,000-record samples, so the MTEB rank and the measurement are compared on the same
+footing:
+
+| MTEB(eng, v2) category | Spearman, 13 models | Spearman, 18 models |
+| ---------------------- | ------------------- | ------------------- |
+| **PairClassification** | **+0.5714**         | **+0.5129**         |
+| STS                    | +0.0879             | +0.2322             |
+| Classification         | +0.0220             | +0.1208             |
+| Clustering             | +0.0165             | +0.0941             |
+| Reranking              | +0.0165             | +0.3044             |
+| Retrieval              | −0.0549             | +0.1662             |
+
+The 18-model column adds the candidates the matching category surfaced, below. PairClassification
+stays first and clustering stays last.
+
+Clustering carries no information about blocking recall at all. It would have ranked `F2LLM-0.6B` and
+`Qwen3-Embedding-0.6B` first and second of the thirteen; they measure last and second from last.
+PairClassification is the only category with signal, and the reason is that it is the matching
+category: SprintDuplicateQuestions, TwitterSemEval2015 and TwitterURLCorpus all ask whether two short
+texts denote the same thing, scored by average precision over cosine similarity, which is the entity
+matching decision. It ranks `F2LLM-0.6B` last, and its top pick is `mxbai-embed-large-v1`, the best
+large model measured.
+
+```bash
+serf mteb-rank --candidate-set all --sweep data/blocking_sweep.json
+```
+
+The measured table on those shared samples, best instruction prefix per model:
+
+| Embedding                         | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
+| --------------------------------- | ---------- | ------------ | ---------- | ------------- | -------------- | ---------- | ---------- |
+| gte-base                          | 0.9841     | **0.9779**   | **0.9179** | **0.7100**    | 0.9028         | **0.8985** | 86         |
+| mxbai-embed-large-v1              | 0.9904     | 0.9744       | 0.9001     | 0.6323        | **0.9236**     | 0.8842     | 294        |
+| gte-small                         | 0.9904     | 0.9370       | 0.9100     | 0.6697        | 0.9097         | 0.8834     | 44         |
+| bge-base-en-v1.5                  | 0.9841     | 0.9659       | 0.8853     | 0.6487        | 0.9097         | 0.8787     | 111        |
+| **bge-small-en-v1.5** _(default)_ | 0.9745     | 0.9659       | 0.8912     | 0.6756        | 0.8750         | 0.8765     | **47**     |
+| multilingual-e5-large-instruct    | **0.9947** | 0.9455       | 0.8952     | 0.6143        | 0.9028         | 0.8705     | 355        |
+| bge-large-en-v1.5                 | 0.9936     | 0.9489       | 0.8813     | 0.6338        | 0.8750         | 0.8665     | 315        |
+| all-mpnet-base-v2                 | 0.9915     | 0.9727       | 0.8853     | 0.6203        | 0.8403         | 0.8620     | 90         |
+| all-MiniLM-L6-v2                  | 0.9639     | 0.9574       | 0.8408     | 0.6173        | 0.8681         | 0.8495     | 34         |
+| multilingual-e5-base              | 0.9798     | 0.9727       | 0.8724     | 0.5546        | 0.8056         | 0.8370     | 200        |
+| multilingual-e5-small             | 0.9798     | 0.9455       | 0.8417     | 0.5725        | 0.7917         | 0.8262     | 54         |
+| F2LLM-0.6B                        | 0.9289     | 0.8910       | 0.7596     | 0.5859        | 0.7708         | 0.7873     | 188        |
+| Qwen3-Embedding-0.6B              | 0.9299     | 0.8705       | 0.7250     | 0.5755        | 0.7986         | 0.7799     | 207        |
+
+A correlation of 0.57 is worth selecting candidates on and is not worth trusting instead of measuring.
+PairClassification's own top pick finishes second, and the model that actually wins, `gte-base`, is
+only sixth on it. The ordering is not even stable across record sets: `gte-small` beats the default by
+0.0069 on these samples and loses to it by 0.0046 on the full tables. Use the matching category to
+choose what to sweep, then sweep it.
+
+### Selecting Candidates on the Matching Category
+
+Taking the top PairClassification scorers inside 3B parameters and 1,024 dimensions surfaces five
+models that the clustering ranking never did. Four of the five beat every clustering-selected large
+model, and the best of them sets a new ceiling on four of the five datasets:
+
+| Embedding                         | Selected on             | DBLP-ACM | DBLP-Scholar | Abt-Buy    | Amazon-Google | Walmart-Amazon | Mean       | Embed secs |
+| --------------------------------- | ----------------------- | -------- | ------------ | ---------- | ------------- | -------------- | ---------- | ---------- |
+| **GIST-large-Embedding-v0**       | **PairClassification**  | 0.9820   | **0.9813**   | 0.9149     | 0.7070        | **0.9306**     | **0.9031** | 250        |
+| gte-base                          | clustering-era sweep    | 0.9841   | 0.9779       | **0.9179** | 0.7100        | 0.9028         | 0.8985     | **86**     |
+| **b1ade-embed**                   | **PairClassification**  | 0.9904   | 0.9830       | 0.8872     | **0.7130**    | 0.9097         | 0.8967     | 245        |
+| **gte-modernbert-base**           | **PairClassification**  | 0.9830   | 0.9761       | 0.8912     | 0.6607        | **0.9306**     | 0.8883     | 111        |
+| **UAE-Large-V1**                  | **PairClassification**  | 0.9915   | 0.9710       | 0.8912     | 0.6741        | 0.9028         | 0.8861     | 248        |
+| mxbai-embed-large-v1              | clustering              | 0.9904   | 0.9744       | 0.9001     | 0.6323        | 0.9236         | 0.8842     | 294        |
+| **bge-small-en-v1.5** _(default)_ | clustering-era sweep    | 0.9745   | 0.9659       | 0.8912     | 0.6756        | 0.8750         | 0.8765     | 47         |
+| bge-large-en-v1.5                 | clustering              | 0.9936   | 0.9489       | 0.8813     | 0.6338        | 0.8750         | 0.8665     | 315        |
+| **ember-v1**                      | **PairClassification**  | 0.9915   | 0.9710       | 0.7953     | 0.6413        | 0.9028         | 0.8604     | 245        |
+| F2LLM-0.6B                        | clustering _(ranked 1)_ | 0.9289   | 0.8910       | 0.7596     | 0.5859        | 0.7708         | 0.7873     | 188        |
+
+`avsolatorio/GIST-large-Embedding-v0` beats `bge-large-en-v1.5` by 0.0366 mean blocking recall while
+embedding faster, 250s against 315s, making it the first large model to dominate that model on both
+axes. `ember-v1` is the counterexample that keeps the correlation honest: it outscores all of
+them on PairClassification at 87.37 and finishes below all of them, because it collapses on Abt-Buy.
+
+`KiteFishAI/Nano-Em1-0.6B-v2.1` leads PairClassification outright at 89.9 and could not be measured:
+it is an LLM-based embedder whose tokenizer ships no chat template, so `sentence-transformers` refuses
+to load it.
+
+### Name, JSON and the Union of Both
+
+`--blocking-strategy json` embeds every populated field as a JSON object with the field names inline
+instead of embedding the name alone. As a _replacement_ for name blocking it loses badly, by 0.34 on
+the mean with the default embedding, worst on DBLP-ACM where venue, year and authors are shared by
+thousands of papers and drown the title.
+
+That only rules it out as a replacement. `--blocking-strategy union` blocks both ways and keeps the
+blocks from each, so a pair only has to be caught by one view. It wins on all five datasets:
+
+| Strategy, bge-small-en-v1.5 | DBLP-ACM   | DBLP-Scholar | Abt-Buy    | Walmart-Amazon | Amazon-Google | Mean       |
+| --------------------------- | ---------- | ------------ | ---------- | -------------- | ------------- | ---------- |
+| name only _(default)_       | 0.9745     | 0.9659       | 0.8912     | 0.8750         | 0.6756        | 0.8765     |
+| json only                   | 0.2070     | 0.6065       | 0.6113     | 0.7917         | 0.4753        | 0.5384     |
+| **union**                   | **0.9766** | **0.9813**   | **0.9248** | **0.9792**     | **0.7803**    | **0.9284** |
+| union gain over name        | +0.0021    | +0.0154      | +0.0336    | **+0.1042**    | **+0.1047**   | +0.0520    |
+| pairs to judge, union/name  | 2.07x      | 1.88x        | 1.36x      | 1.71x          | 1.79x         | 1.76x      |
+
+The union costs 1.76x the pairs, and pairs are LLM calls, so this is recall bought with inference
+spend. It buys most where the name alone is weakest: Walmart-Amazon and Amazon-Google gain over 0.10
+each, while DBLP-ACM, where the title is nearly a key, gains 0.002 for twice the comparisons. The two
+views fail on different records, which is the whole reason the union works — JSON blocking on its own
+reaches 0.2070 on DBLP-ACM and still lifts it.
+
+On Amazon-Google, the dataset that has resisted every other change, the union sets a new ceiling:
+
+| Strategy                                   | Amazon-Google | Pairs to judge |
+| ------------------------------------------ | ------------- | -------------- |
+| **union** + multilingual-e5-large-instruct | **0.8251**    | 65,253         |
+| union + bge-small-en-v1.5 _(default)_      | 0.7803        | 74,112         |
+| union + bge-large-en-v1.5                  | 0.7638        | 70,938         |
+| json + multilingual-e5-large-instruct      | 0.7429        | 40,182         |
+| name + bge-small-en-v1.5 _(default)_       | 0.6756        | 41,337         |
+| name + bge-large-en-v1.5                   | 0.6338        | 43,601         |
+| name + multilingual-e5-large-instruct      | 0.6143        | 39,293         |
+
+That is +0.0822 over the previous best and +0.2108 over the same model on the name alone, for 1.66x
+the comparisons. Short, abbreviated product names that share a manufacturer token leave the name
+ambiguous, and the side fields carry signal it does not; keeping both views keeps both kinds of pair.
+The union stays off by default because the extra pairs are real money, but it is the setting to reach
+for on product data.
+
+End to end on Abt-Buy, 1,000-record sample at seed 42, three ER iterations, the ordering holds:
+
+| Embedding                         | Precision  | Recall     | F1         | Seconds |
+| --------------------------------- | ---------- | ---------- | ---------- | ------- |
+| **bge-small-en-v1.5** _(default)_ | 0.9204     | **0.8878** | **0.9038** | 410     |
+| bge-large-en-v1.5                 | **0.9265** | 0.8681     | 0.8963     | 508     |
+
+Matching cannot recover a pair blocking never proposed, so the model that blocks better finishes better.
+
+### Generic vs Per-Dataset Signatures
+
+Measured on 1,000-record samples per dataset drawn by ground-truth match group (seed 42), one ER
+iteration, identical blocking in both arms. These are sample runs, so they are not comparable to the
+full-table row above. Full protocol and cost in
+[experiments/per-dataset-signature-baseline.md](experiments/per-dataset-signature-baseline.md).
+
+| Dataset            | F1 `generic` | F1 `per-dataset` | Delta   |
+| ------------------ | ------------ | ---------------- | ------- |
+| **DBLP-ACM**       | 0.9077       | **0.9742**       | +0.0666 |
+| **DBLP-Scholar**   | 0.7491       | **0.8713**       | +0.1222 |
+| **Abt-Buy**        | 0.7574       | **0.8402**       | +0.0827 |
+| **Amazon-Google**  | 0.5000       | **0.6654**       | +0.1654 |
+| **Walmart-Amazon** | 0.7634       | **0.8905**       | +0.1272 |
+
+The typed signatures also improved precision on all five datasets and used less than half the tokens,
+because their output is the list of matched pairs rather than an echo of every entity in the block.
+
+### Profiling-Derived Prompts
+
+The per-dataset signatures above were written from the ER literature. The Spark SQL profiling in
+[BENCHMARKS.md](BENCHMARKS.md) later measured what actually separates matches from near misses, and
+it contradicts the literature in several places. Moving those findings into the signature docstrings
+and typed field descriptions raises mean F1 from 0.8648 to 0.8783 on the same samples.
+
+| Dataset            | F1 before  | F1 after   | Delta   | What the profiling changed                                |
+| ------------------ | ---------- | ---------- | ------- | --------------------------------------------------------- |
+| **Abt-Buy**        | 0.8038     | **0.8413** | +0.0375 | Model-code containment instead of equality                |
+| **DBLP-ACM**       | 0.9568     | **0.9788** | +0.0220 | Year equality instead of a year of slack; venue crosswalk |
+| **Amazon-Google**  | 0.7521     | **0.7619** | +0.0098 | Price as real evidence; expand Google's abbreviations     |
+| **DBLP-Scholar**   | **0.9192** | 0.9189     | -0.0003 | Prompt retained: every rewrite scored lower               |
+| **Walmart-Amazon** | **0.8921** | 0.8905     | -0.0016 | Prompt retained: every rewrite scored lower               |
+
+A measured agreement rate is not a licence to reject. Writing the rates in as hard rules first cost
+3.7 F1 points, almost all recall, because the attribute a finding turns on is often missing: Abt-Buy
+has no comparable price on 79.4% of its gold pairs, Amazon-Google no `manufacturer` on 82.2%, and
+Walmart-Amazon no usable `modelno` on 31.8%. Each finding is only adopted where it beat the prompt it
+replaced, and the two signatures that kept their original instructions say so in their docstrings.
+
+### How Many ER Iterations
+
+Each ER iteration re-blocks what the previous one merged, so later rounds can pair records that
+blocking never put together on the first pass. Same samples, same prompts, only the iteration count
+differs. Measured under the pairwise matcher contract, before the switch to partitions; the
+contract change moves mean F1 by -0.0037, which is inside the run-to-run noise, so the shape of
+this table stands. The per-dataset comparison of the two contracts is in
+[experiments/partition-vs-pairwise-contract.md](experiments/partition-vs-pairwise-contract.md).
+
+| Dataset            | F1 @1  | F1 @3      | Delta   | Recall @1 -> @3  | Precision @1 -> @3 |
+| ------------------ | ------ | ---------- | ------- | ---------------- | ------------------ |
+| **Amazon-Google**  | 0.7619 | **0.8655** | +0.1036 | 0.6493 -> 0.8580 | 0.9218 -> 0.8732   |
+| **Abt-Buy**        | 0.8413 | **0.9354** | +0.0941 | 0.7303 -> 0.9114 | 0.9920 -> 0.9606   |
+| **DBLP-Scholar**   | 0.9244 | **0.9793** | +0.0549 | 0.8594 -> 0.9594 | 1.0000 -> 1.0000   |
+| **Walmart-Amazon** | 0.8905 | **0.9412** | +0.0507 | 0.8133 -> 0.9600 | 0.9839 -> 0.9231   |
+| **DBLP-ACM**       | 0.9693 | **0.9737** | +0.0044 | 0.9622 -> 0.9727 | 0.9765 -> 0.9747   |
+| **mean**           | 0.8775 | **0.9390** | +0.0615 |                  |                    |
+
+Iteration wins on all five, worth +0.0615 mean F1. Recall rises everywhere; precision gives back
+between 0.0018 and 0.0608 on four of the five.
+
+An earlier version of this table reported the opposite, with DBLP-Scholar losing 0.4846 F1. That was
+a scoring bug, not a pipeline result. These benchmarks state a bipartite ground truth, built as
+`(a_id, b_id + RIGHT_ID_OFFSET)`, so they never say whether two left records or two right records
+are the same thing. Merging entities asserts exactly that, and those same-source pairs were being
+counted as false positives — on DBLP-Scholar, all 783 of its false positives were same-source and
+none was a real error. `BenchmarkDataset.evaluate` now resolves the predicted pairs into the
+clusters they imply and scores the cross-source pairs those clusters claim, so the result no longer
+depends on which pairs of a cluster the matcher happened to write down. Details in
+[experiments/per-dataset-signature-baseline.md](experiments/per-dataset-signature-baseline.md).
 
 ## Project Structure
 
 ```
 src/serf/
 ├── cli/             # Click CLI commands
-├── dspy/            # DSPy types, signatures, agents
+├── dspy/            # DSPy types, signatures, per-dataset schemas, agents
 ├── block/           # Semantic blocking (embeddings, FAISS, normalization)
 ├── match/           # UUID mapping, LLM matching, few-shot examples
 ├── merge/           # Field-level entity merging
 ├── edge/            # Edge resolution for knowledge graphs
-├── eval/            # Metrics, benchmark datasets
-├── analyze/         # Dataset profiling, field detection
+├── eval/            # Metrics, benchmark datasets, blocking and MTEB sweeps
+├── analyze/         # Dataset profiling, benchmark EDA, field detection
 ├── spark/           # PySpark schemas, utils, Iceberg, graph components
 ├── config.py        # Configuration management
 └── logs.py          # Logging
@@ -167,7 +711,8 @@ All configuration is centralized in `config.yml`:
 
 ```python
 from serf.config import config
-model = config.get("models.llm")  # "gemini/gemini-3.5-flash-lite"
+model = config.get("models.llm")  # "openai/gpt-oss-120b-maas"
+teacher = config.get("models.teacher")  # "gemini/gemini-3.5-flash-lite"
 block_size = config.get("er.blocking.target_block_size")  # 50
 ```
 
@@ -197,8 +742,9 @@ pre-commit run --all-files
 1. Jurney, R. (2024). "[The Rise of Semantic Entity Resolution](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/)." _Towards Data Science_.
 2. Khattab, O. et al. (2024). "DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines." _ICLR 2024_.
 3. Li, Y. et al. (2021). "Ditto: A Simple and Efficient Entity Matching Framework." _VLDB 2021_.
-4. Mudgal, S. et al. (2018). "Deep Learning for Entity Matching: A Design Space Exploration." _SIGMOD 2018_.
-5. Papadakis, G. et al. (2020). "Blocking and Filtering Techniques for Entity Resolution: A Survey." _ACM Computing Surveys_.
+4. Mudgal, S. et al. (2018). "Deep Learning for Entity Matching: A Design Space Exploration." _SIGMOD 2018_. Technical report in [docs/papers/deepmatcher-tr.md](docs/papers/deepmatcher-tr.md).
+5. Konda, P. et al. (2016). "Magellan: Toward Building Entity Matching Management Systems." _VLDB 2016_. Technical report in [docs/papers/magellan-tr.md](docs/papers/magellan-tr.md).
+6. Papadakis, G. et al. (2020). "Blocking and Filtering Techniques for Entity Resolution: A Survey." _ACM Computing Surveys_.
 
 ## License
 

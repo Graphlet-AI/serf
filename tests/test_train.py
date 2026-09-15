@@ -1,0 +1,467 @@
+"""Tests for GEPA training of the per-dataset matching prompts."""
+
+from pathlib import Path
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import dspy
+import pytest
+
+from serf.dspy.dataset_signatures import get_dataset_spec
+from serf.dspy.schemas.base import ResolvedEntity
+from serf.dspy.train import (
+    GOLD_PAIRS_FIELD,
+    MAX_ENUMERATED_ERRORS,
+    TrainResult,
+    _apply_cap,
+    _example_cap,
+    blocks_to_dataset_examples,
+    gold_pairs_in_block,
+    make_dataset_metric,
+    predicted_pairs,
+    run_log_dir,
+    train_dataset,
+)
+from serf.dspy.trained import (
+    load_trained_predictor,
+    predictor_instructions,
+    trained_instructions,
+    trained_program_path,
+)
+from serf.dspy.types import Entity, EntityBlock
+from serf.match.partition import partition_from_pairs
+
+SPEC = get_dataset_spec("dblp-acm")
+
+
+def _entity(record_id: int, side: str, title: str, year: int = 1996) -> Entity:
+    """Build a benchmark-shaped entity on one side of the join.
+
+    Parameters
+    ----------
+    record_id : int
+        Entity id
+    side : str
+        ``l`` or ``r``, the prefix the benchmark loader adds
+    title : str
+        Publication title
+    year : int
+        Publication year
+
+    Returns
+    -------
+    Entity
+        Entity whose attributes carry the prefixed source columns
+    """
+    return Entity(
+        id=record_id,
+        name=title,
+        attributes={
+            f"{side}_id": f"{side}{record_id}",
+            f"{side}_title": title,
+            f"{side}_authors": "A. Author",
+            f"{side}_venue": "VLDB",
+            f"{side}_year": year,
+        },
+    )
+
+
+def _block(entities: list[Entity], key: str = "block-0") -> EntityBlock:
+    """Wrap entities in a block.
+
+    Parameters
+    ----------
+    entities : list[Entity]
+        Entities in the block
+    key : str
+        Block key
+
+    Returns
+    -------
+    EntityBlock
+        Block holding those entities
+    """
+    return EntityBlock(block_key=key, entities=entities, block_size=len(entities))
+
+
+def _prediction(pairs: list[tuple[int, int]]) -> dspy.Prediction:
+    """Build a prediction carrying the partition those pairs imply.
+
+    The matcher returns groups, so a test that wants to assert a pair has to
+    hand over the group containing it.
+
+    Parameters
+    ----------
+    pairs : list[tuple[int, int]]
+        Record id pairs the partition should claim
+
+    Returns
+    -------
+    dspy.Prediction
+        Prediction shaped like the per-dataset signature's output
+    """
+    known = {record_id for pair in pairs for record_id in pair}
+    groups = partition_from_pairs(pairs, known)
+    return dspy.Prediction(
+        resolved=[ResolvedEntity(record_ids=group) for group in groups if len(group) > 1]
+    )
+
+
+def test_train_examples_are_uncapped_by_default() -> None:
+    """DSPy asks for as large a trainset as possible, and a larger one costs nothing.
+
+    Each GEPA step draws only ``reflection_minibatch_size`` examples from the
+    trainset, so capping it discards data without saving any metric calls.
+    """
+    assert _example_cap(None, "optimize.train_blocks") is None
+
+
+def test_validation_examples_are_capped_at_dspys_own_threshold() -> None:
+    """Below 35 GEPA already scores the whole valset every step."""
+    assert _example_cap(None, "optimize.val_blocks") == 35
+
+
+def test_a_cap_smaller_than_the_split_samples_rather_than_slices() -> None:
+    """Block order carries no meaning, so a head slice would drop a systematic part."""
+    examples = [dspy.Example(n=i) for i in range(40)]
+
+    kept = _apply_cap(examples, 10, 42, "val")
+
+    assert len(kept) == 10
+    assert kept != examples[:10]
+    assert all(example in examples for example in kept)
+
+
+def test_the_same_seed_reduces_the_same_way() -> None:
+    """A run has to be reproducible even when it is sampling."""
+    examples = [dspy.Example(n=i) for i in range(40)]
+
+    assert _apply_cap(examples, 10, 42, "val") == _apply_cap(examples, 10, 42, "val")
+
+
+def test_a_cap_at_or_above_the_split_keeps_every_example() -> None:
+    """Nothing is dropped, and nothing is reordered, when the cap does not bite."""
+    examples = [dspy.Example(n=i) for i in range(12)]
+
+    assert _apply_cap(examples, 35, 42, "val") == examples
+    assert _apply_cap(examples, None, 42, "val") == examples
+
+
+def test_gold_pairs_in_block_keeps_only_pairs_wholly_inside_the_block() -> None:
+    """A pair whose other half blocking put elsewhere is not learnable here."""
+    block = _block([_entity(1, "l", "A"), _entity(2, "r", "A")])
+    pairs = gold_pairs_in_block(block, {(1, 2), (1, 9), (7, 8)})
+    assert pairs == [[1, 2]]
+
+
+def test_examples_are_built_the_way_the_matcher_builds_a_call() -> None:
+    """Training inputs must be the typed sides, or the prompt shape would differ."""
+    block = _block([_entity(1, "l", "A"), _entity(2, "r", "A")])
+    examples = blocks_to_dataset_examples([block], {(1, 2)}, SPEC)
+    assert len(examples) == 1
+    example = examples[0]
+    assert set(example.inputs().keys()) == {SPEC.left_field, SPEC.right_field}
+    assert [type(r).__name__ for r in getattr(example, SPEC.left_field)] == [
+        SPEC.left_type.__name__
+    ]
+    assert [type(r).__name__ for r in getattr(example, SPEC.right_field)] == [
+        SPEC.right_type.__name__
+    ]
+    assert getattr(example, GOLD_PAIRS_FIELD) == [[1, 2]]
+
+
+def test_single_source_blocks_are_not_trainable() -> None:
+    """A block the matcher would skip cannot teach it anything."""
+    block = _block([_entity(1, "l", "A"), _entity(2, "l", "A")])
+    assert blocks_to_dataset_examples([block], {(1, 2)}, SPEC) == []
+
+
+def test_blocks_without_a_gold_pair_are_not_trainable() -> None:
+    """The best answer is the empty list, which every candidate prompt returns."""
+    block = _block([_entity(1, "l", "A"), _entity(2, "r", "B")])
+    assert blocks_to_dataset_examples([block], set(), SPEC) == []
+
+
+def test_predicted_pairs_reads_the_grouping_and_normalizes_order() -> None:
+    """Pairs come from the partition, smaller id first."""
+    assert predicted_pairs(_prediction([(4, 2)])) == {(2, 4)}
+    assert predicted_pairs(dspy.Prediction()) == set()
+
+
+def test_predicted_pairs_counts_the_pair_the_model_never_wrote_down() -> None:
+    """A group of three asserts three pairs, which is the point of a partition."""
+    prediction = dspy.Prediction(resolved=[ResolvedEntity(record_ids=[1, 2, 3])])
+
+    assert predicted_pairs(prediction) == {(1, 2), (1, 3), (2, 3)}
+
+
+def test_a_group_of_one_asserts_nothing() -> None:
+    prediction = dspy.Prediction(resolved=[ResolvedEntity(record_ids=[1])])
+
+    assert predicted_pairs(prediction) == set()
+
+
+def test_metric_scores_a_perfect_block_and_says_so() -> None:
+    """A correct block gets full marks and feedback that names no error."""
+    block = _block([_entity(1, "l", "A"), _entity(2, "r", "A")])
+    example = blocks_to_dataset_examples([block], {(1, 2)}, SPEC)[0]
+    result = make_dataset_metric(SPEC)(example, _prediction([(1, 2)]))
+    assert result["score"] == 1.0
+    assert "Correct" in result["feedback"]
+    assert "Missed" not in result["feedback"]
+
+
+def test_metric_enumerates_the_records_behind_every_error() -> None:
+    """GEPA can only write a rule about an error the reflection LM can see."""
+    block = _block([_entity(1, "l", "Mediator Languages"), _entity(2, "r", "Mediator languages")])
+    example = blocks_to_dataset_examples([block], {(1, 2)}, SPEC)[0]
+    result = make_dataset_metric(SPEC)(example, _prediction([]))
+    feedback = result["feedback"]
+    assert result["score"] == 0.0
+    assert "Missed 1 true pair(s)" in feedback
+    assert "(1, 2)" in feedback
+    assert "Mediator Languages" in feedback
+    assert "Mediator languages" in feedback
+
+
+def test_metric_separates_missed_pairs_from_invented_ones() -> None:
+    """Recall errors and precision errors need different instructions to fix."""
+    block = _block(
+        [
+            _entity(1, "l", "Left one"),
+            _entity(2, "r", "Right one"),
+            _entity(3, "r", "Right two"),
+        ]
+    )
+    example = blocks_to_dataset_examples([block], {(1, 2)}, SPEC)[0]
+    result = make_dataset_metric(SPEC)(example, _prediction([(1, 3)]))
+    feedback = result["feedback"]
+    assert result["score"] == 0.0
+    assert "ARE the same entity" in feedback
+    assert "are NOT matches" in feedback
+    assert "(1, 2)" in feedback
+    assert "(1, 3)" in feedback
+
+
+def test_metric_bounds_how_many_errors_it_enumerates() -> None:
+    """An unbounded error list would crowd the instructions out of the context."""
+    left = [_entity(index, "l", f"Left {index}") for index in range(1, 12)]
+    right = [_entity(index + 100, "r", f"Right {index}") for index in range(1, 12)]
+    gold = {(index, index + 100) for index in range(1, 12)}
+    example = blocks_to_dataset_examples([_block(left + right)], gold, SPEC)[0]
+    result = make_dataset_metric(SPEC)(example, _prediction([]))
+    feedback = result["feedback"]
+    assert feedback.count("Left ") == MAX_ENUMERATED_ERRORS
+    assert f"...and {len(gold) - MAX_ENUMERATED_ERRORS} more" in feedback
+
+
+def test_metric_rewards_an_empty_answer_on_a_block_with_no_true_pair() -> None:
+    """F1 is undefined on two empty sets; scoring it zero punishes the right answer."""
+    example = dspy.Example(
+        **{SPEC.left_field: [], SPEC.right_field: [], GOLD_PAIRS_FIELD: []}
+    ).with_inputs(SPEC.left_field, SPEC.right_field)
+    result = make_dataset_metric(SPEC)(example, _prediction([]))
+    assert result["score"] == 1.0
+    assert "no matching pair" in result["feedback"]
+
+
+def test_metric_binds_the_gepa_five_argument_protocol() -> None:
+    """GEPA inspects the metric signature and passes these names by keyword."""
+    import inspect
+
+    parameters = list(inspect.signature(make_dataset_metric(SPEC)).parameters)
+    assert parameters == ["gold", "pred", "trace", "pred_name", "pred_trace"]
+
+
+def test_trained_program_path_is_keyed_by_dataset(tmp_path: Path) -> None:
+    """One program per dataset, named so the matcher can find it without a flag."""
+    path = trained_program_path("abt-buy", str(tmp_path))
+    assert path == tmp_path / "abt-buy_gepa.json"
+
+
+def test_loading_a_missing_program_returns_none(tmp_path: Path) -> None:
+    """A dataset that was never trained matches with its signature as written."""
+    assert load_trained_predictor("abt-buy", str(tmp_path)) is None
+    assert trained_instructions("abt-buy", str(tmp_path)) is None
+
+
+def test_a_trained_program_round_trips_its_instructions(tmp_path: Path) -> None:
+    """What training saves is what matching loads, or the run is not reproducible."""
+    predictor = dspy.Predict(SPEC.signature)
+    predictor.signature = SPEC.signature.with_instructions("Trained instructions.")
+    predictor.save(str(trained_program_path("dblp-acm", str(tmp_path))))
+
+    loaded = load_trained_predictor("dblp-acm", str(tmp_path))
+    assert loaded is not None
+    assert predictor_instructions(loaded) == "Trained instructions."
+    signature = loaded.signature
+    assert signature is not None
+    assert list(signature.input_fields) == [SPEC.left_field, SPEC.right_field]
+    assert trained_instructions("dblp-acm", str(tmp_path)) == "Trained instructions."
+
+
+def test_train_dataset_uses_the_dataset_signature_and_saves_where_matching_looks(
+    tmp_path: Path,
+) -> None:
+    """Training has to optimize the signature that ships, not the generic one."""
+    entities = [_entity(1, "l", "Alpha"), _entity(2, "r", "Alpha")]
+    benchmark = MagicMock()
+    benchmark.to_entities.return_value = ([entities[0]], [entities[1]])
+    benchmark.ground_truth = {(1, 2)}
+
+    splits = MagicMock()
+    splits.train_records = entities
+    splits.val_records = entities
+    splits.holdout_records = []
+
+    optimized = dspy.Predict(SPEC.signature)
+    optimized.signature = SPEC.signature.with_instructions("Rewritten by GEPA.")
+    optimized.detailed_results = MagicMock(val_aggregate_scores=[0.5, 0.9], best_idx=1)
+
+    captured: dict[str, Any] = {}
+
+    def fake_optimize(module: Any, **kwargs: Any) -> Any:
+        captured["module"] = module
+        captured.update(kwargs)
+        return optimized
+
+    with (
+        patch("serf.dspy.train.BenchmarkDataset.download", return_value=benchmark),
+        patch("serf.dspy.train.sample_random_splits", return_value=splits),
+        patch("serf.dspy.train.SemanticBlockingPipeline") as blocker,
+        patch("serf.dspy.train.optimize_module", side_effect=fake_optimize),
+    ):
+        blocker.return_value.run.return_value = (
+            [_block(entities)],
+            MagicMock(),
+        )
+        result = train_dataset("dblp-acm", output_dir=str(tmp_path), score_holdout=False)
+
+    assert captured["module"].signature is SPEC.signature
+    assert captured["metric"].__qualname__.startswith("make_dataset_metric")
+    assert result.signature_name == SPEC.signature.__name__
+    assert result.train_examples == 1
+    assert result.val_examples == 1
+    assert result.baseline_score == 0.5
+    assert result.best_score == 0.9
+    assert result.improved is True
+    assert result.instructions_after == "Rewritten by GEPA."
+    assert Path(result.program_path) == trained_program_path("dblp-acm", str(tmp_path))
+    assert Path(result.program_path).exists()
+    assert result.holdout_score is None, "holdout scoring was switched off"
+
+
+def test_a_validation_gain_that_does_not_show_on_holdout_is_not_an_improvement() -> None:
+    """GEPA selected on validation, so a gain there is partly the selection showing through."""
+    result = TrainResult(
+        dataset="dblp-acm",
+        signature_name="DblpAcmBlockMatch",
+        program_path="",
+        train_examples=1,
+        val_examples=1,
+        baseline_score=0.5,
+        best_score=0.9,
+        instructions_before="",
+        instructions_after="",
+        holdout_examples=1,
+        holdout_baseline_score=0.8,
+        holdout_score=0.8,
+    )
+
+    assert result.improved is False
+
+
+def test_holdout_decides_improvement_when_it_was_measured() -> None:
+    result = TrainResult(
+        dataset="dblp-acm",
+        signature_name="DblpAcmBlockMatch",
+        program_path="",
+        train_examples=1,
+        val_examples=1,
+        baseline_score=0.9,
+        best_score=0.5,
+        instructions_before="",
+        instructions_after="",
+        holdout_examples=1,
+        holdout_baseline_score=0.7,
+        holdout_score=0.8,
+    )
+
+    assert result.improved is True
+
+
+def test_without_a_holdout_score_improvement_falls_back_to_validation() -> None:
+    result = TrainResult(
+        dataset="dblp-acm",
+        signature_name="DblpAcmBlockMatch",
+        program_path="",
+        train_examples=1,
+        val_examples=1,
+        baseline_score=0.5,
+        best_score=0.9,
+        instructions_before="",
+        instructions_after="",
+    )
+
+    assert result.improved is True
+
+
+def test_train_dataset_refuses_to_train_on_nothing(tmp_path: Path) -> None:
+    """A run with no usable block would report a score it never measured."""
+    entities = [_entity(1, "l", "Alpha"), _entity(2, "l", "Alpha")]
+    benchmark = MagicMock()
+    benchmark.to_entities.return_value = (entities, [])
+    benchmark.ground_truth = {(1, 2)}
+    splits = MagicMock(train_records=entities, val_records=entities)
+
+    with (
+        patch("serf.dspy.train.BenchmarkDataset.download", return_value=benchmark),
+        patch("serf.dspy.train.sample_random_splits", return_value=splits),
+        patch("serf.dspy.train.SemanticBlockingPipeline") as blocker,
+    ):
+        blocker.return_value.run.return_value = ([_block(entities)], MagicMock())
+        with pytest.raises(ValueError, match="No trainable blocks"):
+            train_dataset("dblp-acm", output_dir=str(tmp_path))
+
+
+def test_train_result_reports_no_improvement_when_gepa_did_not_find_one() -> None:
+    """A trained prompt that lost on validation must not look like a win."""
+    from serf.dspy.train import TrainResult
+
+    result = TrainResult(
+        dataset="abt-buy",
+        signature_name="AbtBuyBlockMatch",
+        program_path="x.json",
+        train_examples=10,
+        val_examples=5,
+        baseline_score=0.9,
+        best_score=0.9,
+        instructions_before="a",
+        instructions_after="b",
+    )
+    assert result.improved is False
+
+
+def test_each_dataset_and_prompt_gets_its_own_gepa_state_directory() -> None:
+    """GEPA resumes from its log dir, so a shared one inherits the wrong candidates."""
+    a = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs")
+    b = run_log_dir("abt-buy", "instructions A", log_dir="/tmp/logs")
+    c = run_log_dir("dblp-acm", "instructions B", log_dir="/tmp/logs")
+
+    assert a != b, "two datasets must not share state"
+    assert a != c, "a rewritten prompt must not resume the old prompt's candidates"
+    assert a.startswith("/tmp/logs/dblp-acm/")
+
+
+def test_the_same_dataset_and_prompt_resumes_the_same_directory() -> None:
+    """The useful half of resuming: an interrupted run of one prompt picks up again."""
+    assert run_log_dir("dblp-acm", "same", log_dir="/tmp/logs") == run_log_dir(
+        "dblp-acm", "same", log_dir="/tmp/logs"
+    )
+
+
+def test_the_state_directory_root_comes_from_config_by_default() -> None:
+    from serf.config import config
+
+    root = str(config.get("optimize.log_dir"))
+    assert run_log_dir("dblp-acm", "x").startswith(root)

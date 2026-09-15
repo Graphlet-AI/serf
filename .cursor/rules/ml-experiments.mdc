@@ -1,0 +1,227 @@
+---
+description: Experimental hygiene for machine learning work in SERF - split discipline, metric validity, and what a reported number has to mean
+alwaysApply: true
+---
+
+# Experimental guidelines
+
+Every rule below is here because breaking it already produced a wrong number in
+this repository, and the wrong number was published before anyone noticed. None
+of them are hypothetical. The incident is cited so the rule can be argued with
+rather than obeyed blindly.
+
+The habit these add up to: a measurement is a claim about data the system has
+never been fitted to, produced by a metric that can tell good from bad, over the
+universe the ground truth can actually speak about. Anything less is a
+description of the fit, not a result.
+
+## 1. Never score on data that training touched
+
+Training here means anything that consumed the labels: gradient steps, GEPA
+rollouts, prompt selection, threshold tuning, or a human reading the errors and
+editing a signature. Selection is training. A prompt chosen because it scored
+best on a split is fitted to that split.
+
+- Score on the holdout split and nothing else. `sample_random_splits` reserves
+  one for exactly this purpose.
+- State the split next to every number. "F1 0.9906" is not a result;
+  "F1 0.9906 on holdout" is.
+- If you must report a validation number, label it as one in the same sentence.
+
+**The incident.** `serf benchmark --sample-records 1000 --seed 42` drew
+_precisely_ GEPA's validation split. `sample_records` and
+`sample_random_splits` both shuffle the same entity list with
+`random.Random(seed)` and walk it pulling whole match groups, and splits fill
+validation first. Measured overlap was 100% on all five datasets and 0% with
+train. Every trained-versus-untrained comparison taken that way reports the
+score GEPA selected the prompt by. `training_overlap` now computes this share
+and `serf benchmark` warns when it is nonzero — treat that warning as a failed
+run, not a note.
+
+**How it is enforced.** `serf benchmark` scores the holdout split by default,
+drawing the same partition from the same budgets and seed that `serf train`
+uses, so the records it scores are the ones training reserved. Naming a split
+training read is refused outright rather than warned about, unless
+`benchmarks.require_disjoint_eval` is turned off to measure the fit on purpose.
+`serf train` ends by scoring both prompts on the holdout, and that comparison
+decides whether it reports an improvement.
+
+Figures published before this landed are validation scores, including the
+0.9906-versus-0.9737 DBLP-ACM comparison, and are labelled as such wherever
+they appear.
+
+## 2. Two independent draws need two independent seeds
+
+Reusing one seed across two sampling functions does not give you two samples. It
+gives you correlated samples, and if the functions walk the same list the same
+way, it gives you the same sample. That is the whole mechanism of the incident
+above: `optimize.seed: 42` and `--seed 42` were never meant to coincide.
+
+Derive per-purpose seeds (`seed + offset`, or a named namespace) rather than
+threading one integer everywhere, and verify disjointness by id rather than
+assuming it.
+
+## 3. Reserve the evaluation budget before the training budget
+
+Fill validation and holdout first, then give training whatever is left.
+Training data is the thing you have too much of; evaluation data is the thing
+that silently rounds to nothing. `sample_random_splits` fills val, then
+holdout, then train for this reason.
+
+**The incident.** The older `sample_blocked_splits` took train blocks first, up
+to `train_blocks=1000`, and drew val and holdout from whatever was left.
+Blocking DBLP-ACM's 4,910 records produced only 82 blocks averaging ~60
+records, covering nearly the whole table, so train took 81 blocks / 4,909
+records and left **1 record for val and 0 for holdout**. Neither budget was
+honored and nothing failed. See rule 4 for what that did.
+
+**How it is enforced.** Writing this rule surfaced that fill order alone was
+not enough: `_scaled_budgets` used to scale all three budgets _proportionally_
+when they exceeded the dataset, so a dominant train budget still starved
+evaluation. `_scaled_budgets(4910, 200, 200, 10**9)` returned `(0, 0, 4909)` —
+the same 1-record-validation failure through a different door. It is now
+`_fit_budgets`, which pays each budget in full before the next one gets
+anything, in the order val, holdout, train. The shortfall always lands on
+train, because train is the split that can absorb it.
+
+## 4. Prove the metric can discriminate before trusting a run
+
+Before reading any result, confirm the metric separates a known-good
+configuration from a known-bad one on the data you are about to use. A metric
+that returns the same value for everything does not fail loudly; it returns a
+number and the run exits 0.
+
+- Check that the split contains scoreable positives at all.
+  `sample_random_splits` logs a warning when a split holds no gold pairs.
+- Check that at least two candidates got different scores. Identical scores mean
+  the selection was arbitrary.
+
+**The incident.** The starved val split from rule 3 was packed into synthetic
+blocks of _random_ leftover records, which contain essentially no true duplicate
+pairs, so pair-level F1 read 0.0 no matter how good the prompt was. GEPA
+proposed 9 candidates, all scored exactly 0.0, and it returned candidate 0 —
+the _unoptimized_ instructions — as the winner. The run reported success and
+the result was nearly published as an optimized-versus-baseline comparison.
+
+## 5. Score over the universe the ground truth can state
+
+A gold standard is defined over a restricted set of claims. Scoring a
+prediction that falls outside that set counts the metric's blind spot as a model
+error.
+
+**The incident.** SERF's benchmark gold is bipartite: pairs are
+`(a_id, b_id + RIGHT_ID_OFFSET)`, so it can never assert that two left records
+or two right records match. `evaluate_resolution` computed
+`fp = len(pred) - tp` with no source filter, making every same-source pair an
+automatic false positive. On DBLP-Scholar all **783** false positives were
+same-source and **zero** were genuine cross-source errors. That produced a
+published 0.4846 F1 "collapse" from transitive closure that never happened. The
+correct move was to score only the cross-source projection, not to stop the
+matcher from merging same-source records — those merges were right.
+
+## 6. Score the system's output, not its log of intermediate assertions
+
+Convert predictions into the structure the system actually claims, then score
+that. Scoring the raw intermediate artifact makes the result depend on
+bookkeeping the model had no opinion about.
+
+**The incident.** A matcher emitting pairs is asserting a partition: a-b plus
+b-c says a, b and c are one entity. `collect_pairs` flattened each resolved
+entity into master-to-source pairs only, so a group spanning 2 left and 2 right
+records emitted 3 pairs while asserting 6 — dropping 2 genuine cross-source
+pairs as false negatives. `connected_components` now recovers the partition
+before scoring. Recovering it raised mean F1 from 0.8775 to 0.9390 with no
+change to the matcher.
+
+## 7. Never compare numbers produced by different scorers
+
+A scoring change invalidates every number measured before it. Re-measure both
+sides or report neither.
+
+**The incident.** A trained prompt read F1 0.9874 and an untrained one 0.9737,
+and the gap was presented as the effect of training. The trained run predated
+two scoring fixes by hours. Re-measured under the same scorer the trained run
+read 0.9906. Before trusting any historical figure, compare the run's timestamp
+against `git log` for the metric code — `git log -S` on the metric name finds
+when a figure was produced.
+
+## 8. Measure run-to-run variance before believing an effect
+
+An effect smaller than the noise is not an effect. Get the noise floor by
+rerunning one identical configuration, and report effects against it.
+
+**The incident.** DBLP-ACM's one-iteration F1 read 0.9788 in one arm and 0.9693
+in another on identical prompts and samples — about 0.01 of drift from LLM
+nondeterminism alone. The iteration effects (0.05–0.10) clear that; the
+per-dataset signature effect (+0.0135 mean) barely does, which is why it is
+reported as a mean over five datasets rather than as a win on any one.
+
+## 9. Subsample by sampling, never by slicing
+
+Taking the first N of anything inherits whatever order the producer happened to
+emit, and that order is rarely random. Blocking emits blocks by cluster, so
+head-slicing drops a systematic rather than a representative part of a split.
+Use `random.Random(seed).sample(...)` and log the seed. `_apply_cap` in
+`serf.dspy.train` does this.
+
+## 10. Do not shrink evaluation data for a cost you have not measured
+
+Check what the cost actually scales with before trading measurement fidelity for
+it.
+
+**The incident.** `optimize.val_blocks` capped validation at 20 examples to save
+budget. But dspy's `GEPA.auto_budget` derives its trial count from the candidate
+count alone — `num_trials = max(2 * (num_preds * 2) * log2(num_candidates),
+1.5 * num_candidates)` — and valset size enters only as linear full-evaluation
+terms. At `auto=light` the cap saved 10% of rollouts — 460 against 512 — while
+it discarded 13 of 33 validation
+examples and coarsening Pareto selection to 5% granularity. Train is now
+uncapped (dspy asks for "as large a trainset as possible", and each step draws
+only `reflection_minibatch_size` from it regardless of size) and val sits at 35,
+dspy's own threshold below which it already evaluates the full valset every
+step.
+
+## 11. Report the denominator you actually scored
+
+If the metric filters, projects, or deduplicates predictions, publish both the
+raw and the scored count. A reader comparing "predicted pairs" against
+precision, unaware that two thirds were dropped as unscoreable, will draw a
+conclusion neither number supports. `serf benchmark` prints Predicted Pairs and
+Scored Pairs side by side because the gap between them is where rule 5 hid.
+
+## 12. Decompose before explaining
+
+When a result surprises you, split it before theorizing. Precision against
+recall, false positives by category, errors by dataset. The 0.4846 "collapse"
+survived because it was explained (closure amplification — plausible, wrong)
+instead of decomposed. One query bucketing false positives by source pair ended
+it.
+
+## 13. Make long runs fail loudly
+
+A long run that half-fails is worse than one that crashes, because it produces a
+complete-looking result. Refresh credentials rather than minting one static
+token, and treat scoreable-zero results as suspect until you have read the log.
+
+**The incident.** A Vertex access token was minted once and passed to `dspy.LM`
+as a static `api_key`. It expired about an hour into the run, and the last
+**215** rollouts — roughly a quarter of the budget — were each scored as a
+spurious zero and fed to GEPA as evidence. Separately, 257 responses were
+silently truncated at `max_tokens` and discarded as unparseable.
+
+## 14. Keep external comparisons like-for-like
+
+Before putting a number beside a published one, confirm both measure the same
+task. SERF runs end-to-end resolution — blocking, matching, merging, closure —
+while most benchmark leaderboard entries score pair classification over
+pre-supplied candidate pairs. Those are not the same number, and the difference
+favors whichever system was handed its candidates. State the task alongside the
+figure.
+
+## 15. Every number needs a command, a seed, and an artifact
+
+A result you cannot regenerate is an anecdote. Record the exact command, the
+seed, the commit, and the path to the run log next to the figure — that is what
+`experiments/*.md` is for. Contradicting a published table later requires
+knowing precisely how it was produced; the fixes in rules 5, 6 and 7 were only
+possible because the original runs were reproducible.

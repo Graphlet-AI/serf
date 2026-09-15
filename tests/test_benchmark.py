@@ -4,8 +4,10 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner, Result
 
-from serf.cli.main import _benchmark_llm_matching, cli
+from serf.cli.main import _benchmark_llm_matching, cli, serf_config
 from serf.dspy.types import BlockResolution, Entity, MatchDecision
+
+_REAL_CONFIG_GET = serf_config.get
 
 
 def _make_entities(n: int, id_offset: int = 0) -> list[Entity]:
@@ -72,8 +74,35 @@ def _run_benchmark_cli(
     mock_bd_cls.download.return_value = _make_benchmark_data()
     mock_config.get.return_value = "test-model"
 
+    # These tests exercise the iteration loop on an eight-record synthetic
+    # dataset, which is far too small to carry a holdout split. They therefore
+    # take the documented escape hatch: score everything, and say so. That is
+    # the only way to evaluate on records training would also read.
     runner = CliRunner()
-    return runner.invoke(cli, ["benchmark"] + args, catch_exceptions=False)
+    with patch.object(serf_config, "get", side_effect=_config_without_split_enforcement):
+        return runner.invoke(
+            cli, ["benchmark", "--eval-split", "all"] + args, catch_exceptions=False
+        )
+
+
+def _config_without_split_enforcement(key: str, default: object = None) -> object:
+    """Answer config lookups as normal, but allow scoring training data.
+
+    Parameters
+    ----------
+    key : str
+        Dotted config path
+    default : object
+        Fallback the caller supplied
+
+    Returns
+    -------
+    object
+        ``False`` for the disjoint-eval guard, otherwise the configured value
+    """
+    if key == "benchmarks.require_disjoint_eval":
+        return False
+    return _REAL_CONFIG_GET(key, default)
 
 
 # ── 1. --max-iterations argument is accepted and forwarded ──────────────
@@ -112,10 +141,12 @@ def test_benchmark_runs_multiple_iterations() -> None:
         patch(_BENCHMARK_PATCHES[2]) as mock_bd_cls,
         patch(_BENCHMARK_PATCHES[3]) as mock_config,
     ):
+        # Each round merges a fresh pair, so the entity count keeps dropping
+        # until a round predicts nothing and the loop converges.
         mock_matching.side_effect = [
-            ({(0, 1)}, _make_entities(6)),
-            ({(0, 1), (2, 3)}, _make_entities(4)),
-            ({(0, 1), (2, 3)}, _make_entities(4)),
+            ({(0, 1)}, _make_entities(8)),
+            ({(2, 3)}, _make_entities(8)),
+            (set(), _make_entities(8)),
         ]
 
         result = _run_benchmark_cli(
@@ -135,7 +166,7 @@ def test_benchmark_runs_multiple_iterations() -> None:
 
 
 def test_benchmark_stops_early_on_convergence() -> None:
-    """When entity count does not decrease, the loop stops early."""
+    """When a round merges nothing, the loop stops instead of re-blocking."""
     with (
         patch(_BENCHMARK_PATCHES[0]),
         patch(_BENCHMARK_PATCHES[1]) as mock_matching,
@@ -143,7 +174,7 @@ def test_benchmark_stops_early_on_convergence() -> None:
         patch(_BENCHMARK_PATCHES[3]) as mock_config,
     ):
         all_entities = _make_entities(8)
-        mock_matching.return_value = ({(0, 1)}, all_entities)
+        mock_matching.return_value = (set(), all_entities)
 
         result = _run_benchmark_cli(
             mock_matching,
@@ -185,6 +216,8 @@ def test_benchmark_llm_matching_return_type() -> None:
     ):
         blocking_metrics = MagicMock()
         blocking_metrics.total_blocks = 1
+        blocking_metrics.avg_block_size = 2.0
+        blocking_metrics.max_block_size = 4
         mock_pipeline_cls.return_value.run.return_value = ([], blocking_metrics)
 
         pairs, result_entities = _benchmark_llm_matching(entities, target_block_size=10, model="m")

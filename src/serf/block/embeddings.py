@@ -41,6 +41,12 @@ class EntityEmbedder:
         Torch device. Auto-detected if None.
     normalize : bool
         Whether to L2-normalize embeddings.
+    prompt : str | None
+        Instruction prefix prepended to every text. Defaults to config.
+    trust_remote_code : bool | None
+        Execute the modelling code shipped in the model repository, which some
+        architectures require. Defaults to config. Off unless asked for, since
+        it runs third-party code.
     """
 
     def __init__(
@@ -48,18 +54,28 @@ class EntityEmbedder:
         model_name: str | None = None,
         device: str | None = None,
         normalize: bool = True,
+        prompt: str | None = None,
+        trust_remote_code: bool | None = None,
     ) -> None:
         if model_name is None:
             model_name = config.get("models.embedding")
         if device is None:
             device = get_torch_device()
+        if prompt is None:
+            prompt = config.get("models.embedding_prompt", "")
+        if trust_remote_code is None:
+            trust_remote_code = bool(config.get("models.embedding_trust_remote_code", False))
 
         self.model_name = model_name
         self.device = device
         self.normalize = normalize
+        self.prompt = prompt
+        self.trust_remote_code = trust_remote_code
 
         logger.info(f"Loading embedding model {model_name} on {device}")
-        self.model = SentenceTransformer(model_name, device=device)
+        self.model = SentenceTransformer(
+            model_name, device=device, trust_remote_code=trust_remote_code
+        )
         self.embedding_dim = self.model.get_sentence_embedding_dimension()
         logger.info(f"Embedding dimension: {self.embedding_dim}")
 
@@ -79,7 +95,7 @@ class EntityEmbedder:
             Embeddings matrix of shape (len(texts), embedding_dim)
         """
         embeddings = self.model.encode(
-            texts,
+            [self.prompt + t for t in texts] if self.prompt else texts,
             batch_size=batch_size,
             show_progress_bar=len(texts) > 100,
             normalize_embeddings=self.normalize,

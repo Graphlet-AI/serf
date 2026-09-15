@@ -4,7 +4,9 @@ Lessons learned from the [Eridu](https://github.com/Graphlet-AI/eridu) project �
 
 ## Overview
 
-SERF uses pre-trained sentence-transformer embeddings (`intfloat/multilingual-e5-large`) for semantic blocking. While the pre-trained model works well out of the box, fine-tuning on domain-specific labeled pairs can significantly improve blocking quality — putting more true matches in the same blocks.
+SERF uses pre-trained sentence-transformer embeddings (`BAAI/bge-small-en-v1.5`) for semantic blocking. While the pre-trained model works well out of the box, fine-tuning on domain-specific labeled pairs can significantly improve blocking quality — putting more true matches in the same blocks.
+
+There is real headroom here: pre-trained blocking recall on the hardest benchmark, Amazon-Google, is 0.65, and every pair blocking misses is one matching can never recover.
 
 Eridu demonstrates the full fine-tuning pipeline: from data preparation through contrastive learning to threshold optimization. The lessons below are directly applicable to SERF's blocking embeddings.
 
@@ -60,7 +62,7 @@ Eridu's evolution of base models:
 | `intfloat/multilingual-e5-large`        | 560M       | 1024       | Current — good ROC curve, semantic understanding |
 | `Qwen/Qwen3-Embedding-4B`               | 4B         | 2048       | Testing — MTEB #2, needs 16GB GPU                |
 
-**SERF's default** is `intfloat/multilingual-e5-large` — the same model Eridu found works best after fine-tuning. For SERF blocking, the pre-trained version is sufficient; fine-tuning is an optimization.
+**SERF's default** is `BAAI/bge-small-en-v1.5` (33M parameters, 384 dimensions), which won `serf blocking-sweep` on blocking recall per unit of CPU. Eridu optimizes a different objective: it scores name pairs directly, so a large model it runs once per pair is affordable. SERF re-embeds every record on every ER round and only needs the true match to land in the same FAISS cell, so it buys throughput instead of ranking quality. Fine-tune whichever base you serve; the lessons below transfer.
 
 ### 5. Training Configuration That Works
 
@@ -137,7 +139,7 @@ Fine-tuning the blocking embedding is worthwhile when:
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer
 from sentence_transformers.losses import ContrastiveLoss
 
-model = SentenceTransformer("intfloat/multilingual-e5-large")
+model = SentenceTransformer("BAAI/bge-small-en-v1.5")
 loss = ContrastiveLoss(model=model, margin=0.5)
 
 trainer = SentenceTransformerTrainer(

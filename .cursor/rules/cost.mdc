@@ -1,0 +1,50 @@
+---
+description: What compute actually costs on this project, and how to trade agent tokens against cloud spend
+alwaysApply: true
+---
+
+# Cursor tokens cost 10x the cloud bill
+
+Measured on this project: **agent token spend is roughly ten times the Google
+Cloud and Gemini spend.** The expensive resource is the agent's own reasoning
+and output, not the LLM calls a benchmark or a GEPA run makes.
+
+Almost every instinct about "saving compute" is therefore backwards here.
+
+## Do
+
+- **Run the experiment instead of reasoning about whether to run it.** A
+  benchmark that answers a question costs less than the deliberation about
+  whether it is worth running.
+- **Let long jobs run.** A full-table benchmark or a GEPA sweep that takes
+  hours is cheap. Start it and leave it.
+- **Check back rarely and in large waits.** Polling is the expensive part of a
+  long job, not the job. Prefer one long wait to six short ones, and prefer
+  reading a finished log to watching a progress bar.
+- **Batch tool calls.** Several independent commands in one call beat several
+  calls.
+- **Prefer a wider experiment.** If five datasets answer a question better than
+  one, run five. The marginal cloud cost is far below the cost of the follow-up
+  round trip that one dataset's ambiguity creates.
+- **Write terse output.** Long summaries are billed at the expensive rate.
+
+## Do not
+
+- **Do not kill a long cloud job to save cloud time.** This was done once: a
+  three-iteration DBLP-Scholar full-table run was stopped at roughly seventeen
+  hours remaining and replaced with a cheaper one-iteration run, to avoid
+  "burning hours" on a throttled endpoint. That traded the expensive resource
+  for the cheap one and produced a number that is not comparable to the other
+  four datasets. The right call was to let it run and check back the next day.
+- **Do not narrate monitoring.** "Still running, let me check again" is pure
+  cost with no information.
+- **Do not re-derive what a log already answers.** Read the artifact.
+- **Do not deliberate over a cheap, reversible action.** Take it.
+
+## The one thing worth being careful about
+
+Cloud spend is cheap, not free, and a *hung* job is worse than an expensive
+one: it bills nothing useful and hides progress. Bound every LLM request with a
+timeout (`models.request_timeout_seconds`) so a stall fails and retries rather
+than silently consuming wall-clock. That is the reason to watch a long run at
+all — to catch a hang, not to save money.

@@ -1,13 +1,14 @@
 """Dataset profiling for entity resolution."""
 
 import json
-import os
 from typing import Any
 
 import dspy
 import yaml
 
 from serf.analyze.field_detection import detect_field_type
+from serf.dspy.adapter import RepairingXMLAdapter
+from serf.dspy.lm import create_lm
 from serf.dspy.signatures import GenerateERConfig
 from serf.dspy.types import DatasetProfile, FieldProfile
 from serf.logs import get_logger
@@ -134,8 +135,7 @@ def generate_er_config(
     from serf.config import config as serf_config
 
     effective_model = model or serf_config.get("models.analyze_llm")
-    api_key = os.environ.get("GEMINI_API_KEY", "")
-    lm = dspy.LM(effective_model, api_key=api_key)
+    lm = create_lm(effective_model, role="teacher")
     logger.info(f"Using LLM model: {effective_model}")
 
     predictor = dspy.ChainOfThought(GenerateERConfig)
@@ -144,7 +144,7 @@ def generate_er_config(
     samples_json = json.dumps(sample_records[:10], indent=2, default=str)
 
     logger.info("Generating ER config with LLM...")
-    with dspy.context(lm=lm, adapter=dspy.XMLAdapter()):
+    with dspy.context(lm=lm, adapter=RepairingXMLAdapter()):
         result = predictor(
             dataset_profile=profile_json,
             sample_records=samples_json,

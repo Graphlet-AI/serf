@@ -44,8 +44,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 - **LLM Integration**: DSPy signatures with `dspy.XMLAdapter` for structured output
 - **DSPy**: Programming—not prompting—LMs - a framework for building and optimizing LLM pipelines. See the Project's @assets/DSPy.md [DSPy Programming Guide](assets/DSPy.md) and read the docs at [DSPy Documentation](https://dspy.ai/api/).
+- **GEPA**: The reflective prompt optimizer behind `serf optimize`. See the Project's @assets/DSPy-GEPA.md [DSPy GEPA Guide](assets/DSPy-GEPA.md) before changing anything under `serf.dspy.optimize`, the `er_metric` feedback function, or the optimizer budget in `config.yml`.
+- **Flex**: `dspy.Flex` moves a module's own source code into GEPA's search space, which is how LLM calls get traded for deterministic Python. See the Project's @assets/DSPy-Flex.md [DSPy Flex Guide](assets/DSPy-Flex.md) before reaching for it. Nothing in SERF uses it yet. Its default interpreter needs Deno, which the `deno` dependency vendors into the virtualenv, so `uv sync` is all the setup required.
 - **Sentence Transformers**: A library for state-of-the-art sentence embeddings
-- **Qwen3 Embeddings**: Top MTEB leaderboard embedding across most categories.
+- **BGE Embeddings**: `BAAI/bge-small-en-v1.5`, the winner of `serf blocking-sweep` on blocking recall per unit of CPU. Needs its instruction prefix, held in `models.embedding_prompt`.
 - **Gemini Models**: Advanced models for matching and merging entities
 - **Data Processing**: Apache Spark (PySpark) for ETL and graph operations
 
@@ -123,6 +125,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 **NEVER use embedding cosine similarity for entity matching.** Embeddings are used ONLY for semantic blocking (FAISS clustering to group similar entities into blocks). ALL matching decisions MUST go through an LLM via DSPy BlockMatch signatures. Do not write embedding-based matching code, do not write cosine similarity thresholding for match decisions, do not create an "embedding mode" for matching. The only matching mode is LLM matching.
 
+### Cursor Tokens Cost 10x The Cloud Bill
+
+**Agent token spend on this project is roughly ten times the Google Cloud and Gemini spend.** The expensive resource is the agent's own reasoning and output, not the LLM calls a benchmark or GEPA run makes. So: run the experiment rather than deliberating about whether to run it, let long jobs run and check back rarely in large waits, batch tool calls, prefer the wider experiment over the ambiguous narrow one, and keep summaries terse. Never kill a long cloud job to save cloud time — that trades the expensive resource for the cheap one. The only reason to watch a long run is to catch a hang. Full guidance in @.cursor/rules/cost.mdc.
+
+### Never Score On Data Training Touched
+
+**Report benchmark numbers on the holdout split only, and name the split next to every figure.** Selection counts as training: a prompt GEPA chose because it scored best on validation is fitted to validation. `serf benchmark` warns when the records it is about to score overlap the splits `serf train` used — treat that warning as a failed run. The full set of experimental guidelines, each with the incident in this repository that motivated it, is in @.cursor/rules/ml-experiments.mdc. Read it before designing an experiment, changing a metric, or publishing a number.
+
 ## Important Notes
 
 ### Configuration Management
@@ -152,6 +162,7 @@ logger.error(f"Failed to process: {error}")
 - Integration tests: Test with real services (Redis, S3, etc.)
 - Cache mode tests: Test different caching strategies
 - DSPy tests: Test DSPy signatures with mock LM calls
+- Benchmark runs: always pass `--max-iterations 3` to `serf benchmark`. One matching pass can only pair records blocking already put together, so a single iteration measures a different pipeline than the one that ships and its scores are not comparable to anything recorded in the README or `experiments/`. Three iterations is also better: measured across all five datasets it raises recall everywhere, wins F1 everywhere, and lifts the mean 0.0615. Benchmark scoring resolves the predicted pairs into the clusters they imply and then scores cross-source pairs only, because ground truth is bipartite by construction and merging entities asserts same-source pairs it cannot adjudicate; never reintroduce those into scoring, or later iterations will look like precision collapses when they are not.
 
 ### Spark Development
 
@@ -176,6 +187,7 @@ In addition, when writing PySpark code:
 
 - Python 3.12 required
 - Core packages: dspy-ai, pyspark, sentence-transformers, faiss-cpu, click, pyyaml
+- `deno` vendors the Deno binary that `dspy.PythonInterpreter` needs, so `dspy.Flex` runs after a plain `uv sync`
 - Development tools: uv, ruff, zuban, pytest
 - See pyproject.toml for complete dependency list
 

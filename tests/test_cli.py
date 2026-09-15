@@ -1,8 +1,14 @@
 """Tests for the SERF CLI."""
 
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+
+import pytest
 from click.testing import CliRunner
 
-from serf.cli.main import cli
+from serf.cli.main import BENCHMARK_DATASETS, cli
+from serf.config import config
 
 
 def test_cli_help() -> None:
@@ -21,6 +27,12 @@ def test_cli_help() -> None:
     assert "benchmark" in result.output
     assert "benchmark-all" in result.output
     assert "download" in result.output
+    assert "optimize" in result.output
+    assert "prompts" in result.output
+    assert "train" in result.output
+    assert "profile-benchmark" in result.output
+    assert "blocking-sweep" in result.output
+    assert "mteb-rank" in result.output
 
 
 def test_cli_version() -> None:
@@ -77,6 +89,124 @@ def test_benchmark_help() -> None:
     assert "--dataset" in result.output
     assert "--model" in result.output
     assert "--max-right-entities" in result.output
+    assert "walmart-amazon" in result.output
+    assert "amazon-google" in result.output
+    assert "--blocking-strategy" in result.output
+    assert "--trained-prompts" in result.output
+
+
+def test_prompts_help() -> None:
+    """The prompt report is available per dataset, per mode, and to a file."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["prompts", "--help"])
+    assert result.exit_code == 0
+    assert "--dataset" in result.output
+    assert "--signature-mode" in result.output
+    assert "--instructions-only" in result.output
+    assert "--trained" in result.output
+    assert "--output" in result.output
+
+
+def test_prompts_shows_the_signature_and_its_rendered_prompt() -> None:
+    """The report has to show what the model is told, not a description of it."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["prompts", "--dataset", "abt-buy"])
+    assert result.exit_code == 0
+    assert "AbtBuyBlockMatch" in result.output
+    assert "### Instructions" in result.output
+    assert "### System message" in result.output
+    assert "abt_records" in result.output
+    assert "buy_records" in result.output
+
+
+def test_prompts_writes_a_report_for_every_dataset(tmp_path: Path) -> None:
+    """With no --dataset the report covers all five signatures."""
+    runner = CliRunner()
+    target = tmp_path / "prompts.md"
+    result = runner.invoke(cli, ["prompts", "--output", str(target)])
+    assert result.exit_code == 0
+    document = target.read_text(encoding="utf-8")
+    for signature in (
+        "DblpAcmBlockMatch",
+        "DblpScholarBlockMatch",
+        "AbtBuyBlockMatch",
+        "AmazonGoogleBlockMatch",
+        "WalmartAmazonBlockMatch",
+    ):
+        assert signature in document
+
+
+def test_train_help() -> None:
+    """Training exposes the student, the teacher, the budget and the caps."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["train", "--help"])
+    assert result.exit_code == 0
+    assert "--dataset" in result.output
+    assert "--all-datasets" in result.output
+    assert "--student-model" in result.output
+    assert "--teacher-model" in result.output
+    assert "--auto" in result.output
+    assert "--train-blocks" in result.output
+    assert "--val-blocks" in result.output
+    assert "walmart-amazon" in result.output
+
+
+def test_train_requires_a_dataset() -> None:
+    """Training every dataset by accident would be an expensive default."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["train"])
+    assert result.exit_code != 0
+    assert "--dataset" in result.output
+
+
+def test_blocking_sweep_help() -> None:
+    """The sweep offers each single strategy and the union of both."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["blocking-sweep", "--help"])
+    assert result.exit_code == 0
+    assert "--blocking-strategy" in result.output
+    assert "union" in result.output
+    assert "--candidate-set" in result.output
+    assert "--rounds" in result.output
+
+
+def test_mteb_rank_help() -> None:
+    """The MTEB ranking exposes category selection and sweep correlation."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["mteb-rank", "--help"])
+    assert result.exit_code == 0
+    assert "--category" in result.output
+    assert "--candidate-set" in result.output
+    assert "--sweep" in result.output
+
+
+def test_profile_benchmark_help() -> None:
+    """The profiler exposes dataset selection and both output formats."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["profile-benchmark", "--help"])
+    assert result.exit_code == 0
+    assert "--dataset" in result.output
+    assert "--output" in result.output
+    assert "--json" in result.output
+    assert "--examples" in result.output
+    assert "--top-values" in result.output
+    assert "dblp-scholar" in result.output
+
+
+def test_blocking_embedding_is_a_single_configured_model() -> None:
+    """One blocking embedding, named literally, with the prefix bge is trained on.
+
+    The low/high tier pair is gone: the large tier measured worse than the small
+    one on mean blocking recall for six times the CPU, so selecting it was a way
+    to make the pipeline slower and less accurate at the same time.
+    """
+    assert config.get("models.embedding") == "BAAI/bge-small-en-v1.5"
+    assert config.get("models.embedding_prompt") == (
+        "Represent this sentence for searching relevant passages: "
+    )
+    for removed in ("models.embedding_low", "models.embedding_high"):
+        with pytest.raises(KeyError):
+            config.get(removed)
 
 
 def test_benchmark_all_help() -> None:
@@ -94,6 +224,8 @@ def test_download_help() -> None:
     result = runner.invoke(cli, ["download", "--help"])
     assert result.exit_code == 0
     assert "--dataset" in result.output
+    assert "walmart-amazon" in result.output
+    assert "amazon-google" in result.output
 
 
 def test_resolve_help() -> None:
@@ -121,6 +253,56 @@ def test_benchmark_unknown_dataset() -> None:
     assert "Invalid value for '--dataset'" in result.output
 
 
+def test_optimize_help() -> None:
+    """Test optimize command help."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["optimize", "--help"])
+    assert result.exit_code == 0
+    assert "--signature" in result.output
+    assert "--trainset" in result.output
+    assert "--dataset" in result.output
+    assert "--student-model" in result.output
+    assert "--teacher-model" in result.output
+    assert "walmart-amazon" in result.output
+    assert "amazon-google" in result.output
+
+
+def test_optimize_requires_dataset_or_trainset() -> None:
+    """Optimize without --dataset or --trainset fails."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["optimize"])
+    assert result.exit_code != 0
+
+
+def test_benchmark_datasets_include_deepmatcher() -> None:
+    """CLI dataset choices include Walmart-Amazon and Amazon-Google."""
+    assert "walmart-amazon" in BENCHMARK_DATASETS
+    assert "amazon-google" in BENCHMARK_DATASETS
+    assert "abt-buy" in BENCHMARK_DATASETS
+
+
+def test_download_accepts_new_datasets() -> None:
+    """download --dataset accepts the DeepMatcher product datasets."""
+    runner = CliRunner()
+    mock_ds = MagicMock()
+    mock_ds.table_a = [0, 1]
+    mock_ds.table_b = [0]
+    mock_ds.ground_truth = set()
+    with patch("serf.eval.benchmarks.BenchmarkDataset.download", return_value=mock_ds):
+        for name in ("walmart-amazon", "amazon-google"):
+            result = runner.invoke(cli, ["download", "--dataset", name])
+            assert result.exit_code == 0, result.output
+            assert "Left table" in result.output
+
+
+def test_optimize_unknown_dataset() -> None:
+    """optimize rejects dataset names that are not registered."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["optimize", "--dataset", "nonexistent"])
+    assert result.exit_code == 2
+    assert "Invalid value for '--dataset'" in result.output
+
+
 def test_run_help() -> None:
     """Test run command help shows all options."""
     runner = CliRunner()
@@ -135,3 +317,149 @@ def test_run_help() -> None:
     assert "--max-iterations" in result.output
     assert "--convergence-threshold" in result.output
     assert "--target-block-size" in result.output
+
+
+def test_schema_help() -> None:
+    """`serf schema` is registered and documents both of its modes."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["schema", "--help"])
+    assert result.exit_code == 0
+    assert "--merge" in result.output
+
+
+def test_schema_shows_the_fields_and_the_policy_each_one_resolves_to() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["schema", "schemas/person.yml"])
+    assert result.exit_code == 0, result.output
+    assert "CanonicalPerson" in result.output
+    # `address` is fuzzy by default; the schema overrides state to exact.
+    assert "state address   str       no  exact" in " ".join(result.output.split("\n"))
+
+
+def test_schema_merge_reproduces_the_worked_example_from_the_specification(
+    tmp_path: Path,
+) -> None:
+    """The documented input, through the CLI, produces the documented output."""
+    russell = "11111111-1111-4111-8111-111111111111"
+    russell_h = "33333333-3333-4333-8333-333333333333"
+    russ = "77777777-7777-4777-8777-777777777777"
+    bob = "22222222-2222-4222-8222-222222222222"
+    absorbed = ["55555555-5555-4555-8555-555555555555", "66666666-6666-4666-8666-666666666666"]
+    payload = [
+        [
+            {"uuid": russell, "name": "Russell Jurney"},
+            {
+                "uuid": russell_h,
+                "name": "Russell H Jurney",
+                "source_uuids": absorbed,
+                "state": "WA",
+                "nation": "US",
+            },
+            {"uuid": russ, "name": "Russ Journey", "state": "CA"},
+        ],
+        [{"uuid": bob, "name": "Bob Dorf"}],
+    ]
+    path = tmp_path / "records.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["schema", "schemas/person.yml", "--merge", str(path)])
+
+    assert result.exit_code == 0, result.output
+    emitted = [
+        json.loads(line.strip())
+        for line in result.output.splitlines()
+        if line.strip().startswith("{")
+    ]
+    merged, untouched = emitted
+    assert merged["name"] == ["Russell H Jurney"]
+    assert merged["state"] == ["CA", "WA"]
+    assert merged["nation"] == ["US"]
+    assert merged["source_uuids"] == sorted([russell, russell_h, russ, *absorbed])
+    assert merged["uuid"] not in {russell, russell_h, russ, bob, *absorbed}
+    assert untouched == {"uuid": bob, "name": ["Bob Dorf"]}
+
+
+def test_schema_merge_rejects_a_payload_that_is_not_a_list(tmp_path: Path) -> None:
+    path = tmp_path / "records.json"
+    path.write_text(json.dumps({"uuid": "x"}), encoding="utf-8")
+
+    runner = CliRunner()
+    result = runner.invoke(cli, ["schema", "schemas/person.yml", "--merge", str(path)])
+
+    assert result.exit_code != 0
+    assert "non-empty JSON list" in result.output
+
+
+def test_benchmark_help_documents_the_eval_split() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["benchmark", "--help"])
+    assert result.exit_code == 0
+    assert "--eval-split" in result.output
+    assert "holdout" in result.output
+
+
+def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data() -> None:
+    """Separation is enforced, not merely warned about."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            "--dataset",
+            "dblp-acm",
+            "--signature-mode",
+            "per-dataset",
+            "--trained-prompts",
+            "--eval-split",
+            "val",
+            "--limit",
+            "1",
+        ],
+    )
+    assert result.exit_code != 0
+    assert "Refusing to evaluate a trained prompt on training data" in result.output
+    assert "--eval-split holdout" in result.output
+
+
+def test_the_shipped_prompt_may_be_scored_over_all_the_data() -> None:
+    """Nothing was optimized against it, and a full-table number needs every record."""
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        ["benchmark", "--dataset", "dblp-acm", "--eval-split", "all", "--limit", "1"],
+    )
+    assert "Refusing to evaluate" not in result.output
+    assert "scoring the shipped prompt" in result.output
+
+
+def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Measuring the fit on purpose is allowed; it just has to be asked for."""
+    from serf.cli import main as cli_main
+
+    real_get = cli_main.serf_config.get
+
+    def fake_get(key: str, default: object = None) -> object:
+        if key == "benchmarks.require_disjoint_eval":
+            return False
+        return real_get(key, default)
+
+    monkeypatch.setattr(cli_main.serf_config, "get", fake_get)
+    runner = CliRunner()
+    result = runner.invoke(
+        cli,
+        [
+            "benchmark",
+            "--dataset",
+            "dblp-acm",
+            "--signature-mode",
+            "per-dataset",
+            "--trained-prompts",
+            "--eval-split",
+            "val",
+            "--limit",
+            "1",
+        ],
+    )
+    assert "Refusing to evaluate" not in result.output
+    assert "WARNING" in result.output

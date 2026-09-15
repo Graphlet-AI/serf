@@ -134,6 +134,45 @@ def reduction_ratio(num_blocked_pairs: int, total_possible_pairs: int) -> float:
     return 1.0 - (num_blocked_pairs / total_possible_pairs)
 
 
+def connected_components(pairs: set[tuple[int, int]]) -> list[set[int]]:
+    """Group ids into the clusters a set of match pairs implies.
+
+    A matcher that emits pairs is really asserting a partition: matching a to b
+    and b to c says a, b and c are one thing. Recovering that partition before
+    scoring means the result does not depend on which pairs of a cluster the
+    matcher happened to write down.
+
+    Parameters
+    ----------
+    pairs : set of tuple of (int, int)
+        Pairs asserted as matches.
+
+    Returns
+    -------
+    list of set of int
+        One set of ids per connected component. Ids absent from every pair are
+        singletons and do not appear.
+    """
+    parent: dict[int, int] = {}
+
+    def find(node: int) -> int:
+        parent.setdefault(node, node)
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for a, b in pairs:
+        root_a, root_b = find(a), find(b)
+        if root_a != root_b:
+            parent[max(root_a, root_b)] = min(root_a, root_b)
+
+    groups: dict[int, set[int]] = {}
+    for node in list(parent):
+        groups.setdefault(find(node), set()).add(node)
+    return list(groups.values())
+
+
 def _clusters_to_pairs(clusters: dict[int, set[int]]) -> set[tuple[int, int]]:
     """Extract all pairwise links from clusters."""
     pairs: set[tuple[int, int]] = set()

@@ -15,7 +15,6 @@ import tempfile
 from pathlib import Path
 
 import numpy as np
-from numpy.typing import NDArray
 
 from serf.logs import get_logger
 
@@ -26,20 +25,21 @@ EMBED_SCRIPT = """
 import json
 import sys
 import numpy as np
-
 def main():
     args = json.loads(sys.argv[1])
     texts_file = args["texts_file"]
     output_file = args["output_file"]
     model_name = args["model_name"]
+    prompt = args["prompt"]
+    trust_remote_code = args["trust_remote_code"]
 
     with open(texts_file) as f:
         texts = json.load(f)
 
     from sentence_transformers import SentenceTransformer
-    model = SentenceTransformer(model_name, device="cpu")
+    model = SentenceTransformer(model_name, device="cpu", trust_remote_code=trust_remote_code)
     embeddings = model.encode(
-        texts,
+        [prompt + t for t in texts] if prompt else texts,
         batch_size=64,
         show_progress_bar=len(texts) > 100,
         normalize_embeddings=True,
@@ -54,16 +54,17 @@ if __name__ == "__main__":
 # Inline Python script for FAISS clustering — runs in a fresh subprocess
 FAISS_SCRIPT = """
 import json
-import math
 import sys
 import numpy as np
-
 def main():
     args = json.loads(sys.argv[1])
     embeddings_file = args["embeddings_file"]
     output_file = args["output_file"]
-    ids = args["ids"]
+    ids_file = args["ids_file"]
     target_block_size = args["target_block_size"]
+
+    with open(ids_file) as f:
+        ids = json.load(f)
 
     import faiss
 
@@ -80,9 +81,11 @@ def main():
             json.dump({"block_0": ids}, f)
         return
 
+    # One cluster per target_block_size records. A sqrt(n) cap here used to make
+    # target_block_size unreachable above n = target^2: at 66,879 records it asked
+    # for 258 clusters of 259 instead of 2,229 of 30, and the oversized-block split
+    # then tore apart pairs that clustering had found.
     nlist = max(1, n // target_block_size)
-    nlist = min(nlist, int(math.sqrt(n)))
-    nlist = max(1, nlist)
 
     faiss.normalize_L2(embeddings)
     quantizer = faiss.IndexFlatIP(dim)
@@ -110,7 +113,9 @@ if __name__ == "__main__":
 def embed_in_subprocess(
     texts: list[str],
     model_name: str,
-) -> NDArray[np.float32]:
+    prompt: str = "",
+    trust_remote_code: bool = False,
+) -> np.ndarray:
     """Compute embeddings in an isolated subprocess.
 
     Avoids PyTorch MPS / FAISS memory conflicts on macOS by running
@@ -122,10 +127,17 @@ def embed_in_subprocess(
         Texts to embed
     model_name : str
         HuggingFace model name
+    prompt : str
+        Instruction prefix prepended to every text. Required by the e5 and
+        bge families; empty for models trained without one.
+    trust_remote_code : bool
+        Execute the modelling code shipped in the model repository. Needed by
+        models that define a custom architecture, and off by default because it
+        runs third-party code.
 
     Returns
     -------
-    NDArray[np.float32]
+    np.ndarray
         Embeddings matrix (n, dim)
     """
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -140,10 +152,14 @@ def embed_in_subprocess(
                 "texts_file": texts_file,
                 "output_file": output_file,
                 "model_name": model_name,
+                "prompt": prompt,
+                "trust_remote_code": trust_remote_code,
             }
         )
 
-        logger.info(f"Embedding {len(texts)} texts in subprocess (model={model_name})")
+        logger.info(
+            f"Embedding {len(texts)} texts in subprocess (model={model_name}, prompt={prompt!r})"
+        )
         result = subprocess.run(
             [sys.executable, "-c", EMBED_SCRIPT, args],
             capture_output=True,
@@ -154,13 +170,13 @@ def embed_in_subprocess(
             logger.error(f"Embedding subprocess failed:\n{result.stderr}")
             raise RuntimeError(f"Embedding subprocess failed: {result.stderr[:500]}")
 
-        embeddings: NDArray[np.float32] = np.load(output_file)
+        embeddings: np.ndarray = np.load(output_file)
         logger.info(f"Embeddings computed: shape={embeddings.shape}")
         return embeddings
 
 
 def cluster_in_subprocess(
-    embeddings: NDArray[np.float32],
+    embeddings: np.ndarray,
     ids: list[str],
     target_block_size: int = 30,
 ) -> dict[str, list[str]]:
@@ -170,7 +186,7 @@ def cluster_in_subprocess(
 
     Parameters
     ----------
-    embeddings : NDArray[np.float32]
+    embeddings : np.ndarray
         Embedding matrix (n, dim)
     ids : list[str]
         Entity IDs corresponding to embedding rows
@@ -184,15 +200,21 @@ def cluster_in_subprocess(
     """
     with tempfile.TemporaryDirectory() as tmpdir:
         embeddings_file = str(Path(tmpdir) / "embeddings.npy")
+        ids_file = str(Path(tmpdir) / "ids.json")
         output_file = str(Path(tmpdir) / "blocks.json")
 
         np.save(embeddings_file, embeddings)
+
+        # The ids go through a file rather than argv: a single argument is capped
+        # at 128 KB on Linux, which one id list exceeds past ~13,000 entities.
+        with open(ids_file, "w") as f:
+            json.dump(ids, f)
 
         args = json.dumps(
             {
                 "embeddings_file": embeddings_file,
                 "output_file": output_file,
-                "ids": ids,
+                "ids_file": ids_file,
                 "target_block_size": target_block_size,
             }
         )

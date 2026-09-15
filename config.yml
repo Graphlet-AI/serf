@@ -27,7 +27,13 @@ models:
   # sides get the same prefix. Leave empty for models trained without one.
   embedding_prompt: "Represent this sentence for searching relevant passages: "
   student: "openai/gpt-oss-120b-maas"
-  teacher: "gemini/gemini-3.5-flash-lite"
+  # Gemini 3.8 Flash is a thinking model: it spent 382 to 423 reasoning tokens
+  # to produce a four-word instruction rewrite in a live probe, and returned
+  # empty content when max_tokens was 64. models.max_tokens below is 65536, so
+  # there is room, but a teacher that silently returns nothing looks exactly
+  # like GEPA failing to propose a candidate, which is the failure this note
+  # exists to prevent anyone diagnosing twice.
+  teacher: "gemini/gemini-3.8-flash"
   llm: "${models.student}"
   analyze_llm: "${models.teacher}"
   temperature: 0.0
@@ -204,9 +210,23 @@ benchmarks:
   # Holdout is the same size as train and GEPA never sees it, so the score
   # taken on it at the end of a run is the only one that is not a validation
   # score.
-  train_records: 1000
-  val_records: 200
-  holdout_records: 1000
+  # Sized so each split yields roughly the number of GEPA *examples* it needs,
+  # not a round number of records. A record budget is not an example budget:
+  # blocking turns records into blocks and only blocks holding both sources and
+  # a gold pair are scoreable, which measured out at 17 to 33 usable examples
+  # per 1,000 records depending on how sparse the dataset's gold pairs are.
+  #
+  # Validation targets 35 examples, which is DSPy's own threshold: at or below
+  # it GEPA already scores the whole valset every step. The previous 200-record
+  # budget yielded 4 to 6, and on three of four datasets under 26% of the
+  # validation gain survived to the holdout, which is a valset being fitted
+  # rather than selected on. See experiments/split-sizing.md.
+  #
+  # These globals are the dense-dataset case; the sparse datasets override them
+  # below, because the same 35 examples cost them more records.
+  train_records: 2400
+  val_records: 1100
+  holdout_records: 1100
 
   # Which split `serf benchmark` scores. Training reads `train` and GEPA
   # selects candidates on `val`, so a score on either reads the fit back
@@ -351,34 +371,34 @@ benchmarks:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Walmart-Amazon/walmart_amazon_exp_data.zip"
       domain: products
       difficulty: hard
-      train_records: 1000
-      val_records: 200
-      holdout_records: 1000
+      train_records: 6000
+      val_records: 1700
+      holdout_records: 1700
     abt-buy:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Textual/Abt-Buy/exp_data"
       domain: products
       difficulty: hard
-      train_records: 1000
-      val_records: 200
-      holdout_records: 1000
+      train_records: 673
+      val_records: 750
+      holdout_records: 750
     amazon-google:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/Amazon-Google/amazon_google_exp_data.zip"
       domain: products
       difficulty: hard
-      train_records: 1000
-      val_records: 200
-      holdout_records: 1000
+      train_records: 2400
+      val_records: 1100
+      holdout_records: 1100
     dblp-acm:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-ACM/dblp_acm_exp_data.zip"
       domain: bibliographic
       difficulty: easy
-      train_records: 1000
-      val_records: 200
-      holdout_records: 1000
+      train_records: 2700
+      val_records: 1100
+      holdout_records: 1100
     dblp-scholar:
       url: "https://pages.cs.wisc.edu/~anhai/data1/deepmatcher_data/Structured/DBLP-GoogleScholar/dblp_scholar_exp_data.zip"
       domain: bibliographic
       difficulty: medium
-      train_records: 1000
-      val_records: 200
-      holdout_records: 1000
+      train_records: 6000
+      val_records: 2100
+      holdout_records: 2100

@@ -77,8 +77,14 @@ def test_training_overlap_of_nothing_is_zero() -> None:
     assert training_overlap("dblp-acm", [], _entities(100), set(), seed=42) == 0.0
 
 
-def test_split_sizes_are_1k_train_200_val_1k_holdout_per_dataset() -> None:
-    """Train and val sit at roughly 80/20, with an equally large holdout GEPA never sees."""
+def test_every_dataset_budgets_enough_records_for_a_usable_valset() -> None:
+    """Splits are sized in examples, not records; see experiments/split-sizing.md.
+
+    A validation set of 4 to 6 examples was fitted rather than selected on:
+    under 26% of the validation gain transferred to the holdout on three of
+    four datasets. These budgets target 35 examples, DSPy's own threshold, at
+    each dataset's measured yield of 17 to 33 examples per 1,000 records.
+    """
     expected = get_all_split_sizes()
     assert set(expected) == {
         "walmart-amazon",
@@ -88,13 +94,18 @@ def test_split_sizes_are_1k_train_200_val_1k_holdout_per_dataset() -> None:
         "dblp-scholar",
     }
     for name, sizes in expected.items():
-        assert sizes.train_records == 1000, name
-        assert sizes.val_records == 200, name
-        assert sizes.holdout_records == 1000, name
+        # Sparse datasets need more records for the same number of examples,
+        # so the budgets differ per dataset rather than being one round number.
+        assert sizes.val_records >= 750, name
+        assert sizes.holdout_records >= 750, name
+        assert sizes.val_records == sizes.holdout_records, name
         assert get_split_sizes(name) == sizes
-    assert config.get("benchmarks.train_records") == 1000
-    assert config.get("benchmarks.val_records") == 200
-    assert config.get("benchmarks.holdout_records") == 1000
+    # Abt-Buy is the exception: its whole table is 2,173 records, so it cannot
+    # pay 1,100 for validation and is allocated 750 in preference to train.
+    assert get_split_sizes("abt-buy").val_records == 750
+    assert get_split_sizes("dblp-scholar").val_records == 2100
+    assert config.get("benchmarks.val_records") == 1100
+    assert config.get("benchmarks.holdout_records") == 1100
     with pytest.raises(KeyError):
         config.get("benchmarks.train_blocks")
 
@@ -276,9 +287,9 @@ def test_sample_random_splits_uses_config_defaults() -> None:
     """Omitted budgets fall back to the configured record counts."""
     entities = _entities(8000)
     splits = sample_random_splits(entities, ground_truth=set(), seed=2)
-    assert len(splits.train_records) == 1000
-    assert len(splits.val_records) == 200
-    assert len(splits.holdout_records) == 1000
+    assert len(splits.train_records) == 2400
+    assert len(splits.val_records) == 1100
+    assert len(splits.holdout_records) == 1100
 
 
 def test_the_eval_split_defaults_to_the_one_training_never_reads() -> None:

@@ -281,7 +281,7 @@ serf mteb-rank --candidate-set all --sweep data/blocking_sweep_large.json
 serf benchmark --dataset amazon-google --blocking-strategy union \
   --sample-records 1000 --output data/results/
 
-# Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.5 Flash-Lite teacher)
+# Optimize ER signatures with GEPA (GPT OSS 120b student, Gemini 3.8 Flash teacher)
 # Randomly samples 1000 train / 200 val / 1000 holdout records, keeping
 # ground-truth match groups whole so gold pairs survive, then blocks within
 # each split to build the BlockMatch examples. Val is filled first.
@@ -367,7 +367,7 @@ resolutions = await DatasetMatcher("walmart-amazon").resolve_blocks(blocks)
 
 ## Benchmark Results
 
-Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.5 Flash-Lite as the teacher/reflection LM for GEPA.
+Performance on standard ER benchmarks from the [Leipzig Database Group](https://dbs.uni-leipzig.de/research/projects/benchmark-datasets-for-entity-resolution). Matching uses GPT OSS 120b (Vertex AI MaaS) as the student/task LM via DSPy BlockMatch, with Gemini 3.8 Flash as the teacher/reflection LM for GEPA.
 
 What each of these datasets actually contains — its quirks, its common values, which attributes
 carry signal, and real examples of the match and mismatch patterns a prompt has to handle — is
@@ -712,7 +712,7 @@ All configuration is centralized in `config.yml`:
 ```python
 from serf.config import config
 model = config.get("models.llm")  # "openai/gpt-oss-120b-maas"
-teacher = config.get("models.teacher")  # "gemini/gemini-3.5-flash-lite"
+teacher = config.get("models.teacher")  # "gemini/gemini-3.8-flash"
 block_size = config.get("er.blocking.target_block_size")  # 50
 ```
 

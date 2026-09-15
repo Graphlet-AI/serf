@@ -283,6 +283,31 @@ def test_refreshing_lm_copies_share_credentials() -> None:
     assert clone.kwargs["api_key"] == "refreshed-token"
 
 
+def test_refreshing_lm_retries_on_auth_error() -> None:
+    """forward() catches 401/auth errors, forces a token refresh, and retries."""
+    credentials = _fake_credentials("initial-token", timedelta(hours=1))
+    lm = _refreshing_lm(credentials)
+    call_count = 0
+
+    def mock_forward(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("AuthenticationError: Error 401: ACCESS_TOKEN_EXPIRED")
+        return "recovered"
+
+    with (
+        patch("serf.dspy.lm.Request"),
+        patch.object(dspy.LM, "forward", side_effect=mock_forward),
+    ):
+        result = lm.forward(messages=[{"role": "user", "content": "hi"}])
+
+    assert result == "recovered"
+    assert call_count == 2
+    credentials.refresh.assert_called_once()
+    assert lm.kwargs["api_key"] == "refreshed-token"
+
+
 def test_create_lm_student_uses_refreshing_lm_for_service_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -91,7 +91,7 @@ contract. Full breakdown in `full-scale-benchmark.md`.
 | Abt-Buy        |           92.84 |         92.9 |        95.15 | level with the only published end-to-end result       |
 | Walmart-Amazon |           77.11 |         86.0 |        91.62 | -8.9 against end-to-end                               |
 | Amazon-Google  |           64.53 |         80.3 |        81.69 | -15.8 against end-to-end                              |
-| DBLP-Scholar   |     in progress |            — |        98.51 | —                                                     |
+| DBLP-Scholar   |           88.91 |            — |        98.51 | -9.6 against pair classification                      |
 
 **SERF is not state of the art.** It ties the one genuine like-for-like
 comparison on Abt-Buy, sits 1.5 off a ceiling six years of work has crowded

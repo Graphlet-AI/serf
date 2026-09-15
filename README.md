@@ -405,7 +405,7 @@ paper does publish genuine end-to-end pipelines, and that is the row worth readi
 | Abt-Buy        | **92.84**       | 92.9                | 95.15 (Qwen3-8B cross-encoder)            |
 | Walmart-Amazon | **77.11**       | 86.0                | 91.62 (Qwen3-4B cross-encoder)            |
 | Amazon-Google  | **64.53**       | 80.3                | 81.69 (Jellyfish-7B)                      |
-| DBLP-Scholar   | in progress     | not published       | 98.51 (Jellyfish-13B)                     |
+| DBLP-Scholar   | **88.91**       | not published       | 98.51 (Jellyfish-13B)                     |
 
 **SERF is not state of the art.** It is level with the only published
 end-to-end pipeline on Abt-Buy (92.84 against SC-Block's 92.9), 1.5 points off a

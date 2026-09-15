@@ -15,30 +15,32 @@ Logs: `/opt/cursor/artifacts/full_<dataset>.log`.
 
 ## Results
 
-| Dataset        | Records | Gold pairs | Precision | Recall |     F1 |   TP |  FP | Records conserved |
-| -------------- | ------: | ---------: | --------: | -----: | -----: | ---: | --: | ----------------: |
-| dblp-acm       |   4,910 |      2,224 |    0.9712 | 0.9861 | 0.9786 | 2193 |  65 |         100.0000% |
-| abt-buy        |   2,173 |      1,097 |    0.9749 | 0.8861 | 0.9284 |  972 |  25 |         100.0000% |
-| walmart-amazon |  24,628 |        962 |    0.7098 | 0.8441 | 0.7711 |  812 | 332 |         100.0000% |
-| amazon-google  |   4,589 |      1,300 |    0.5611 | 0.7592 | 0.6453 |  886 | 693 |         100.0000% |
-| dblp-scholar   |  66,879 |      5,347 |    0.9374 | 0.8255 | 0.8779 | 4414 | 295 |         100.0000% |
+| Dataset        | Records | Gold pairs | Precision | Recall |         F1 |   TP |  FP | Records conserved |
+| -------------- | ------: | ---------: | --------: | -----: | ---------: | ---: | --: | ----------------: |
+| dblp-acm       |   4,910 |      2,224 |    0.9712 | 0.9861 |     0.9786 | 2193 |  65 |         100.0000% |
+| abt-buy        |   2,173 |      1,097 |    0.9749 | 0.8861 |     0.9284 |  972 |  25 |         100.0000% |
+| dblp-scholar   |  66,879 |      5,347 |    0.8390 | 0.9456 |     0.8891 | 5056 | 970 |         100.0000% |
+| walmart-amazon |  24,628 |        962 |    0.7098 | 0.8441 |     0.7711 |  812 | 332 |         100.0000% |
+| amazon-google  |   4,589 |      1,300 |    0.5611 | 0.7592 |     0.6453 |  886 | 693 |         100.0000% |
+| **mean**       |         |            |           |        | **0.8425** |      |     |         100.0000% |
 
-DBLP-Scholar's row is **one iteration**, not three, so it is not directly
-comparable to the four above it. Its three-iteration run is re-running; the
-first attempt was abandoned partway through iteration two when the Vertex
-endpoint was throttling hard enough to project seventeen more hours. That was
-the wrong call — cloud spend on this project is a tenth of agent spend, so the
-run should have been left alone (`.cursor/rules/cost.mdc`). The throttle has
-since eased: a full-table iteration that took 48 minutes during the bad window
-completed in 204 seconds afterwards.
+All five are the complete tables at three iterations. DBLP-Scholar took 5.1
+hours for 66,879 records over 2,268 then 4,143 then 6,108 blocks; the other
+four are 8 to 76 minutes each.
 
-An interim note here previously read DBLP-Scholar's 10,646 predicted pairs
-against 5,347 gold pairs as over-merging on the scale of the product tasks.
-That was wrong, and wrong in an avoidable way: predicted pairs are counted
-before the cross-source projection, and 10,646 raw pairs project to 4,709
-scored ones at 0.9374 precision. Comparing a pre-projection count to a gold
-count compares two different things, which is exactly what the "report the
-denominator you actually scored" rule exists to prevent.
+### Iteration still helps on the largest table
+
+DBLP-Scholar was also scored at one iteration, which makes the iteration effect
+visible on a full table rather than on a sample:
+
+| Iterations | Precision | Recall |     F1 |
+| ---------: | --------: | -----: | -----: |
+|          1 |    0.9374 | 0.8255 | 0.8779 |
+|          3 |    0.8390 | 0.9456 | 0.8891 |
+
+The trade is the one the sampled table showed: +0.12 recall for -0.10
+precision, netting +0.011 F1. Iteration is a recall mechanism, and on this
+dataset the precision it costs nearly cancels the recall it buys.
 
 ## Answering the question: no, not yet
 
@@ -67,6 +69,7 @@ false positives against 886 true ones on Amazon-Google.
 | abt-buy        |    0.9318 |        0.9284 | -0.0034 |                      46% |
 | dblp-acm       |    0.9926 |        0.9786 | -0.0140 |                      20% |
 | walmart-amazon |    0.9467 |        0.7711 | -0.1756 |                       4% |
+| dblp-scholar   |    0.9665 |        0.8891 | -0.0774 |                     1.5% |
 | amazon-google  |    0.8390 |        0.6453 | -0.1937 |                      22% |
 
 The `state-of-the-art.md` prediction was half right. It flagged Walmart-Amazon
@@ -86,6 +89,7 @@ sharp exact filter barely changes. Precision tells the story directly:
 | dblp-acm       |            0.9958 |               0.9712 |
 | abt-buy        |            0.9804 |               0.9749 |
 | walmart-amazon |            0.9467 |               0.7098 |
+| dblp-scholar   |            0.9870 |               0.8390 |
 | amazon-google  |            0.8554 |               0.5611 |
 
 DBLP-ACM survives because equal year plus matching title is nearly decisive and

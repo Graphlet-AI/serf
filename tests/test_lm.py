@@ -26,8 +26,8 @@ def test_config_student_is_gpt_oss_120b() -> None:
 
 
 def test_config_teacher_is_gemini_35_flash_lite() -> None:
-    """Teacher/reflection LM is Gemini 3.5 Flash-Lite."""
-    assert config.get("models.teacher") == "gemini/gemini-3.5-flash-lite"
+    """Teacher/reflection LM is Gemini 3.8 Flash."""
+    assert config.get("models.teacher") == "gemini/gemini-3.8-flash"
     assert config.get("models.analyze_llm") == config.get("models.teacher")
 
 
@@ -35,7 +35,7 @@ def test_is_vertex_maas_model() -> None:
     """GPT OSS MaaS models route through Vertex; Gemini does not."""
     assert is_vertex_maas_model("openai/gpt-oss-120b-maas") is True
     assert is_vertex_maas_model("gpt-oss-120b-maas") is True
-    assert is_vertex_maas_model("gemini/gemini-3.5-flash-lite") is False
+    assert is_vertex_maas_model("gemini/gemini-3.8-flash") is False
 
 
 def test_vertex_access_token_accepts_raw_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -141,13 +141,13 @@ def test_create_lm_student_uses_vertex(
 
 @patch("serf.dspy.lm.dspy.LM")
 def test_create_lm_teacher_uses_gemini(mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Teacher LM uses Gemini 3.5 Flash-Lite with GEMINI_API_KEY."""
+    """Teacher LM uses Gemini 3.8 Flash with GEMINI_API_KEY."""
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
     create_lm(role="teacher", temperature=1.0)
 
     model = mock_lm.call_args.args[0]
     kwargs = mock_lm.call_args.kwargs
-    assert model == "gemini/gemini-3.5-flash-lite"
+    assert model == "gemini/gemini-3.8-flash"
     assert kwargs["api_key"] == "gemini-key"
     assert kwargs["temperature"] == 1.0
     assert "api_base" not in kwargs
@@ -158,7 +158,7 @@ def test_create_lm_gemini_requires_key(mock_lm: MagicMock, monkeypatch: pytest.M
     """Gemini models fail fast without GEMINI_API_KEY."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
-        create_lm(model="gemini/gemini-3.5-flash-lite")
+        create_lm(model="gemini/gemini-3.8-flash")
     mock_lm.assert_not_called()
 
 
@@ -346,7 +346,18 @@ def test_every_lm_carries_the_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(lm_module.dspy, "LM", _Recorder)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
-    lm_module._create_gemini_lm("gemini/gemini-3.5-flash-lite", temperature=0.0, max_tokens=64)
+    lm_module._create_gemini_lm("gemini/gemini-3.8-flash", temperature=0.0, max_tokens=64)
 
     assert captured, "no LM was constructed"
     assert all(kwargs.get("timeout") == 180 for kwargs in captured)
+
+
+def test_the_teacher_is_gemini_38_flash() -> None:
+    """A thinking model: probed live, and three plausible identifiers 404."""
+    assert config.get("models.teacher") == "gemini/gemini-3.8-flash"
+
+
+def test_the_teacher_has_room_for_its_reasoning_tokens() -> None:
+    """3.8 Flash spent 382-423 reasoning tokens on a four-word rewrite and
+    returned empty content at max_tokens=64, with no error."""
+    assert int(config.get("models.max_tokens")) >= 8192

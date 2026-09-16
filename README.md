@@ -254,9 +254,9 @@ serf train --dataset dblp-acm --auto light
 serf benchmark --dataset dblp-acm --signature-mode per-dataset --trained-prompts
 ```
 
-### 4. Blocking Analysis & Embedding Sweeps
+### 4. Blocking Analysis, Embedding Sweeps & Contrastive Fine-Tuning
 
-Evaluate and compare embedding models purely on candidate blocking recall without spending LLM tokens:
+Evaluate and compare embedding models purely on candidate blocking recall without spending LLM tokens, or fine-tune embedding representations using contrastive learning:
 
 ```bash
 # Sweep default candidate embeddings on blocking recall
@@ -264,6 +264,9 @@ serf blocking-sweep --dataset dblp-acm --output data/blocking_sweep.json
 
 # Rank candidate embeddings against published MTEB benchmark categories
 serf mteb-rank --candidate-set all --sweep data/blocking_sweep.json
+
+# Contrastive embedding fine-tuning on labeled benchmark datasets (representation learning)
+serf fine-tune dblp-acm --model BAAI/bge-small-en-v1.5 --epochs 3 --batch-size 32
 ```
 
 ---

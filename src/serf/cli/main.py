@@ -2069,6 +2069,131 @@ def benchmark_all(
 
 
 # ---------------------------------------------------------------------------
+# fine-tune  (contrastive fine-tuning for representation learning)
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="fine-tune")
+@click.argument("dataset", type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False))
+@click.option(
+    "--model",
+    "-m",
+    "model_name",
+    type=str,
+    default=None,
+    help="Base SentenceTransformer model (from config.yml models.embedding)",
+)
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Directory to save fine-tuned model and evaluation artifacts",
+)
+@click.option(
+    "--epochs",
+    type=int,
+    default=3,
+    help="Number of fine-tuning epochs",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=32,
+    help="Batch size per device",
+)
+@click.option(
+    "--learning-rate",
+    type=float,
+    default=2e-5,
+    help="Optimizer learning rate",
+)
+@click.option(
+    "--margin",
+    type=float,
+    default=0.5,
+    help="Margin for contrastive loss",
+)
+@click.option(
+    "--loss",
+    "loss_type",
+    type=click.Choice(["contrastive", "mnrl"], case_sensitive=False),
+    default="contrastive",
+    help="Loss function: contrastive or mnrl",
+)
+@click.option(
+    "--negative-ratio",
+    type=float,
+    default=3.0,
+    help="Ratio of negative pairs to positive pairs",
+)
+@click.option(
+    "--strategy",
+    type=click.Choice(["name", "json", "combined"], case_sensitive=False),
+    default="name",
+    help="Entity text rendering: name, json, or combined",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for splitting and sampling",
+)
+def fine_tune(
+    dataset: str,
+    model_name: str | None,
+    output_dir: str | None,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    margin: float,
+    loss_type: str,
+    negative_ratio: float,
+    strategy: str,
+    seed: int,
+) -> None:
+    """Fine-tune a sentence-transformer embedding model using contrastive learning.
+
+    Improves representation learning and semantic blocking on labeled ER benchmark
+    datasets using contrastive loss, learning better clustering representations without
+    custom classifiers.
+    """
+    from serf.embedding.fine_tune import run_fine_tune
+
+    base_model = model_name or str(serf_config.get("models.embedding", "BAAI/bge-small-en-v1.5"))
+    click.echo(f"Fine-tuning embedding model on {dataset}:")
+    click.echo(f"  Base model: {base_model}")
+    click.echo(f"  Loss: {loss_type}")
+    click.echo(f"  Epochs: {epochs}, Batch size: {batch_size}, Learning rate: {learning_rate}")
+    click.echo(f"  Negative ratio: {negative_ratio}, Strategy: {strategy}, Margin: {margin}")
+
+    result = run_fine_tune(
+        dataset_name=dataset,
+        model_name=base_model,
+        output_dir=output_dir,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        margin=margin,
+        loss_type=loss_type,
+        negative_ratio=negative_ratio,
+        strategy=strategy,
+        seed=seed,
+    )
+
+    click.echo("\nFine-tuning completed successfully!")
+    click.echo(f"  Output directory: {result.output_dir}")
+    click.echo(
+        f"  Pairs: {result.train_pairs} train, {result.val_pairs} val, {result.holdout_pairs} holdout"
+    )
+    click.echo("\nHoldout Blocking Recall Comparison:")
+    click.echo(f"  Raw base model:      {result.raw_blocking_recall:.4f}")
+    click.echo(f"  Fine-tuned model:    {result.tuned_blocking_recall:.4f}")
+    delta = result.tuned_blocking_recall - result.raw_blocking_recall
+    click.echo(f"  Delta:               {delta:+.4f}")
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 

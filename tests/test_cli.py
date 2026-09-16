@@ -33,6 +33,7 @@ def test_cli_help() -> None:
     assert "profile-benchmark" in result.output
     assert "blocking-sweep" in result.output
     assert "mteb-rank" in result.output
+    assert "fine-tune" in result.output
 
 
 def test_cli_version() -> None:
@@ -463,3 +464,20 @@ def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.Mo
     )
     assert "Refusing to evaluate" not in result.output
     assert "WARNING" in result.output
+
+
+def test_fine_tune_help() -> None:
+    """Test fine-tune CLI command help output."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["fine-tune", "--help"])
+    assert result.exit_code == 0
+    assert "fine-tune" in result.output
+    assert "--model" in result.output
+    assert "--output-dir" in result.output
+    assert "--epochs" in result.output
+    assert "--batch-size" in result.output
+    assert "--learning-rate" in result.output
+    assert "--loss" in result.output
+    assert "--margin" in result.output
+    assert "--negative-ratio" in result.output
+    assert "--strategy" in result.output

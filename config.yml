@@ -244,12 +244,6 @@ benchmarks:
   # blocking embeds every record on every ER iteration. The e5 and bge families
   # need their instruction prefix; the others are trained without one.
   embedding_candidates:
-    - model: "intfloat/multilingual-e5-base"
-      prompt: ""
-    - model: "intfloat/multilingual-e5-base"
-      prompt: "query: "
-    - model: "intfloat/multilingual-e5-small"
-      prompt: "query: "
     - model: "BAAI/bge-small-en-v1.5"
       prompt: "Represent this sentence for searching relevant passages: "
     - model: "BAAI/bge-base-en-v1.5"
@@ -266,6 +260,12 @@ benchmarks:
     # there: 149M parameters and 768 dimensions, trained without a prefix.
     - model: "Alibaba-NLP/gte-modernbert-base"
       prompt: ""
+    - model: "intfloat/multilingual-e5-base"
+      prompt: ""
+    - model: "intfloat/multilingual-e5-base"
+      prompt: "query: "
+    - model: "intfloat/multilingual-e5-small"
+      prompt: "query: "
   # `serf blocking-sweep --candidate-set large`. Models inside 3B parameters and
   # 1024 output dimensions that load on transformers 5.x. Prompts are each
   # model's own documented template for a symmetric task.

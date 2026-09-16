@@ -4,8 +4,10 @@ from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import dspy
+from dspy.teleprompt import bootstrap_trace
 
 from serf.dspy.optimize import (
+    _patch_bootstrap_trace,
     er_metric,
     gold_resolution_for_block,
     optimize_module,
@@ -54,7 +56,7 @@ def test_er_metric_missed_and_extra_pairs() -> None:
 def test_optimize_module_uses_student_lm_and_teacher_reflection(
     mock_create_lm: MagicMock, mock_gepa_cls: MagicMock
 ) -> None:
-    """GEPA compiles the student module with Gemini 3.5 Flash-Lite as reflection_lm."""
+    """GEPA compiles the student module with Gemini 3.8 Flash as reflection_lm."""
     student_lm = MagicMock(name="student_lm")
     teacher_lm = MagicMock(name="teacher_lm")
 
@@ -179,3 +181,32 @@ def test_prepare_dataset_splits_val_examples_carry_gold_pairs(mock_blocker_cls: 
     )
     assert val
     assert sum(len(example.resolution.matches) for example in val) > 0
+
+
+def test_patch_bootstrap_trace_recovers_dropped_examples() -> None:
+    """When bootstrap_trace_data drops examples, the patch restores them to prevent IndexError."""
+    dataset = [dspy.Example(x=i).with_inputs("x") for i in range(4)]
+    dropped_results: list[dict[str, Any]] = [
+        {"example": dataset[0], "prediction": "p0", "trace": [], "example_ind": 0, "score": 1.0},
+        {"example": dataset[1], "prediction": "p1", "trace": [], "example_ind": 1, "score": 0.8},
+        {"example": dataset[3], "prediction": "p3", "trace": [], "example_ind": 3, "score": 0.5},
+    ]
+
+    # Save current and reset patch flag to test cleanly
+    orig = bootstrap_trace.bootstrap_trace_data
+    try:
+        mock_orig = MagicMock(return_value=dropped_results)
+        mock_orig._serf_patched = False
+        bootstrap_trace.bootstrap_trace_data = mock_orig
+
+        _patch_bootstrap_trace()
+        recovered = bootstrap_trace.bootstrap_trace_data(
+            None, dataset, metric=lambda *_: 1.0, failure_score=0.0
+        )
+
+        assert len(recovered) == 4
+        assert [r["example_ind"] for r in recovered] == [0, 1, 2, 3]
+        assert recovered[2]["score"] == 0.0
+        assert recovered[2]["prediction"].completion_text == "Evaluation failed"
+    finally:
+        bootstrap_trace.bootstrap_trace_data = orig

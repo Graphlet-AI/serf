@@ -365,3 +365,16 @@ def test_gepa_state_directories_are_disjoint_across_datasets() -> None:
     assert len(set(directories.values())) == len(DATASETS)
     for name, directory in directories.items():
         assert f"/{name}/" in f"{directory}/"
+
+
+def test_changing_the_split_sizes_starts_gepa_from_clean_state() -> None:
+    """Resumable state holds per-example valset scores, so a new valset cannot reuse it."""
+    from serf.dspy.train import run_log_dir
+    from serf.eval.splits import SplitSizes
+
+    instructions = get_dataset_spec(DATASETS[0]).signature.instructions
+    old = run_log_dir(DATASETS[0], instructions, sizes=SplitSizes(1000, 200, 1000))
+    new = run_log_dir(DATASETS[0], instructions, sizes=SplitSizes(2700, 1100, 1100))
+
+    assert old != new
+    assert run_log_dir(DATASETS[0], instructions, sizes=SplitSizes(1000, 200, 1000)) == old

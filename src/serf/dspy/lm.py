@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import threading
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -51,6 +52,8 @@ class VertexRefreshingLM(dspy.LM):
         Extra ``dspy.LM`` arguments (``api_base``, ``temperature``, ...)
     """
 
+    _lock: threading.Lock = threading.Lock()
+
     def __init__(
         self,
         model: str,
@@ -86,7 +89,16 @@ class VertexRefreshingLM(dspy.LM):
             LiteLLM completion response
         """
         self.refresh_token_if_needed()
-        return super().forward(prompt=prompt, messages=messages, **kwargs)
+        try:
+            return super().forward(prompt=prompt, messages=messages, **kwargs)
+        except Exception as e:
+            if self._is_auth_error(e):
+                logger.warning(
+                    f"Vertex AI authentication failure ({e}); forcing token refresh and retrying"
+                )
+                self.refresh_token_if_needed(force=True)
+                return super().forward(prompt=prompt, messages=messages, **kwargs)
+            raise
 
     async def aforward(
         self,
@@ -111,19 +123,45 @@ class VertexRefreshingLM(dspy.LM):
             LiteLLM completion response
         """
         self.refresh_token_if_needed()
-        return await super().aforward(prompt=prompt, messages=messages, **kwargs)
+        try:
+            return await super().aforward(prompt=prompt, messages=messages, **kwargs)
+        except Exception as e:
+            if self._is_auth_error(e):
+                logger.warning(
+                    f"Vertex AI authentication failure ({e}); forcing token refresh and retrying"
+                )
+                self.refresh_token_if_needed(force=True)
+                return await super().aforward(prompt=prompt, messages=messages, **kwargs)
+            raise
 
-    def refresh_token_if_needed(self) -> None:
-        """Mint a new access token when the cached one is stale.
+    def refresh_token_if_needed(self, *, force: bool = False) -> None:
+        """Mint a new access token when the cached one is stale or forced.
 
-        Copies of this LM share the same credentials object, so a token
-        refreshed by one copy is picked up by the others.
+        Thread-safe across worker threads. Copies of this LM share the same
+        credentials object, so a token refreshed by one copy is picked up by
+        the others.
         """
-        if self._token_is_stale():
-            self.credentials.refresh(Request())
-            logger.info("Refreshed Vertex AI access token")
-        if self.kwargs.get("api_key") != self.credentials.token:
-            self.kwargs["api_key"] = self.credentials.token
+        with self._lock:
+            if force or self._token_is_stale():
+                self.credentials.refresh(Request())
+                logger.info("Refreshed Vertex AI access token")
+            if self.kwargs.get("api_key") != self.credentials.token:
+                self.kwargs["api_key"] = self.credentials.token
+
+    @staticmethod
+    def _is_auth_error(exc: Exception) -> bool:
+        """Return whether an exception indicates an expired or invalid token."""
+        msg = str(exc).lower()
+        return any(
+            err in msg
+            for err in (
+                "access_token_expired",
+                "unauthenticated",
+                "authenticationerror",
+                "invalid authentication credentials",
+                "401",
+            )
+        )
 
     def _token_is_stale(self) -> bool:
         """Return whether the credentials need a refresh before the next call.
@@ -417,7 +455,7 @@ def _create_gemini_lm(model: str, *, temperature: float, max_tokens: int) -> dsp
     Parameters
     ----------
     model : str
-        Gemini model identifier (e.g. ``gemini/gemini-3.5-flash-lite``)
+        Gemini model identifier (e.g. ``gemini/gemini-3.8-flash``)
     temperature : float
         Sampling temperature
     max_tokens : int

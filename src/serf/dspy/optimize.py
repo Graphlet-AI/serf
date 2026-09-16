@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Any, Literal, cast
 
 import dspy
+from dspy.teleprompt import bootstrap_trace
+from dspy.teleprompt.bootstrap_trace import FailedPrediction, TraceData
 from dspy.teleprompt.gepa.gepa import GEPAFeedbackMetric
 from dspy.teleprompt.gepa.gepa_utils import ScoreWithFeedback
 
@@ -296,6 +298,54 @@ def prepare_dataset_splits(
     return train_examples, val_examples, holdout_blocks
 
 
+def _patch_bootstrap_trace() -> None:
+    """Ensure dspy.teleprompt.bootstrap_trace.bootstrap_trace_data never drops examples.
+
+    GEPA's engine expects EvaluationBatch to have exactly as many results as the
+    input batch (outputs_by[eid] = eb.outputs[j]). The stock bootstrap_trace_data
+    drops failed unpackings via 'continue' when raise_on_error=False, causing
+    EvaluationBatch to be short and crashing GEPA with IndexError after hours of run.
+    This patch replaces dropped entries with a FailedPrediction keeping the batch length
+    intact.
+    """
+    original_fn = bootstrap_trace.bootstrap_trace_data
+
+    if getattr(original_fn, "_serf_patched", False):
+        return
+
+    def patched_bootstrap_trace_data(*args: Any, **kwargs: Any) -> list[Any]:
+        results = original_fn(*args, **kwargs)
+        dataset = kwargs.get("dataset") or (args[1] if len(args) > 1 else None)
+        if dataset is not None and len(results) < len(dataset):
+            logger.warning(
+                f"bootstrap_trace_data dropped {len(dataset) - len(results)} examples; "
+                "recovering missing entries as failures so GEPA does not crash on IndexError"
+            )
+            seen_inds = {d["example_ind"] for d in results if "example_ind" in d}
+            failure_score = kwargs.get("failure_score", 0.0)
+            metric = kwargs.get("metric") or (args[2] if len(args) > 2 else None)
+            recovered = []
+            for idx, ex in enumerate(dataset):
+                if idx in seen_inds:
+                    recovered.append(next(d for d in results if d.get("example_ind") == idx))
+                else:
+                    item: TraceData = {
+                        "example": ex,
+                        "prediction": cast(
+                            Any, FailedPrediction(completion_text="Evaluation failed")
+                        ),
+                        "trace": [],
+                        "example_ind": idx,
+                        "score": failure_score if metric else None,
+                    }
+                    recovered.append(item)
+            return recovered
+        return results
+
+    patched_bootstrap_trace_data._serf_patched = True  # type: ignore[attr-defined]
+    bootstrap_trace.bootstrap_trace_data = patched_bootstrap_trace_data
+
+
 def optimize_module(
     module: dspy.Module,
     trainset: list[dspy.Example],
@@ -310,7 +360,7 @@ def optimize_module(
     """Optimize a DSPy module with GEPA using student and teacher LMs.
 
     The student LM (GPT OSS 120b by default) executes the task program.
-    The teacher LM (Gemini 3.5 Flash-Lite by default) is the GEPA ``reflection_lm``.
+    The teacher LM (Gemini 3.8 Flash by default) is the GEPA ``reflection_lm``.
 
     Parameters
     ----------
@@ -354,6 +404,7 @@ def optimize_module(
         f"log_dir={log_dir}"
     )
     gepa_metric: GEPAFeedbackMetric = metric or er_metric
+    _patch_bootstrap_trace()
     optimizer = dspy.GEPA(
         metric=gepa_metric,
         reflection_lm=teacher_lm,

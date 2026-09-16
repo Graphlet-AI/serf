@@ -299,7 +299,7 @@ fine-tune.
 
 - **Student and teacher are separate models**, exactly the asymmetry the sources recommend.
   `models.student` is `openai/gpt-oss-120b-maas` and executes the task; `models.teacher` is
-  `gemini/gemini-3.5-flash-lite` and is passed as `reflection_lm` at `temperature=1.0`.
+  `gemini/gemini-3.8-flash` and is passed as `reflection_lm` at `temperature=1.0`.
 - **`er_metric` is the feedback function.** It scores a `BlockMatch` prediction with F1 over
   normalized match pairs and then enumerates the errors: `Missed true pairs: [...]` and
   `Extra predicted pairs: [...]`. That is the "enumerate, do not summarize" rule — the

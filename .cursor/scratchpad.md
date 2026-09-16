@@ -158,6 +158,7 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Live `serf train` smoke run on DBLP-ACM: validation 0.9848 -> 1.0000, program saved
 - [x] `serf prompts --trained` and `serf benchmark --trained-prompts` verified against the saved program
 - [x] HTML-entity parse failure found by the training run and fixed in `RepairingXMLAdapter`
+- [x] Rewrote README to be clean, human-centric, and technically precise without agentic filler
 
 ## Executor's Feedback or Assistance Requests
 

@@ -447,8 +447,13 @@ def make_dataset_metric(spec: DatasetSignatureSpec) -> Callable[..., ScoreWithFe
     return metric
 
 
-def run_log_dir(dataset: str, instructions: str, log_dir: str | None = None) -> str:
-    """Return a GEPA state directory unique to this dataset and prompt.
+def run_log_dir(
+    dataset: str,
+    instructions: str,
+    log_dir: str | None = None,
+    sizes: SplitSizes | None = None,
+) -> str:
+    """Return a GEPA state directory unique to this dataset, prompt and splits.
 
     GEPA writes ``gepa_state.bin`` into its log directory and silently resumes
     from it, which is what makes a long run restartable. With one shared
@@ -462,6 +467,12 @@ def run_log_dir(dataset: str, instructions: str, log_dir: str | None = None) -> 
     useful half: an interrupted run of the same prompt resumes, and a changed
     prompt starts clean.
 
+    The split sizes are in the fingerprint too, because resumable state holds
+    candidate programs *and* their per-example validation scores. Resuming onto
+    a different valset would carry scores for examples the new run does not
+    have, so state is only reusable when the prompt and the data are both
+    unchanged.
+
     Parameters
     ----------
     dataset : str
@@ -470,14 +481,20 @@ def run_log_dir(dataset: str, instructions: str, log_dir: str | None = None) -> 
         Instructions the run starts from
     log_dir : str | None
         Root directory. Defaults to config ``optimize.log_dir``.
+    sizes : SplitSizes | None
+        Record budgets this run draws. Defaults to the dataset's configured
+        budgets.
 
     Returns
     -------
     str
-        Path under the root, namespaced by dataset and instruction fingerprint
+        Path under the root, namespaced by dataset and a fingerprint of the
+        instructions and the split sizes
     """
     root = log_dir or str(config.get("optimize.log_dir", "data/gepa_logs"))
-    fingerprint = hashlib.sha256(instructions.encode("utf-8")).hexdigest()[:12]
+    sizes = sizes or get_split_sizes(dataset)
+    identity = f"{instructions}\n{sizes.train_records}/{sizes.val_records}/{sizes.holdout_records}"
+    fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
     return str(Path(root) / dataset / fingerprint)
 
 
@@ -647,7 +664,7 @@ def train_dataset(
         student_model=student_model,
         teacher_model=teacher_model,
         auto=auto,
-        log_dir=log_dir or run_log_dir(dataset, instructions_before),
+        log_dir=log_dir or run_log_dir(dataset, instructions_before, sizes=sizes),
     )
 
     path = trained_program_path(dataset, output_dir)

@@ -159,8 +159,18 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] `serf prompts --trained` and `serf benchmark --trained-prompts` verified against the saved program
 - [x] HTML-entity parse failure found by the training run and fixed in `RepairingXMLAdapter`
 - [x] Rewrote README to be clean, human-centric, and technically precise without agentic filler
+- [x] Implement short-form embedding fine-tuning via contrastive learning for labeled datasets (CLI `serf fine-tune`)
+- [x] Add tests for dataset generation, loss, and CLI command
+- [x] Verified with pytest, ruff, zuban
 
 ## Executor's Feedback or Assistance Requests
+
+- **Embedding fine-tuning design**:
+  - Module `serf.embedding.fine_tune` created to support contrastive fine-tuning using `SentenceTransformerTrainer` with `ContrastiveLoss` (or `MultipleNegativesRankingLoss`).
+  - Labeled dataset generation from benchmark datasets: pairing entities across sources based on labels (matches as positive pairs label 1.0, non-matches/hard-negatives as negative pairs label 0.0).
+  - Uses `BAAI/bge-small-en-v1.5` as default base model (modern small embedding) instead of intfloat.
+  - CLI `serf fine-tune` with arguments for `--dataset`, `--model`, `--output-dir`, `--epochs`, `--batch-size`, `--learning-rate`, `--margin`, `--loss`, etc.
+  - Evaluation via `BinaryClassificationEvaluator` and clustering/blocking evaluation on holdout.
 
 - **The HIGH tier needs a decision.** The instruction was to default HIGH to a bge model after
   trying intfloat. `intfloat/multilingual-e5-large-instruct` was measured and lost (0.8705 mean

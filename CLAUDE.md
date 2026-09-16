@@ -34,6 +34,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 - **src/** - Source code
   - **serf/** - Core application code
     - **block/** - Blocking module - semantic clustering using sentence-transformers
+    - **embedding/** - Embedding fine-tuning module - contrastive representation learning
     - **match/** - Matching module - matching entire blocks at once with Gemini models
     - **merge/** - Merging module - Record and field-level merging utilities
     - **edge/** - Edge resolution module - deduplication of edges after node merges

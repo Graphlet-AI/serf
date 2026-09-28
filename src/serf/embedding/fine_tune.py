@@ -6,6 +6,7 @@ entity pairs (matches vs non-matches), inspired by Eridu and sentence-transforme
 
 from __future__ import annotations
 
+import logging
 import random
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,7 +18,9 @@ from sentence_transformers import SentenceTransformer, SentenceTransformerTraine
 from sentence_transformers.sentence_transformer.evaluation import BinaryClassificationEvaluator
 from sentence_transformers.sentence_transformer.losses import (
     ContrastiveLoss,
+    CoSENTLoss,
     MultipleNegativesRankingLoss,
+    OnlineContrastiveLoss,
 )
 from sentence_transformers.sentence_transformer.model_card import SentenceTransformerModelCardData
 from sentence_transformers.sentence_transformer.training_args import (
@@ -29,10 +32,21 @@ from serf.config import config
 from serf.dspy.types import Entity
 from serf.eval.benchmarks import RIGHT_ID_OFFSET, BenchmarkDataset
 from serf.eval.blocking_sweep import evaluate_blocking
-from serf.eval.splits import sample_random_splits
+from serf.eval.splits import get_split_sizes, sample_random_splits
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
+
+# Silence noisy external downloaders and loggers during training
+for _noisy in [
+    "httpx",
+    "httpcore",
+    "huggingface_hub",
+    "urllib3",
+    "filelock",
+    "fsspec",
+]:
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 
 @dataclass
@@ -83,15 +97,13 @@ def entity_to_text(entity: Entity, strategy: str = "name") -> str:
         Text representation
     """
     if strategy == "json":
-        import json
-
-        return json.dumps(entity.attributes, sort_keys=True)
+        return entity.json_for_embedding()
     if strategy == "combined":
-        parts = [entity.name]
+        parts = [entity.text_for_embedding()]
         if entity.description:
             parts.append(entity.description)
         return " ".join(parts).strip()
-    return entity.name or "unknown"
+    return entity.text_for_embedding()
 
 
 def generate_labeled_pairs(
@@ -249,7 +261,7 @@ def run_fine_tune(
     margin : float
         Contrastive loss margin
     loss_type : str
-        "contrastive" (ContrastiveLoss) or "mnrl" (MultipleNegativesRankingLoss)
+        "contrastive", "online_contrastive", "mnrl", or "cosent"
     negative_ratio : float
         Ratio of negative pairs to positive pairs in training/val
     strategy : str
@@ -264,6 +276,12 @@ def run_fine_tune(
         Torch device ("cuda", "mps", "cpu")
     eval_steps : int
         Number of steps between evaluation and checkpointing
+    train_records : int | None
+        Optional override for train split record count
+    val_records : int | None
+        Optional override for val split record count
+    holdout_records : int | None
+        Optional override for holdout split record count
 
     Returns
     -------
@@ -285,12 +303,29 @@ def run_fine_tune(
     all_entities = left_entities + right_entities
 
     # 2. Split dataset cleanly by match groups
+    try:
+        configured_sizes = get_split_sizes(dataset_name)
+    except Exception:
+        configured_sizes = None
+
+    effective_train_records = train_records
+    effective_val_records = val_records
+    effective_holdout_records = holdout_records
+
+    if configured_sizes is not None:
+        if effective_train_records is None:
+            effective_train_records = configured_sizes.train_records
+        if effective_val_records is None:
+            effective_val_records = configured_sizes.val_records
+        if effective_holdout_records is None:
+            effective_holdout_records = configured_sizes.holdout_records
+
     splits = sample_random_splits(
         all_entities,
         benchmark_data.ground_truth,
-        train_records=train_records,
-        val_records=val_records,
-        holdout_records=holdout_records,
+        train_records=effective_train_records,
+        val_records=effective_val_records,
+        holdout_records=effective_holdout_records,
         seed=seed,
     )
 
@@ -334,6 +369,8 @@ def run_fine_tune(
     val_ds = pairs_to_dataset(val_pairs) if val_pairs else train_ds
     holdout_ds = pairs_to_dataset(holdout_pairs) if holdout_pairs else val_ds
 
+    prompt = str(config.get("models.embedding_prompt", ""))
+
     # 4. Load base model
     logger.info(f"Loading base model {model_name} on {device}")
     model = SentenceTransformer(
@@ -346,26 +383,66 @@ def run_fine_tune(
         ),
     )
 
-    # 5. Build evaluator on holdout split to measure raw baseline
-    eval_target_ds = holdout_ds if len(holdout_ds) > 0 else val_ds
-    evaluator = BinaryClassificationEvaluator(
-        sentences1=eval_target_ds["sentence1"],
-        sentences2=eval_target_ds["sentence2"],
-        labels=eval_target_ds["label"],
-        name=f"{dataset_name}-holdout",
+    # 5. Build holdout evaluator for pre- and post-training measurement
+    # Prefix prompt if present to stay aligned with retrieval/blocking embeddings
+    holdout_s1 = (
+        [(prompt + s if prompt else s) for s in holdout_ds["sentence1"]]
+        if len(holdout_ds) > 0
+        else []
+    )
+    holdout_s2 = (
+        [(prompt + s if prompt else s) for s in holdout_ds["sentence2"]]
+        if len(holdout_ds) > 0
+        else []
+    )
+    holdout_labels = holdout_ds["label"] if len(holdout_ds) > 0 else []
+
+    holdout_evaluator = (
+        BinaryClassificationEvaluator(
+            sentences1=holdout_s1,
+            sentences2=holdout_s2,
+            labels=holdout_labels,
+            name=f"{dataset_name}-holdout",
+        )
+        if len(holdout_labels) > 0
+        else None
     )
 
-    logger.info("Evaluating raw baseline model...")
-    raw_eval = evaluator(model)
-    logger.info(f"Raw model holdout evaluation: {raw_eval}")
+    # Build validation evaluator for trainer (checkpoint selection on validation, NEVER holdout)
+    val_s1 = [(prompt + s if prompt else s) for s in val_ds["sentence1"]] if len(val_ds) > 0 else []
+    val_s2 = [(prompt + s if prompt else s) for s in val_ds["sentence2"]] if len(val_ds) > 0 else []
+    val_labels = val_ds["label"] if len(val_ds) > 0 else []
 
-    # Also evaluate blocking recall baseline on holdout
+    val_evaluator = (
+        BinaryClassificationEvaluator(
+            sentences1=val_s1,
+            sentences2=val_s2,
+            labels=val_labels,
+            name=f"{dataset_name}-val",
+        )
+        if len(val_labels) > 0
+        else None
+    )
+
+    logger.info("Evaluating raw baseline model on holdout split...")
+    raw_eval: dict[str, Any] = {}
+    if holdout_evaluator is not None:
+        raw_eval = holdout_evaluator(model)
+        logger.info(f"Raw model holdout evaluation: {raw_eval}")
+
+    # Also evaluate blocking recall baseline on holdout (restricted to holdout records)
+    holdout_ids = {e.id for e in splits.holdout_records}
+    holdout_ground_truth = {
+        (left_id, right_id)
+        for left_id, right_id in benchmark_data.ground_truth
+        if left_id in holdout_ids and right_id in holdout_ids
+    }
+
     target_block = int(config.get("er.blocking.target_block_size", 30))
     max_block = int(config.get("er.blocking.max_block_size", 100))
-    prompt = str(config.get("models.embedding_prompt", ""))
     raw_blocking = evaluate_blocking(
         splits.holdout_records,
-        benchmark_data.ground_truth,
+        holdout_ground_truth,
         dataset=dataset_name,
         model_name=model_name,
         prompt=prompt,
@@ -378,11 +455,13 @@ def run_fine_tune(
 
     # 6. Configure loss
     if loss_type == "mnrl":
-        # MultipleNegativesRankingLoss uses in-batch negatives (expects (sentence1, sentence2) positive pairs)
-        # Filter train_pairs to positive only
         pos_train_pairs = [p for p in train_pairs if p.label == 1.0]
         train_ds = pairs_to_dataset(pos_train_pairs)
         train_loss = MultipleNegativesRankingLoss(model)
+    elif loss_type == "online_contrastive":
+        train_loss = OnlineContrastiveLoss(model=model, margin=margin)
+    elif loss_type == "cosent":
+        train_loss = CoSENTLoss(model=model)
     else:
         train_loss = ContrastiveLoss(model=model, margin=margin)
 
@@ -407,19 +486,20 @@ def run_fine_tune(
         greater_is_better=False,
         logging_steps=max(1, eval_steps // 2),
         report_to="none",
+        prompts=prompt if prompt else None,
     )
 
-    # 8. Train
+    # 8. Train (evaluated on val_ds, NEVER on holdout_ds)
     trainer = SentenceTransformerTrainer(
         model=model,
         args=training_args,
         train_dataset=train_ds,
         eval_dataset=val_ds if len(val_ds) > 0 else None,
         loss=train_loss,
-        evaluator=evaluator if len(val_ds) > 0 else None,
+        evaluator=val_evaluator if len(val_ds) > 0 else None,
     )
 
-    logger.info(f"Starting fine-tuning for {epochs} epochs...")
+    logger.info(f"Starting fine-tuning for {epochs} epochs with {loss_type} loss...")
     trainer.train()
 
     # 9. Save final fine-tuned model
@@ -427,13 +507,15 @@ def run_fine_tune(
     logger.info(f"Saved fine-tuned model to {out_path}")
 
     # 10. Final evaluation on holdout
-    tuned_eval = evaluator(model)
-    logger.info(f"Fine-tuned model holdout evaluation: {tuned_eval}")
+    tuned_eval: dict[str, Any] = {}
+    if holdout_evaluator is not None:
+        tuned_eval = holdout_evaluator(model)
+        logger.info(f"Fine-tuned model holdout evaluation: {tuned_eval}")
 
     # Evaluate blocking recall with fine-tuned model
     tuned_blocking = evaluate_blocking(
         splits.holdout_records,
-        benchmark_data.ground_truth,
+        holdout_ground_truth,
         dataset=dataset_name,
         model_name=str(out_path),
         prompt=prompt,
@@ -443,6 +525,16 @@ def run_fine_tune(
     )
     tuned_recall = tuned_blocking.blocking_recall
     logger.info(f"Fine-tuned model holdout blocking recall: {tuned_recall:.4f}")
+
+    # Metric evaluation & verdict line
+    score = float(tuned_eval.get(f"{dataset_name}-holdout_cosine_f1", 0.0))
+    baseline_eval = float(raw_eval.get(f"{dataset_name}-holdout_cosine_f1", 0.0))
+    delta = score - baseline_eval
+    verdict = "WIN" if delta >= 0.005 else "MARGINAL" if delta >= 0 else "REGRESSION"
+    logger.info(
+        f"VERDICT: {verdict} | score={score:.4f} | baseline={baseline_eval:.4f} | delta={delta:+.4f} "
+        f"| holdout_blocking_recall={tuned_recall:.4f} (raw={raw_recall:.4f}, delta={tuned_recall - raw_recall:+.4f})"
+    )
 
     return FineTuneResult(
         dataset=dataset_name,

@@ -152,3 +152,49 @@ def test_run_fine_tune_flow(
     assert result.tuned_blocking_recall == 0.88
     mock_trainer.train.assert_called_once()
     mock_model.save_pretrained.assert_called_once()
+
+
+@patch("serf.embedding.fine_tune.evaluate_blocking")
+@patch("serf.embedding.fine_tune.SentenceTransformerTrainer")
+@patch("serf.embedding.fine_tune.SentenceTransformer")
+@patch("serf.embedding.fine_tune.BenchmarkDataset.download")
+def test_run_fine_tune_different_losses(
+    mock_download: MagicMock,
+    mock_sbert_cls: MagicMock,
+    mock_trainer_cls: MagicMock,
+    mock_eval_blocking: MagicMock,
+    tmp_path: Path,
+) -> None:
+    mock_ds = MagicMock()
+    left = [_entity(i, f"item left {i}") for i in range(10)]
+    right = [_entity(100000 + i, f"item right {i}") for i in range(10)]
+    mock_ds.to_entities.return_value = (left, right)
+    mock_ds.ground_truth = {(i, 100000 + i) for i in range(10)}
+    mock_download.return_value = mock_ds
+
+    mock_model = MagicMock()
+    mock_model.similarity_fn_name = "cosine"
+    mock_model.encode.side_effect = lambda texts, **kwargs: np.array(
+        [[0.1, 0.2]] * len(texts), dtype=np.float32
+    )
+    mock_sbert_cls.return_value = mock_model
+
+    raw_blocking = MagicMock(blocking_recall=0.75)
+    tuned_blocking = MagicMock(blocking_recall=0.85)
+    mock_eval_blocking.side_effect = [raw_blocking, tuned_blocking] * 3
+
+    for loss in ("online_contrastive", "mnrl", "cosent"):
+        result = run_fine_tune(
+            "dblp-acm",
+            model_name="BAAI/bge-small-en-v1.5",
+            output_dir=str(tmp_path / f"model_{loss}"),
+            epochs=1,
+            batch_size=8,
+            loss_type=loss,
+            strategy="combined",
+            seed=42,
+            train_records=10,
+            val_records=5,
+            holdout_records=5,
+        )
+        assert result.loss_name == loss

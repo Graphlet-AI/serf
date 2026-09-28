@@ -481,3 +481,6 @@ def test_fine_tune_help() -> None:
     assert "--margin" in result.output
     assert "--negative-ratio" in result.output
     assert "--strategy" in result.output
+    assert "--train-records" in result.output
+    assert "--val-records" in result.output
+    assert "--holdout-records" in result.output

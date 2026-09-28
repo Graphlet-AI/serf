@@ -7,10 +7,7 @@ from this package would create an import cycle. Import it directly instead:
 """
 
 from serf.dspy.lm import create_lm
-from serf.eval.splits import get_all_split_sizes, get_split_sizes
 
 __all__ = [
     "create_lm",
-    "get_all_split_sizes",
-    "get_split_sizes",
 ]

@@ -2117,9 +2117,11 @@ def benchmark_all(
 @click.option(
     "--loss",
     "loss_type",
-    type=click.Choice(["contrastive", "mnrl"], case_sensitive=False),
+    type=click.Choice(
+        ["contrastive", "online_contrastive", "mnrl", "cosent"], case_sensitive=False
+    ),
     default="contrastive",
-    help="Loss function: contrastive or mnrl",
+    help="Loss function: contrastive, online_contrastive, mnrl, or cosent",
 )
 @click.option(
     "--negative-ratio",
@@ -2139,6 +2141,24 @@ def benchmark_all(
     default=42,
     help="Random seed for splitting and sampling",
 )
+@click.option(
+    "--train-records",
+    type=int,
+    default=None,
+    help="Number of records to allocate to the training split",
+)
+@click.option(
+    "--val-records",
+    type=int,
+    default=None,
+    help="Number of records to allocate to the validation split",
+)
+@click.option(
+    "--holdout-records",
+    type=int,
+    default=None,
+    help="Number of records to allocate to the holdout evaluation split",
+)
 def fine_tune(
     dataset: str,
     model_name: str | None,
@@ -2151,6 +2171,9 @@ def fine_tune(
     negative_ratio: float,
     strategy: str,
     seed: int,
+    train_records: int | None,
+    val_records: int | None,
+    holdout_records: int | None,
 ) -> None:
     """Fine-tune a sentence-transformer embedding model using contrastive learning.
 
@@ -2179,6 +2202,9 @@ def fine_tune(
         negative_ratio=negative_ratio,
         strategy=strategy,
         seed=seed,
+        train_records=train_records,
+        val_records=val_records,
+        holdout_records=holdout_records,
     )
 
     click.echo("\nFine-tuning completed successfully!")

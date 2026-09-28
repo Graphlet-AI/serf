@@ -2,6 +2,12 @@
 
 ## Background and Motivation
 
+### Task: Contrastive Embedding Fine-Tuning for Entity Resolution
+
+In entity resolution, blocking recall forms the hard theoretical upper bound on end-to-end recall: any true match pair that blocking fails to co-cluster into a shared block can never be presented to the downstream LLM matcher. Profiling on the Leipzig and DeepMatcher benchmarks revealed that missed pairs during blocking accounted for over 59% of all missed pairs.
+
+While general-purpose sentence transformers like `BAAI/bge-small-en-v1.5` provide strong off-the-shelf semantic embeddings, they are trained on broad retrieval/STS corpora. Domain-specific entity resolution involves specialized titles, abbreviations, model numbers, and catalog texts. Drawing patterns from [Graphlet-AI/eridu](https://github.com/Graphlet-AI/eridu), this task introduces contrastive fine-tuning (`serf fine-tune`) to adapt the sentence transformer representations using labeled matches and negatives. This produces tighter semantic clusters for entities without requiring complex custom classifier heads, preserving fast FAISS-based semantic blocking.
+
 The first GEPA optimization run on `dblp-acm` (student `openai/gpt-oss-120b-maas`, teacher
 `gemini/gemini-3.5-flash-lite`) completed with exit 0 but produced nothing usable: the saved program
 `data/gepa_logs/dblp-acm-first/dblp-acm_gepa.json` still holds the original `BlockMatch`
@@ -28,7 +34,32 @@ Recall 0.4748 / F1 0.6299.
    disjoint by entity id; `train_blocks` counts blocks while `val_records`/`holdout_records` count
    records.
 
+### Contrastive Embedding Fine-Tuning Analysis
+
+1. **Split Separation (Rule 1)**: Must strictly segregate `train`, `val`, and `holdout` match groups. The evaluator passed to `SentenceTransformerTrainer` for checkpoint selection (`load_best_model_at_end`) must use `val_records`, and the final comparison must be measured on `holdout_records`.
+2. **Negative Pair Mining**: ER datasets are bipartite with high class imbalance. Mining negatives by drawing random cross-source pairs outside ground truth (default ratio 3.0 negatives per positive) provides hard contrastive signal.
+3. **Loss Functions**: Support `ContrastiveLoss` (margin-based distance), `OnlineContrastiveLoss` (focusing only on hard negatives and hard positives), `MultipleNegativesRankingLoss` (in-batch negatives), and `CoSENTLoss`.
+4. **Dual Evaluation**: Measure both pair-classification metrics (cosine F1, accuracy, average precision) and downstream blocking recall via `evaluate_blocking` on the holdout split before and after training.
+5. **Instruction Prompt Preservation**: BGE embeddings require the prompt prefix (`models.embedding_prompt`) which must be applied consistently across training pairs, evaluator pairs, and blocking inference.
+
 ## High-level Task Breakdown
+
+### Contrastive Embedding Fine-Tuning Task
+
+1. Refine `src/serf/embedding/fine_tune.py`:
+   - Enforce strict split hygiene (val evaluator for trainer, holdout evaluator only for pre/post benchmark).
+   - Support `OnlineContrastiveLoss` and `CoSENTLoss` alongside `ContrastiveLoss` and `MNRL`.
+   - Align text extraction with `Entity.text_for_embedding` and `Entity.json_for_embedding`.
+   - Pass `prompts` argument to `SentenceTransformerTrainingArguments` and evaluator to keep BGE instruction prefix consistent.
+   - Emit standard `VERDICT: ...` line and silence noisy HTTP logs per `train-sentence-transformers` skill.
+2. Update unit tests in `tests/test_fine_tune.py` and CLI tests in `tests/test_cli.py`.
+3. Run contrastive fine-tuning on benchmark dataset (`dblp-acm`), measuring holdout metrics and blocking recall delta.
+4. Run comparison across loss types or datasets if informative.
+5. Record benchmark results in `experiments/embedding-contrastive-finetuning.md` and update `scratchpad.md`.
+6. Run `pytest`, `ruff check --fix`, `ruff format`, and `zuban check src tests`.
+7. Commit, push, and update PR #23.
+
+### Previous Tasks (Historical)
 
 1. Tests first: starvation and normal cases for the split sampler, mocked token-refresh tests.
 2. Rewrite `sample_blocked_splits` to partition whole blocks, val and holdout budgets first.

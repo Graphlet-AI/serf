@@ -56,8 +56,12 @@ Recall 0.4748 / F1 0.6299.
 3. Run contrastive fine-tuning on benchmark dataset (`dblp-acm`), measuring holdout metrics and blocking recall delta.
 4. Run comparison across loss types or datasets if informative.
 5. Record benchmark results in `experiments/embedding-contrastive-finetuning.md` and update `scratchpad.md`.
-6. Run `pytest`, `ruff check --fix`, `ruff format`, and `zuban check src tests`.
-7. Commit, push, and update PR #23.
+6. Run unified cross-dataset contrastive fine-tuning (`serf fine-tune all`) across all 5 benchmark datasets.
+   - Evaluated on 1,885 holdout gold pairs across all datasets.
+   - Overall blocking recall lifted from 0.8955 to 0.9454 (+0.0499 delta, recovering 94 previously unreachable gold pairs).
+   - Candidate pairs for the matcher decreased by 13.1% (144,531 down to 125,608).
+7. Run `pytest`, `ruff check --fix`, `ruff format`, and `zuban check src tests`.
+8. Commit, push, and update PR #23.
 
 ### Previous Tasks (Historical)
 

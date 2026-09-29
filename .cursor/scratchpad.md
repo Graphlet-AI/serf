@@ -231,14 +231,26 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Add "Read These First" to `CLAUDE.md`, update `README.md` and `docs/SERF_LONG_SHOT_PLAN.md` with doc cross-references
 - [x] Run test suite, linters, and type checks
 - [x] Push branch and open new PR #24 based on `cursor/embedding-contrastive-finetune-66f9`
-- [ ] Add `--blocking-model` and `--blocking-strategy` to `train_dataset`, `serf train`, and `run_log_dir`
-- [ ] Add `--blocking-model` to `serf benchmark`
-- [ ] Unit tests for blocking model/strategy in `tests/test_train.py` and `tests/test_cli.py`
-- [ ] Launch GEPA training on `amazon-google` and `dblp-acm` with improved blocking in tmux
-- [ ] Monitor GEPA runs, record validation & holdout metrics in `experiments/gepa-tuning-results.md`
+- [x] Add `--blocking-model` and `--blocking-strategy` to `train_dataset`, `serf train`, and `run_log_dir`
+- [x] Add `--blocking-model` to `serf benchmark`
+- [x] Unit tests for blocking model/strategy in `tests/test_train.py` and `tests/test_cli.py`
+- [x] Vertex AI rate limit retry handler with exponential backoff and safe token refresh in `VertexRefreshingLM`
+- [x] Launch GEPA training on `amazon-google` and `dblp-acm` with improved blocking in tmux session `gepa-train`
+- [ ] Complete GEPA training and record validation & holdout metrics in `experiments/gepa-tuning-results.md`
 - [ ] Final verification: linters, typecheck, tests, commit, push, update PR #23
 
 ## Executor's Feedback or Assistance Requests
+
+- **GEPA Prompt Optimization with Improved Contrastive Blocking**:
+  - Wired `--blocking-model` and `--blocking-strategy` into `serf train` CLI and `train_dataset`.
+  - Added `--blocking-model` to `serf benchmark` CLI.
+  - Included blocking model and strategy in `run_log_dir` SHA-256 fingerprinting so training cache/logs never collide across different embedding or blocking setups.
+  - Implemented exponential backoff retry in `VertexRefreshingLM` for Vertex AI MaaS 429 / ResourceExhausted rate limit errors with up to 6 retry attempts.
+  - Tuned `optimize.num_threads: 2` in `config.yml` to prevent burst contention against Vertex quotas while maintaining parallel LM rollouts.
+  - Started local MLflow tracking server at `http://127.0.0.1:5001`.
+  - Launched GEPA training on `amazon-google` and `dblp-acm` using `--blocking-model data/models/fine-tuned-all-bge-small-contrastive --auto light` in tmux session `gepa-train` (output logged to `/opt/cursor/artifacts/gepa_train_improved_blocking.log`).
+  - Active progress: GEPA proposed candidate 1 with specialized domain-specific matching rules (publisher vs manufacturer verification, Yamaha MIDI arranger prefixes, edition strictness), passed acceptance on train minibatch, and is evaluating the 35 validation blocks.
+  - Once training completes, optimized programs will be saved to `data/trained_prompts/{dataset}_gepa.json` and holdout validation scores recorded.
 
 - **Research & Architecture Documentation Port from PR #19**:
 

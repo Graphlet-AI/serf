@@ -90,7 +90,7 @@ class VertexRefreshingLM(dspy.LM):
         Any
             LiteLLM completion response
         """
-        max_retries = int(config.get("er.matching.max_retries", 5))
+        max_retries = max(int(config.get("er.matching.max_retries", 5)), 6)
         for attempt in range(max_retries + 1):
             self.refresh_token_if_needed()
             try:
@@ -133,7 +133,7 @@ class VertexRefreshingLM(dspy.LM):
         Any
             LiteLLM completion response
         """
-        max_retries = int(config.get("er.matching.max_retries", 5))
+        max_retries = max(int(config.get("er.matching.max_retries", 5)), 6)
         for attempt in range(max_retries + 1):
             self.refresh_token_if_needed()
             try:

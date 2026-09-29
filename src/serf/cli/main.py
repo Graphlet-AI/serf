@@ -35,8 +35,9 @@ from serf.tracking import setup_mlflow
 
 logger = get_logger(__name__)
 
-# Available benchmark dataset names for CLI help
+# Available benchmark dataset names for CLI help (plus 'all' for cross-dataset fine-tuning)
 BENCHMARK_DATASETS = list(DATASET_REGISTRY.keys())
+FINE_TUNE_DATASETS = [*BENCHMARK_DATASETS, "all"]
 
 
 @click.group(context_settings={"show_default": True})
@@ -1253,6 +1254,21 @@ def prompts(
     default=True,
     help="Score both prompts on the held-out records GEPA never saw",
 )
+@click.option(
+    "--blocking-model",
+    type=str,
+    default=None,
+    help="Embedding model for semantic blocking",
+)
+@click.option(
+    "--blocking-strategy",
+    type=click.Choice(["name", "json", "union"], case_sensitive=False),
+    default=None,
+    help=(
+        "Embed the name alone, every field as JSON with field names inline,"
+        " or block on both and keep the blocks from each"
+    ),
+)
 def train(
     dataset: tuple[str, ...],
     all_datasets: bool,
@@ -1269,6 +1285,8 @@ def train(
     log_dir: str | None,
     data_dir: str | None,
     score_holdout: bool,
+    blocking_model: str | None,
+    blocking_strategy: str | None,
 ) -> None:
     """Train a benchmark dataset's matching prompt with GEPA.
 
@@ -1331,9 +1349,13 @@ def train(
             output_dir=output_dir,
             data_dir=data_dir,
             score_holdout=score_holdout,
+            blocking_model=blocking_model,
+            blocking_strategy=blocking_strategy,
         )
         results.append(result)
         click.echo(f"  Signature: {result.signature_name}")
+        if result.blocking_model:
+            click.echo(f"  Blocking:  {result.blocking_model} ({result.blocking_strategy})")
         click.echo(
             f"  Examples:  {result.train_examples} train, {result.val_examples} val, "
             f"{result.holdout_examples} holdout"
@@ -1717,6 +1739,12 @@ def optimize(
     ),
 )
 @click.option(
+    "--blocking-model",
+    type=str,
+    default=None,
+    help="Embedding model for semantic blocking",
+)
+@click.option(
     "--trained-prompts/--no-trained-prompts",
     default=False,
     help="Match with the instructions `serf train` wrote instead of the signature docstring",
@@ -1735,6 +1763,7 @@ def benchmark(
     sample_records: int | None,
     seed: int | None,
     blocking_strategy: str | None,
+    blocking_model: str | None,
     trained_prompts: bool,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
@@ -1762,7 +1791,7 @@ def benchmark(
     setup_mlflow()
 
     model = model or serf_config.get("models.llm")
-    embedding_model = str(serf_config.get("models.embedding"))
+    embedding_model = str(blocking_model or serf_config.get("models.embedding"))
     embedding_prompt = str(serf_config.get("models.embedding_prompt", ""))
     strategy = (blocking_strategy or str(serf_config.get("er.blocking.strategy", "name"))).lower()
 
@@ -2066,6 +2095,175 @@ def benchmark_all(
     with open(combined_file, "w") as f:
         json.dump(results, f, indent=2)
     click.echo(f"\nCombined results saved to {combined_file}")
+
+
+# ---------------------------------------------------------------------------
+# fine-tune  (contrastive fine-tuning for representation learning)
+# ---------------------------------------------------------------------------
+
+
+@cli.command(name="fine-tune")
+@click.argument("dataset", type=click.Choice(FINE_TUNE_DATASETS, case_sensitive=False))
+@click.option(
+    "--model",
+    "-m",
+    "model_name",
+    type=str,
+    default=None,
+    help="Base SentenceTransformer model (from config.yml models.embedding)",
+)
+@click.option(
+    "--output-dir",
+    "-o",
+    type=click.Path(),
+    default=None,
+    help="Directory to save fine-tuned model and evaluation artifacts",
+)
+@click.option(
+    "--epochs",
+    type=int,
+    default=3,
+    help="Number of fine-tuning epochs",
+)
+@click.option(
+    "--batch-size",
+    type=int,
+    default=32,
+    help="Batch size per device",
+)
+@click.option(
+    "--learning-rate",
+    type=float,
+    default=2e-5,
+    help="Optimizer learning rate",
+)
+@click.option(
+    "--margin",
+    type=float,
+    default=0.5,
+    help="Margin for contrastive loss",
+)
+@click.option(
+    "--loss",
+    "loss_type",
+    type=click.Choice(
+        ["contrastive", "online_contrastive", "mnrl", "cosent"], case_sensitive=False
+    ),
+    default="contrastive",
+    help="Loss function: contrastive, online_contrastive, mnrl, or cosent",
+)
+@click.option(
+    "--negative-ratio",
+    type=float,
+    default=3.0,
+    help="Ratio of negative pairs to positive pairs",
+)
+@click.option(
+    "--strategy",
+    type=click.Choice(["name", "json", "combined"], case_sensitive=False),
+    default="name",
+    help="Entity text rendering: name, json, or combined",
+)
+@click.option(
+    "--seed",
+    type=int,
+    default=42,
+    help="Random seed for splitting and sampling",
+)
+@click.option(
+    "--train-records",
+    type=int,
+    default=None,
+    help="Number of records to allocate to the training split",
+)
+@click.option(
+    "--val-records",
+    type=int,
+    default=None,
+    help="Number of records to allocate to the validation split",
+)
+@click.option(
+    "--holdout-records",
+    type=int,
+    default=None,
+    help="Number of records to allocate to the holdout evaluation split",
+)
+def fine_tune(
+    dataset: str,
+    model_name: str | None,
+    output_dir: str | None,
+    epochs: int,
+    batch_size: int,
+    learning_rate: float,
+    margin: float,
+    loss_type: str,
+    negative_ratio: float,
+    strategy: str,
+    seed: int,
+    train_records: int | None,
+    val_records: int | None,
+    holdout_records: int | None,
+) -> None:
+    """Fine-tune a sentence-transformer embedding model using contrastive learning.
+
+    Improves representation learning and semantic blocking on labeled ER benchmark
+    datasets using contrastive loss, learning better clustering representations without
+    custom classifiers.
+    """
+    from serf.embedding.fine_tune import run_fine_tune
+
+    base_model = model_name or str(serf_config.get("models.embedding", "BAAI/bge-small-en-v1.5"))
+    click.echo(f"Fine-tuning embedding model on {dataset}:")
+    click.echo(f"  Base model: {base_model}")
+    click.echo(f"  Loss: {loss_type}")
+    click.echo(f"  Epochs: {epochs}, Batch size: {batch_size}, Learning rate: {learning_rate}")
+    click.echo(f"  Negative ratio: {negative_ratio}, Strategy: {strategy}, Margin: {margin}")
+
+    result = run_fine_tune(
+        dataset_name=dataset,
+        model_name=base_model,
+        output_dir=output_dir,
+        epochs=epochs,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        margin=margin,
+        loss_type=loss_type,
+        negative_ratio=negative_ratio,
+        strategy=strategy,
+        seed=seed,
+        train_records=train_records,
+        val_records=val_records,
+        holdout_records=holdout_records,
+    )
+
+    click.echo("\nFine-tuning completed successfully!")
+    click.echo(f"  Output directory: {result.output_dir}")
+    click.echo(
+        f"  Pairs: {result.train_pairs} train, {result.val_pairs} val, {result.holdout_pairs} holdout"
+    )
+
+    if result.dataset_results and len(result.dataset_results) > 1:
+        click.echo("\nPer-Dataset Holdout Blocking Recall Comparison:")
+        click.echo(
+            f"  {'Dataset':<16} | {'Raw Recall':<12} | {'Tuned Recall':<12} | {'Delta':<8} | {'Gold':<6}"
+        )
+        click.echo("  " + "-" * 62)
+        for ds_k, ds_v in result.dataset_results.items():
+            ds_delta = ds_v.tuned_blocking_recall - ds_v.raw_blocking_recall
+            click.echo(
+                f"  {ds_k:<16} | {ds_v.raw_blocking_recall:<12.4f} | {ds_v.tuned_blocking_recall:<12.4f} | {ds_delta:<+8.4f} | {ds_v.gold_pairs:<6}"
+            )
+        click.echo("  " + "-" * 62)
+        overall_delta = result.tuned_blocking_recall - result.raw_blocking_recall
+        click.echo(
+            f"  {'OVERALL':<16} | {result.raw_blocking_recall:<12.4f} | {result.tuned_blocking_recall:<12.4f} | {overall_delta:<+8.4f}"
+        )
+    else:
+        click.echo("\nHoldout Blocking Recall Comparison:")
+        click.echo(f"  Raw base model:      {result.raw_blocking_recall:.4f}")
+        click.echo(f"  Fine-tuned model:    {result.tuned_blocking_recall:.4f}")
+        delta = result.tuned_blocking_recall - result.raw_blocking_recall
+        click.echo(f"  Delta:               {delta:+.4f}")
 
 
 # ---------------------------------------------------------------------------

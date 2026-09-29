@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import os
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -88,17 +90,26 @@ class VertexRefreshingLM(dspy.LM):
         Any
             LiteLLM completion response
         """
-        self.refresh_token_if_needed()
-        try:
-            return super().forward(prompt=prompt, messages=messages, **kwargs)
-        except Exception as e:
-            if self._is_auth_error(e):
-                logger.warning(
-                    f"Vertex AI authentication failure ({e}); forcing token refresh and retrying"
-                )
-                self.refresh_token_if_needed(force=True)
+        max_retries = max(int(config.get("er.matching.max_retries", 5)), 6)
+        for attempt in range(max_retries + 1):
+            self.refresh_token_if_needed()
+            try:
                 return super().forward(prompt=prompt, messages=messages, **kwargs)
-            raise
+            except Exception as e:
+                if self._is_auth_error(e) and attempt < max_retries:
+                    logger.warning(
+                        f"Vertex AI authentication failure ({e}); forcing token refresh and retrying"
+                    )
+                    self.refresh_token_if_needed(force=True)
+                    continue
+                if self._is_rate_limit_error(e) and attempt < max_retries:
+                    backoff = min(60.0, (2**attempt) * 2.0)
+                    logger.warning(
+                        f"Vertex AI rate limit ({e}); backing off {backoff:.1f}s before retry {attempt + 1}/{max_retries}"
+                    )
+                    time.sleep(backoff)
+                    continue
+                raise
 
     async def aforward(
         self,
@@ -122,17 +133,26 @@ class VertexRefreshingLM(dspy.LM):
         Any
             LiteLLM completion response
         """
-        self.refresh_token_if_needed()
-        try:
-            return await super().aforward(prompt=prompt, messages=messages, **kwargs)
-        except Exception as e:
-            if self._is_auth_error(e):
-                logger.warning(
-                    f"Vertex AI authentication failure ({e}); forcing token refresh and retrying"
-                )
-                self.refresh_token_if_needed(force=True)
+        max_retries = max(int(config.get("er.matching.max_retries", 5)), 6)
+        for attempt in range(max_retries + 1):
+            self.refresh_token_if_needed()
+            try:
                 return await super().aforward(prompt=prompt, messages=messages, **kwargs)
-            raise
+            except Exception as e:
+                if self._is_auth_error(e) and attempt < max_retries:
+                    logger.warning(
+                        f"Vertex AI authentication failure ({e}); forcing token refresh and retrying"
+                    )
+                    self.refresh_token_if_needed(force=True)
+                    continue
+                if self._is_rate_limit_error(e) and attempt < max_retries:
+                    backoff = min(60.0, (2**attempt) * 2.0)
+                    logger.warning(
+                        f"Vertex AI rate limit ({e}); backing off {backoff:.1f}s before retry {attempt + 1}/{max_retries}"
+                    )
+                    await asyncio.sleep(backoff)
+                    continue
+                raise
 
     def refresh_token_if_needed(self, *, force: bool = False) -> None:
         """Mint a new access token when the cached one is stale or forced.
@@ -160,6 +180,24 @@ class VertexRefreshingLM(dspy.LM):
                 "authenticationerror",
                 "invalid authentication credentials",
                 "401",
+            )
+        )
+
+    @staticmethod
+    def _is_rate_limit_error(exc: Exception) -> bool:
+        """Return whether an exception indicates a rate limit or resource exhaustion."""
+        msg = str(exc).lower()
+        exc_name = type(exc).__name__.lower()
+        return any(
+            err in msg or err in exc_name
+            for err in (
+                "lmratelimiterror",
+                "rate_limit",
+                "ratelimit",
+                "429",
+                "resource_exhausted",
+                "too many requests",
+                "quota",
             )
         )
 

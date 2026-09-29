@@ -15,6 +15,7 @@ SERF is an open-source Python framework for **semantic entity resolution** (dedu
 ## Why SERF?
 
 Entity resolution across heterogeneous data sources is notoriously difficult:
+
 - **Quadratic complexity ($O(N^2)$)** makes naive pairwise comparisons intractable at scale.
 - **Rule-based heuristics and fuzzy joins** are brittle and require endless manual tuning.
 - **Pure embedding similarity** works for coarse semantic grouping but fails to distinguish fine-grained differences (e.g., product model numbers, storage capacities, edition years).
@@ -50,15 +51,15 @@ Raw Records
 Resolved Knowledge Graph
 ```
 
-| Component | Technology |
-|---|---|
-| **Package Manager** | [uv](https://docs.astral.sh/uv/) |
+| Component           | Technology                                                                             |
+| ------------------- | -------------------------------------------------------------------------------------- |
+| **Package Manager** | [uv](https://docs.astral.sh/uv/)                                                       |
 | **Data Processing** | [PySpark 4.x](https://spark.apache.org/) (optional distributed ETL & graph operations) |
-| **LLM Framework** | [DSPy](https://dspy.ai/) with `XMLAdapter` for structured XML/Pydantic outputs |
-| **Embeddings** | `BAAI/bge-small-en-v1.5` via [Sentence-Transformers](https://sbert.net/) |
-| **Vector Indexing** | [FAISS](https://github.com/facebookresearch/faiss) (`IndexIVFFlat`) |
-| **Prompt Tuning** | DSPy GEPA (student/teacher reflection optimization) |
-| **Code Quality** | Ruff (linting & formatting), zuban / mypy (static type checking) |
+| **LLM Framework**   | [DSPy](https://dspy.ai/) with `XMLAdapter` for structured XML/Pydantic outputs         |
+| **Embeddings**      | `BAAI/bge-small-en-v1.5` via [Sentence-Transformers](https://sbert.net/)               |
+| **Vector Indexing** | [FAISS](https://github.com/facebookresearch/faiss) (`IndexIVFFlat`)                    |
+| **Prompt Tuning**   | DSPy GEPA (student/teacher reflection optimization)                                    |
+| **Code Quality**    | Ruff (linting & formatting), zuban / mypy (static type checking)                       |
 
 ---
 
@@ -70,11 +71,11 @@ Entity resolution merges multiple input records into unified canonical entities.
 2. **Multi-Valued Fields as Lists**: In a canonical record, non-identifier fields hold lists ordered by completeness (fullest value first). If two sources supply valid information (e.g., different phone numbers or addresses), both are retained rather than forcing an arbitrary lossy selection.
 3. **Type-Aware Deduplication**: Field values are merged based on semantic field types:
 
-| Field Type | Deduplication Strategy | Description |
-|---|---|---|
-| `name`, `address` | Fuzzy similarity (`dedupe: fuzzy`) | Near-duplicate spellings collapse to the most complete variant. |
-| `identifier`, `email`, `phone`, `url`, `numeric` | Normalization (`dedupe: exact`) | Values normalize (e.g., lowercasing, stripping punctuation) before exact deduplication. |
-| `text` | Preserved (`dedupe: none`) | Freeform text (e.g., long descriptions) is never collapsed. |
+| Field Type                                       | Deduplication Strategy             | Description                                                                             |
+| ------------------------------------------------ | ---------------------------------- | --------------------------------------------------------------------------------------- |
+| `name`, `address`                                | Fuzzy similarity (`dedupe: fuzzy`) | Near-duplicate spellings collapse to the most complete variant.                         |
+| `identifier`, `email`, `phone`, `url`, `numeric` | Normalization (`dedupe: exact`)    | Values normalize (e.g., lowercasing, stripping punctuation) before exact deduplication. |
+| `text`                                           | Preserved (`dedupe: none`)         | Freeform text (e.g., long descriptions) is never collapsed.                             |
 
 ### Example: Before and After Merging
 
@@ -119,7 +120,7 @@ fields:
     type: address
     description: Two-letter state abbreviation.
     merge:
-      dedupe: exact  # Exact matching prevents merging "CA" and "GA"
+      dedupe: exact # Exact matching prevents merging "CA" and "GA"
   - name: email
     type: email
     description: Primary email address.
@@ -145,6 +146,7 @@ serf schema schemas/person.yml --merge records.json
 ### Installation
 
 Prerequisites:
+
 - **Python 3.12+**
 - **Java 11, 17, or 21** (required for PySpark operations)
 
@@ -254,9 +256,9 @@ serf train --dataset dblp-acm --auto light
 serf benchmark --dataset dblp-acm --signature-mode per-dataset --trained-prompts
 ```
 
-### 4. Blocking Analysis & Embedding Sweeps
+### 4. Blocking Analysis, Embedding Sweeps & Contrastive Fine-Tuning
 
-Evaluate and compare embedding models purely on candidate blocking recall without spending LLM tokens:
+Evaluate and compare embedding models purely on candidate blocking recall without spending LLM tokens, or fine-tune embedding representations using contrastive learning:
 
 ```bash
 # Sweep default candidate embeddings on blocking recall
@@ -264,6 +266,9 @@ serf blocking-sweep --dataset dblp-acm --output data/blocking_sweep.json
 
 # Rank candidate embeddings against published MTEB benchmark categories
 serf mteb-rank --candidate-set all --sweep data/blocking_sweep.json
+
+# Contrastive embedding fine-tuning on labeled benchmark datasets (representation learning)
+serf fine-tune dblp-acm --model BAAI/bge-small-en-v1.5 --epochs 3 --batch-size 32
 ```
 
 ---
@@ -274,17 +279,18 @@ We evaluate SERF on the standard [Leipzig Entity Resolution Benchmarks](https://
 
 All figures below reflect **genuine full-table end-to-end evaluation**: the framework starts with the raw unlinked tables, runs semantic vector blocking, prompts the LLM for block partitions, merges entities across 3 iterations, and evaluates against ground-truth pairs.
 
-| Benchmark Dataset | Domain | Left Records | Right Records | Gold Pairs | SERF End-to-End F1 | SOTA Reference |
-|---|---|---|---|---|---|---|
-| **DBLP-ACM** | Citations / Publications | 2,616 | 2,294 | 2,224 | **97.86%** | 99.32% (EM-Join)* |
-| **Abt-Buy** | E-commerce Products | 1,076 | 1,076 | 1,097 | **92.84%** | 92.90% (SC-Block E2E) |
-| **DBLP-Scholar** | Citations / Publications | 2,616 | 64,263 | 5,347 | **88.91%** | 98.51% (Jellyfish-13B)* |
-| **Walmart-Amazon** | Electronics & Office | 2,554 | 22,074 | 1,154 | **77.11%** | 86.00% (SC-Block E2E) |
-| **Amazon-Google** | Software & Electronics | 1,363 | 3,226 | 1,167 | **64.53%** | 80.30% (SC-Block E2E) |
+| Benchmark Dataset  | Domain                   | Left Records | Right Records | Gold Pairs | SERF End-to-End F1 | SOTA Reference           |
+| ------------------ | ------------------------ | ------------ | ------------- | ---------- | ------------------ | ------------------------ |
+| **DBLP-ACM**       | Citations / Publications | 2,616        | 2,294         | 2,224      | **97.86%**         | 99.32% (EM-Join)\*       |
+| **Abt-Buy**        | E-commerce Products      | 1,076        | 1,076         | 1,097      | **92.84%**         | 92.90% (SC-Block E2E)    |
+| **DBLP-Scholar**   | Citations / Publications | 2,616        | 64,263        | 5,347      | **88.91%**         | 98.51% (Jellyfish-13B)\* |
+| **Walmart-Amazon** | Electronics & Office     | 2,554        | 22,074        | 1,154      | **77.11%**         | 86.00% (SC-Block E2E)    |
+| **Amazon-Google**  | Software & Electronics   | 1,363        | 3,226         | 1,167      | **64.53%**         | 80.30% (SC-Block E2E)    |
 
-*\* Note on published comparisons: Most published academic results (marked with \*) evaluate **pair classification** on pre-filtered candidate pairs rather than full-table end-to-end entity resolution. In full end-to-end resolution, any true match missed during blocking can never be recovered by the matcher. Across end-to-end systems, SERF achieves competitive results on product matching and matches published state-of-the-art on Abt-Buy.*
+_\* Note on published comparisons: Most published academic results (marked with \*) evaluate **pair classification** on pre-filtered candidate pairs rather than full-table end-to-end entity resolution. In full end-to-end resolution, any true match missed during blocking can never be recovered by the matcher. Across end-to-end systems, SERF achieves competitive results on product matching and matches published state-of-the-art on Abt-Buy._
 
 For detailed experimental reports, error breakdowns, and ablation studies:
+
 - [BENCHMARKS.md](BENCHMARKS.md): Attribute discriminativeness and dataset profiles.
 - [experiments/full-scale-benchmark.md](experiments/full-scale-benchmark.md): Full-scale multi-iteration benchmark analysis.
 - [experiments/state-of-the-art.md](experiments/state-of-the-art.md): Evaluation protocol comparison (pair classification vs. end-to-end).
@@ -298,13 +304,13 @@ All configuration is centralized in `config.yml` and accessed through `serf.conf
 
 ```yaml
 models:
-  llm: "openai/gpt-oss-120b-maas"        # Student / task model
-  teacher: "gemini/gemini-3.8-flash"     # Reflection model for GEPA
-  embedding: "BAAI/bge-small-en-v1.5"    # Vector blocking model
+  llm: "openai/gpt-oss-120b-maas" # Student / task model
+  teacher: "gemini/gemini-3.8-flash" # Reflection model for GEPA
+  embedding: "BAAI/bge-small-en-v1.5" # Vector blocking model
   request_timeout_seconds: 180
 
 er:
-  max_iterations: 3                      # Multi-round resolution rounds
+  max_iterations: 3 # Multi-round resolution rounds
   blocking:
     target_block_size: 50
     min_block_size: 5
@@ -352,6 +358,20 @@ src/serf/
 
 ---
 
+## Documentation
+
+| Document                                             | What it covers                                                                |
+| ---------------------------------------------------- | ----------------------------------------------------------------------------- |
+| [docs/MISSION.md](docs/MISSION.md)                   | What SERF is proving, and what counts as state of the art                     |
+| [docs/CODING_STANDARDS.md](docs/CODING_STANDARDS.md) | Simple, minimal, readable code — start here before contributing               |
+| [docs/ID_INVARIANTS.md](docs/ID_INVARIANTS.md)       | The identifier-conservation contract for match/merge, and how to test it      |
+| [docs/RESEARCH_LOOP.md](docs/RESEARCH_LOOP.md)       | Experiment registry, metrics, evaluation protocols, and reproducibility rules |
+| [docs/QUICKSTART.md](docs/QUICKSTART.md)             | Getting started guide and practical walkthrough                               |
+| [docs/SCALABILITY.md](docs/SCALABILITY.md)           | Vector engine options for blocking beyond RAM                                 |
+| [docs/FINE_TUNING.md](docs/FINE_TUNING.md)           | Embedding fine-tuning with contrastive learning                               |
+
+---
+
 ## Development
 
 ```bash
@@ -376,11 +396,11 @@ pre-commit run --all-files
 
 ## References
 
-1. Jurney, R. (2024). "[The Rise of Semantic Entity Resolution](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/)." *Towards Data Science*.
-2. Khattab, O. et al. (2024). "DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines." *ICLR 2024*.
-3. Li, Y. et al. (2021). "Ditto: A Simple and Efficient Entity Matching Framework." *VLDB 2021*.
-4. Mudgal, S. et al. (2018). "Deep Learning for Entity Matching: A Design Space Exploration." *SIGMOD 2018*.
-5. Papadakis, G. et al. (2020). "Blocking and Filtering Techniques for Entity Resolution: A Survey." *ACM Computing Surveys*.
+1. Jurney, R. (2024). "[The Rise of Semantic Entity Resolution](https://towardsdatascience.com/the-rise-of-semantic-entity-resolution/)." _Towards Data Science_.
+2. Khattab, O. et al. (2024). "DSPy: Compiling Declarative Language Model Calls into Self-Improving Pipelines." _ICLR 2024_.
+3. Li, Y. et al. (2021). "Ditto: A Simple and Efficient Entity Matching Framework." _VLDB 2021_.
+4. Mudgal, S. et al. (2018). "Deep Learning for Entity Matching: A Design Space Exploration." _SIGMOD 2018_.
+5. Papadakis, G. et al. (2020). "Blocking and Filtering Techniques for Entity Resolution: A Survey." _ACM Computing Surveys_.
 
 ---
 

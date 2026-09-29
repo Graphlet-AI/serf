@@ -308,6 +308,30 @@ def test_refreshing_lm_retries_on_auth_error() -> None:
     assert lm.kwargs["api_key"] == "refreshed-token"
 
 
+def test_refreshing_lm_retries_on_rate_limit_error() -> None:
+    """forward() catches 429/rate-limit errors, backs off, and retries."""
+    credentials = _fake_credentials("valid-token", timedelta(hours=1))
+    lm = _refreshing_lm(credentials)
+    call_count = 0
+
+    def mock_forward(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError("RateLimitError: 429 Resource Exhausted")
+        return "rate-limit-recovered"
+
+    with (
+        patch("serf.dspy.lm.time.sleep") as mock_sleep,
+        patch.object(dspy.LM, "forward", side_effect=mock_forward),
+    ):
+        result = lm.forward(messages=[{"role": "user", "content": "hi"}])
+
+    assert result == "rate-limit-recovered"
+    assert call_count == 2
+    mock_sleep.assert_called_once()
+
+
 def test_create_lm_student_uses_refreshing_lm_for_service_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

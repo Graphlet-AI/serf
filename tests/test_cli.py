@@ -33,6 +33,7 @@ def test_cli_help() -> None:
     assert "profile-benchmark" in result.output
     assert "blocking-sweep" in result.output
     assert "mteb-rank" in result.output
+    assert "fine-tune" in result.output
 
 
 def test_cli_version() -> None:
@@ -92,6 +93,7 @@ def test_benchmark_help() -> None:
     assert "walmart-amazon" in result.output
     assert "amazon-google" in result.output
     assert "--blocking-strategy" in result.output
+    assert "--blocking-model" in result.output
     assert "--trained-prompts" in result.output
 
 
@@ -137,7 +139,7 @@ def test_prompts_writes_a_report_for_every_dataset(tmp_path: Path) -> None:
 
 
 def test_train_help() -> None:
-    """Training exposes the student, the teacher, the budget and the caps."""
+    """Training exposes the student, the teacher, the budget, caps, and blocking options."""
     runner = CliRunner()
     result = runner.invoke(cli, ["train", "--help"])
     assert result.exit_code == 0
@@ -148,6 +150,8 @@ def test_train_help() -> None:
     assert "--auto" in result.output
     assert "--train-blocks" in result.output
     assert "--val-blocks" in result.output
+    assert "--blocking-model" in result.output
+    assert "--blocking-strategy" in result.output
     assert "walmart-amazon" in result.output
 
 
@@ -399,8 +403,11 @@ def test_benchmark_help_documents_the_eval_split() -> None:
     assert "holdout" in result.output
 
 
-def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data() -> None:
+def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Separation is enforced, not merely warned about."""
+    monkeypatch.setattr("serf.cli.main.setup_mlflow", lambda: None)
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -422,8 +429,15 @@ def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data() -> None:
     assert "--eval-split holdout" in result.output
 
 
-def test_the_shipped_prompt_may_be_scored_over_all_the_data() -> None:
+def test_the_shipped_prompt_may_be_scored_over_all_the_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Nothing was optimized against it, and a full-table number needs every record."""
+    monkeypatch.setattr("serf.cli.main.setup_mlflow", lambda: None)
+    monkeypatch.setattr(
+        "serf.cli.main._benchmark_llm_matching",
+        lambda *args, **kwargs: (set(), []),
+    )
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -437,6 +451,11 @@ def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.Mo
     """Measuring the fit on purpose is allowed; it just has to be asked for."""
     from serf.cli import main as cli_main
 
+    monkeypatch.setattr("serf.cli.main.setup_mlflow", lambda: None)
+    monkeypatch.setattr(
+        "serf.cli.main._benchmark_llm_matching",
+        lambda *args, **kwargs: (set(), []),
+    )
     real_get = cli_main.serf_config.get
 
     def fake_get(key: str, default: object = None) -> object:
@@ -463,3 +482,24 @@ def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.Mo
     )
     assert "Refusing to evaluate" not in result.output
     assert "WARNING" in result.output
+
+
+def test_fine_tune_help() -> None:
+    """Test fine-tune CLI command help output."""
+    runner = CliRunner()
+    result = runner.invoke(cli, ["fine-tune", "--help"])
+    assert result.exit_code == 0
+    assert "fine-tune" in result.output
+    assert "--model" in result.output
+    assert "--output-dir" in result.output
+    assert "--epochs" in result.output
+    assert "--batch-size" in result.output
+    assert "--learning-rate" in result.output
+    assert "--loss" in result.output
+    assert "--margin" in result.output
+    assert "--negative-ratio" in result.output
+    assert "--strategy" in result.output
+    assert "--train-records" in result.output
+    assert "--val-records" in result.output
+    assert "--holdout-records" in result.output
+    assert "all" in result.output

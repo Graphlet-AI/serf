@@ -6,6 +6,23 @@ This document is a comprehensive implementation plan for building **SERF** (Sema
 
 > **Key Rule:** Embeddings are for BLOCKING only (FAISS clustering). ALL matching is done by LLM via DSPy signatures. Never use embedding cosine similarity for match decisions.
 
+### How this document relates to the others
+
+This remains the **architecture and reference document**: the Abzu code guide (Section 3), the data model (Section 5), the interface design (Section 6), and the pipeline architecture (Section 7) are all still current and still the place to look. Substantial parts of the implementation plan in Section 10 are also still ahead — Iceberg, GraphFrames, integration testing, and two of the five benchmark datasets are unbuilt.
+
+Where a newer document now owns a topic, this one defers to it:
+
+| Topic                                      | Authoritative source                                 |
+| ------------------------------------------ | ---------------------------------------------------- |
+| What we are proving; success criteria      | [MISSION.md](MISSION.md)                             |
+| Experiments, metrics, evaluation protocols | [RESEARCH_LOOP.md](RESEARCH_LOOP.md)                 |
+| Identifier conservation and recovery       | [ID_INVARIANTS.md](ID_INVARIANTS.md)                 |
+| How to write code here                     | [CODING_STANDARDS.md](CODING_STANDARDS.md)           |
+| Embedding model selection at scale         | [SCALABILITY.md](SCALABILITY.md)                     |
+| Current task list and status               | [../.cursor/scratchpad.md](../.cursor/scratchpad.md) |
+
+Two things in here are known to be **out of date in the code**, not in the plan: Section 3.5 pattern 1 (two-phase recovery) is only half-implemented, and Section 4.4 (Iceberg) is stubbed. Both are tracked as open work — see [ID_INVARIANTS.md](ID_INVARIANTS.md) §8 for the eight recovery divergences, three of which silently lose data.
+
 ---
 
 ## Table of Contents

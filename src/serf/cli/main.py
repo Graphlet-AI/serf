@@ -1254,6 +1254,21 @@ def prompts(
     default=True,
     help="Score both prompts on the held-out records GEPA never saw",
 )
+@click.option(
+    "--blocking-model",
+    type=str,
+    default=None,
+    help="Embedding model for semantic blocking",
+)
+@click.option(
+    "--blocking-strategy",
+    type=click.Choice(["name", "json", "union"], case_sensitive=False),
+    default=None,
+    help=(
+        "Embed the name alone, every field as JSON with field names inline,"
+        " or block on both and keep the blocks from each"
+    ),
+)
 def train(
     dataset: tuple[str, ...],
     all_datasets: bool,
@@ -1270,6 +1285,8 @@ def train(
     log_dir: str | None,
     data_dir: str | None,
     score_holdout: bool,
+    blocking_model: str | None,
+    blocking_strategy: str | None,
 ) -> None:
     """Train a benchmark dataset's matching prompt with GEPA.
 
@@ -1332,9 +1349,13 @@ def train(
             output_dir=output_dir,
             data_dir=data_dir,
             score_holdout=score_holdout,
+            blocking_model=blocking_model,
+            blocking_strategy=blocking_strategy,
         )
         results.append(result)
         click.echo(f"  Signature: {result.signature_name}")
+        if result.blocking_model:
+            click.echo(f"  Blocking:  {result.blocking_model} ({result.blocking_strategy})")
         click.echo(
             f"  Examples:  {result.train_examples} train, {result.val_examples} val, "
             f"{result.holdout_examples} holdout"
@@ -1718,6 +1739,12 @@ def optimize(
     ),
 )
 @click.option(
+    "--blocking-model",
+    type=str,
+    default=None,
+    help="Embedding model for semantic blocking",
+)
+@click.option(
     "--trained-prompts/--no-trained-prompts",
     default=False,
     help="Match with the instructions `serf train` wrote instead of the signature docstring",
@@ -1736,6 +1763,7 @@ def benchmark(
     sample_records: int | None,
     seed: int | None,
     blocking_strategy: str | None,
+    blocking_model: str | None,
     trained_prompts: bool,
 ) -> None:
     """Run ER pipeline against a benchmark dataset and evaluate.
@@ -1763,7 +1791,7 @@ def benchmark(
     setup_mlflow()
 
     model = model or serf_config.get("models.llm")
-    embedding_model = str(serf_config.get("models.embedding"))
+    embedding_model = str(blocking_model or serf_config.get("models.embedding"))
     embedding_prompt = str(serf_config.get("models.embedding_prompt", ""))
     strategy = (blocking_strategy or str(serf_config.get("er.blocking.strategy", "name"))).lower()
 

@@ -93,6 +93,7 @@ def test_benchmark_help() -> None:
     assert "walmart-amazon" in result.output
     assert "amazon-google" in result.output
     assert "--blocking-strategy" in result.output
+    assert "--blocking-model" in result.output
     assert "--trained-prompts" in result.output
 
 
@@ -138,7 +139,7 @@ def test_prompts_writes_a_report_for_every_dataset(tmp_path: Path) -> None:
 
 
 def test_train_help() -> None:
-    """Training exposes the student, the teacher, the budget and the caps."""
+    """Training exposes the student, the teacher, the budget, caps, and blocking options."""
     runner = CliRunner()
     result = runner.invoke(cli, ["train", "--help"])
     assert result.exit_code == 0
@@ -149,6 +150,8 @@ def test_train_help() -> None:
     assert "--auto" in result.output
     assert "--train-blocks" in result.output
     assert "--val-blocks" in result.output
+    assert "--blocking-model" in result.output
+    assert "--blocking-strategy" in result.output
     assert "walmart-amazon" in result.output
 
 

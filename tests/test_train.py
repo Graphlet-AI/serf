@@ -335,8 +335,17 @@ def test_train_dataset_uses_the_dataset_signature_and_saves_where_matching_looks
             [_block(entities)],
             MagicMock(),
         )
-        result = train_dataset("dblp-acm", output_dir=str(tmp_path), score_holdout=False)
+        result = train_dataset(
+            "dblp-acm",
+            output_dir=str(tmp_path),
+            score_holdout=False,
+            blocking_model="custom/embedder",
+            blocking_strategy="union",
+        )
 
+    blocker.assert_called_once()
+    assert blocker.call_args.kwargs["model_name"] == "custom/embedder"
+    assert blocker.call_args.kwargs["blocking_strategy"] == "union"
     assert captured["module"].signature is SPEC.signature
     assert captured["metric"].__qualname__.startswith("make_dataset_metric")
     assert result.signature_name == SPEC.signature.__name__
@@ -346,6 +355,8 @@ def test_train_dataset_uses_the_dataset_signature_and_saves_where_matching_looks
     assert result.best_score == 0.9
     assert result.improved is True
     assert result.instructions_after == "Rewritten by GEPA."
+    assert result.blocking_model == "custom/embedder"
+    assert result.blocking_strategy == "union"
     assert Path(result.program_path) == trained_program_path("dblp-acm", str(tmp_path))
     assert Path(result.program_path).exists()
     assert result.holdout_score is None, "holdout scoring was switched off"
@@ -447,9 +458,13 @@ def test_each_dataset_and_prompt_gets_its_own_gepa_state_directory() -> None:
     a = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs")
     b = run_log_dir("abt-buy", "instructions A", log_dir="/tmp/logs")
     c = run_log_dir("dblp-acm", "instructions B", log_dir="/tmp/logs")
+    d = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs", blocking_model="other/model")
+    e = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs", blocking_strategy="union")
 
     assert a != b, "two datasets must not share state"
     assert a != c, "a rewritten prompt must not resume the old prompt's candidates"
+    assert a != d, "different blocking models must not share state"
+    assert a != e, "different blocking strategies must not share state"
     assert a.startswith("/tmp/logs/dblp-acm/")
 
 

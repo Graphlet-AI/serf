@@ -105,6 +105,8 @@ class TrainResult:
     holdout_examples: int = 0
     holdout_baseline_score: float | None = None
     holdout_score: float | None = None
+    blocking_model: str | None = None
+    blocking_strategy: str | None = None
 
     @property
     def improved(self) -> bool:
@@ -452,6 +454,8 @@ def run_log_dir(
     instructions: str,
     log_dir: str | None = None,
     sizes: SplitSizes | None = None,
+    blocking_model: str | None = None,
+    blocking_strategy: str | None = None,
 ) -> str:
     """Return a GEPA state directory unique to this dataset, prompt and splits.
 
@@ -467,11 +471,11 @@ def run_log_dir(
     useful half: an interrupted run of the same prompt resumes, and a changed
     prompt starts clean.
 
-    The split sizes are in the fingerprint too, because resumable state holds
-    candidate programs *and* their per-example validation scores. Resuming onto
-    a different valset would carry scores for examples the new run does not
-    have, so state is only reusable when the prompt and the data are both
-    unchanged.
+    The split sizes and blocking configuration are in the fingerprint too,
+    because resumable state holds candidate programs *and* their per-example
+    validation scores. Resuming onto a different valset or different blocks
+    would carry scores for examples the new run does not have, so state is only
+    reusable when the prompt and the data are both unchanged.
 
     Parameters
     ----------
@@ -484,16 +488,27 @@ def run_log_dir(
     sizes : SplitSizes | None
         Record budgets this run draws. Defaults to the dataset's configured
         budgets.
+    blocking_model : str | None
+        Embedding model name. Defaults to config ``models.embedding``.
+    blocking_strategy : str | None
+        Blocking strategy. Defaults to config ``er.blocking.strategy``.
 
     Returns
     -------
     str
         Path under the root, namespaced by dataset and a fingerprint of the
-        instructions and the split sizes
+        instructions, split sizes, and blocking configuration
     """
     root = log_dir or str(config.get("optimize.log_dir", "data/gepa_logs"))
     sizes = sizes or get_split_sizes(dataset)
-    identity = f"{instructions}\n{sizes.train_records}/{sizes.val_records}/{sizes.holdout_records}"
+    b_model = blocking_model or str(config.get("models.embedding"))
+    b_strat = blocking_strategy or str(config.get("er.blocking.strategy", "name"))
+    identity = (
+        f"{instructions}\n"
+        f"{sizes.train_records}/{sizes.val_records}/{sizes.holdout_records}\n"
+        f"{b_model}\n"
+        f"{b_strat}"
+    )
     fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
     return str(Path(root) / dataset / fingerprint)
 
@@ -562,6 +577,9 @@ def train_dataset(
     output_dir: str | None = None,
     data_dir: str | None = None,
     score_holdout: bool = True,
+    blocking_model: str | None = None,
+    blocking_strategy: str | None = None,
+    blocking_prompt: str | None = None,
 ) -> TrainResult:
     """Optimize one benchmark dataset's matching prompt with GEPA.
 
@@ -599,6 +617,15 @@ def train_dataset(
         Score both prompts on the holdout split once GEPA is done. This is the
         only measurement of the run that GEPA did not select against, and it
         costs one pass over the holdout blocks per prompt.
+    blocking_model : str | None
+        Embedding model for semantic blocking. Defaults to config
+        ``models.embedding``.
+    blocking_strategy : str | None
+        Blocking strategy (``name``, ``json``, ``union``). Defaults to config
+        ``er.blocking.strategy``.
+    blocking_prompt : str | None
+        Instruction prefix for embedding model. Defaults to config
+        ``models.embedding_prompt``.
 
     Returns
     -------
@@ -612,6 +639,13 @@ def train_dataset(
     train_cap = _example_cap(train_blocks, "optimize.train_blocks")
     val_cap = _example_cap(val_blocks, "optimize.val_blocks")
     instructions_before = spec.signature.instructions
+    b_model = str(blocking_model or config.get("models.embedding"))
+    b_strategy = (blocking_strategy or str(config.get("er.blocking.strategy", "name"))).lower()
+    b_prompt = (
+        blocking_prompt
+        if blocking_prompt is not None
+        else str(config.get("models.embedding_prompt", ""))
+    )
 
     benchmark = BenchmarkDataset.download(dataset, data_dir)
     left_entities, right_entities = benchmark.to_entities()
@@ -625,6 +659,9 @@ def train_dataset(
         seed=seed,
     )
     blocker = SemanticBlockingPipeline(
+        model_name=b_model,
+        embedding_prompt=b_prompt,
+        blocking_strategy=b_strategy,
         target_block_size=int(config.get("er.blocking.target_block_size", 30)),
         max_block_size=int(config.get("er.blocking.max_block_size", 100)),
         auto_scale=False,
@@ -664,7 +701,14 @@ def train_dataset(
         student_model=student_model,
         teacher_model=teacher_model,
         auto=auto,
-        log_dir=log_dir or run_log_dir(dataset, instructions_before, sizes=sizes),
+        log_dir=log_dir
+        or run_log_dir(
+            dataset,
+            instructions_before,
+            sizes=sizes,
+            blocking_model=b_model,
+            blocking_strategy=b_strategy,
+        ),
     )
 
     path = trained_program_path(dataset, output_dir)
@@ -712,6 +756,8 @@ def train_dataset(
         holdout_examples=len(holdoutset),
         holdout_baseline_score=holdout_baseline,
         holdout_score=holdout_best,
+        blocking_model=b_model,
+        blocking_strategy=b_strategy,
     )
 
 

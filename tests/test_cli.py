@@ -484,3 +484,4 @@ def test_fine_tune_help() -> None:
     assert "--train-records" in result.output
     assert "--val-records" in result.output
     assert "--holdout-records" in result.output
+    assert "all" in result.output

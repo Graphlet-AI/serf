@@ -35,8 +35,9 @@ from serf.tracking import setup_mlflow
 
 logger = get_logger(__name__)
 
-# Available benchmark dataset names for CLI help
+# Available benchmark dataset names for CLI help (plus 'all' for cross-dataset fine-tuning)
 BENCHMARK_DATASETS = list(DATASET_REGISTRY.keys())
+FINE_TUNE_DATASETS = [*BENCHMARK_DATASETS, "all"]
 
 
 @click.group(context_settings={"show_default": True})
@@ -2074,7 +2075,7 @@ def benchmark_all(
 
 
 @cli.command(name="fine-tune")
-@click.argument("dataset", type=click.Choice(BENCHMARK_DATASETS, case_sensitive=False))
+@click.argument("dataset", type=click.Choice(FINE_TUNE_DATASETS, case_sensitive=False))
 @click.option(
     "--model",
     "-m",
@@ -2212,11 +2213,29 @@ def fine_tune(
     click.echo(
         f"  Pairs: {result.train_pairs} train, {result.val_pairs} val, {result.holdout_pairs} holdout"
     )
-    click.echo("\nHoldout Blocking Recall Comparison:")
-    click.echo(f"  Raw base model:      {result.raw_blocking_recall:.4f}")
-    click.echo(f"  Fine-tuned model:    {result.tuned_blocking_recall:.4f}")
-    delta = result.tuned_blocking_recall - result.raw_blocking_recall
-    click.echo(f"  Delta:               {delta:+.4f}")
+
+    if result.dataset_results and len(result.dataset_results) > 1:
+        click.echo("\nPer-Dataset Holdout Blocking Recall Comparison:")
+        click.echo(
+            f"  {'Dataset':<16} | {'Raw Recall':<12} | {'Tuned Recall':<12} | {'Delta':<8} | {'Gold':<6}"
+        )
+        click.echo("  " + "-" * 62)
+        for ds_k, ds_v in result.dataset_results.items():
+            ds_delta = ds_v.tuned_blocking_recall - ds_v.raw_blocking_recall
+            click.echo(
+                f"  {ds_k:<16} | {ds_v.raw_blocking_recall:<12.4f} | {ds_v.tuned_blocking_recall:<12.4f} | {ds_delta:<+8.4f} | {ds_v.gold_pairs:<6}"
+            )
+        click.echo("  " + "-" * 62)
+        overall_delta = result.tuned_blocking_recall - result.raw_blocking_recall
+        click.echo(
+            f"  {'OVERALL':<16} | {result.raw_blocking_recall:<12.4f} | {result.tuned_blocking_recall:<12.4f} | {overall_delta:<+8.4f}"
+        )
+    else:
+        click.echo("\nHoldout Blocking Recall Comparison:")
+        click.echo(f"  Raw base model:      {result.raw_blocking_recall:.4f}")
+        click.echo(f"  Fine-tuned model:    {result.tuned_blocking_recall:.4f}")
+        delta = result.tuned_blocking_recall - result.raw_blocking_recall
+        click.echo(f"  Delta:               {delta:+.4f}")
 
 
 # ---------------------------------------------------------------------------

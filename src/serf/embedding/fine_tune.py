@@ -30,7 +30,7 @@ from sentence_transformers.sentence_transformer.training_args import (
 from serf.block.embeddings import get_torch_device
 from serf.config import config
 from serf.dspy.types import Entity
-from serf.eval.benchmarks import RIGHT_ID_OFFSET, BenchmarkDataset
+from serf.eval.benchmarks import DATASET_REGISTRY, RIGHT_ID_OFFSET, BenchmarkDataset
 from serf.eval.blocking_sweep import evaluate_blocking
 from serf.eval.splits import get_split_sizes, sample_random_splits
 from serf.logs import get_logger
@@ -61,6 +61,22 @@ class LabeledPair:
 
 
 @dataclass
+class DatasetHoldoutResult:
+    """Holdout evaluation and blocking metrics for one dataset."""
+
+    dataset: str
+    gold_pairs: int
+    raw_eval_metrics: dict[str, Any]
+    tuned_eval_metrics: dict[str, Any]
+    raw_blocking_recall: float
+    tuned_blocking_recall: float
+    raw_co_blocked: int
+    tuned_co_blocked: int
+    raw_blocked_pairs: int
+    tuned_blocked_pairs: int
+
+
+@dataclass
 class FineTuneResult:
     """Results from contrastive embedding fine-tuning."""
 
@@ -78,6 +94,7 @@ class FineTuneResult:
     tuned_eval_metrics: dict[str, Any]
     raw_blocking_recall: float
     tuned_blocking_recall: float
+    dataset_results: dict[str, DatasetHoldoutResult] | None = None
 
 
 def entity_to_text(entity: Entity, strategy: str = "name") -> str:
@@ -222,7 +239,7 @@ def pairs_to_dataset(pairs: list[LabeledPair]) -> Dataset:
 
 
 def run_fine_tune(
-    dataset_name: str,
+    dataset_name: str | list[str],
     *,
     model_name: str | None = None,
     output_dir: str | None = None,
@@ -246,8 +263,8 @@ def run_fine_tune(
 
     Parameters
     ----------
-    dataset_name : str
-        Benchmark dataset name (e.g. "dblp-acm", "abt-buy")
+    dataset_name : str | list[str]
+        Benchmark dataset name (e.g. "dblp-acm", "abt-buy", "all", or a list of dataset names)
     model_name : str | None
         Base sentence transformer model (defaults to config models.embedding or BAAI/bge-small-en-v1.5)
     output_dir : str | None
@@ -277,11 +294,11 @@ def run_fine_tune(
     eval_steps : int
         Number of steps between evaluation and checkpointing
     train_records : int | None
-        Optional override for train split record count
+        Optional override for train split record count (applied per dataset if multiple)
     val_records : int | None
-        Optional override for val split record count
+        Optional override for val split record count (applied per dataset if multiple)
     holdout_records : int | None
-        Optional override for holdout split record count
+        Optional override for holdout split record count (applied per dataset if multiple)
 
     Returns
     -------
@@ -291,87 +308,132 @@ def run_fine_tune(
     device = device or get_torch_device()
     model_name = model_name or str(config.get("models.embedding", "BAAI/bge-small-en-v1.5"))
 
+    # Resolve dataset list
+    if isinstance(dataset_name, str):
+        if dataset_name.lower() == "all":
+            datasets_to_run = list(DATASET_REGISTRY.keys())
+            tag_name = "all"
+        else:
+            datasets_to_run = [dataset_name]
+            tag_name = dataset_name
+    else:
+        datasets_to_run = list(dataset_name)
+        tag_name = (
+            "-".join(datasets_to_run)
+            if len(datasets_to_run) <= 3
+            else f"{len(datasets_to_run)}-datasets"
+        )
+
     if output_dir is None:
         clean_name = model_name.replace("/", "-")
-        output_dir = f"data/models/fine-tuned-{dataset_name}-{clean_name}"
+        output_dir = f"data/models/fine-tuned-{tag_name}-{clean_name}"
     out_path = Path(output_dir)
     out_path.mkdir(parents=True, exist_ok=True)
 
-    # 1. Load benchmark dataset
-    benchmark_data = BenchmarkDataset.download(dataset_name)
-    left_entities, right_entities = benchmark_data.to_entities()
-    all_entities = left_entities + right_entities
+    # 1. Process each dataset: load, partition into train/val/holdout, generate pairs
+    all_train_pairs: list[LabeledPair] = []
+    all_val_pairs: list[LabeledPair] = []
+    per_dataset_info: dict[str, dict[str, Any]] = {}
 
-    # 2. Split dataset cleanly by match groups
-    try:
-        configured_sizes = get_split_sizes(dataset_name)
-    except Exception:
-        configured_sizes = None
+    for ds_idx, ds_name in enumerate(datasets_to_run):
+        benchmark_data = BenchmarkDataset.download(ds_name)
+        left_entities, right_entities = benchmark_data.to_entities()
+        entities = left_entities + right_entities
 
-    effective_train_records = train_records
-    effective_val_records = val_records
-    effective_holdout_records = holdout_records
+        try:
+            configured_sizes = get_split_sizes(ds_name)
+        except Exception:
+            configured_sizes = None
 
-    if configured_sizes is not None:
-        if effective_train_records is None:
-            effective_train_records = configured_sizes.train_records
-        if effective_val_records is None:
-            effective_val_records = configured_sizes.val_records
-        if effective_holdout_records is None:
-            effective_holdout_records = configured_sizes.holdout_records
+        effective_train_records = train_records
+        effective_val_records = val_records
+        effective_holdout_records = holdout_records
 
-    splits = sample_random_splits(
-        all_entities,
-        benchmark_data.ground_truth,
-        train_records=effective_train_records,
-        val_records=effective_val_records,
-        holdout_records=effective_holdout_records,
-        seed=seed,
-    )
+        if configured_sizes is not None:
+            if effective_train_records is None:
+                effective_train_records = configured_sizes.train_records
+            if effective_val_records is None:
+                effective_val_records = configured_sizes.val_records
+            if effective_holdout_records is None:
+                effective_holdout_records = configured_sizes.holdout_records
+
+        splits = sample_random_splits(
+            entities,
+            benchmark_data.ground_truth,
+            train_records=effective_train_records,
+            val_records=effective_val_records,
+            holdout_records=effective_holdout_records,
+            seed=seed,
+        )
+
+        logger.info(
+            f"Splits for {ds_name}: train={len(splits.train_records)}, "
+            f"val={len(splits.val_records)}, holdout={len(splits.holdout_records)}"
+        )
+
+        # Dataset-specific seed offsets for pair generation
+        ds_seed = seed + ds_idx * 10
+        train_pairs = generate_labeled_pairs(
+            splits.train_records,
+            benchmark_data.ground_truth,
+            negative_ratio=negative_ratio,
+            strategy=strategy,
+            seed=ds_seed,
+        )
+        val_pairs = generate_labeled_pairs(
+            splits.val_records,
+            benchmark_data.ground_truth,
+            negative_ratio=negative_ratio,
+            strategy=strategy,
+            seed=ds_seed + 1,
+        )
+        holdout_pairs = generate_labeled_pairs(
+            splits.holdout_records,
+            benchmark_data.ground_truth,
+            negative_ratio=negative_ratio,
+            strategy=strategy,
+            seed=ds_seed + 2,
+        )
+
+        all_train_pairs.extend(train_pairs)
+        all_val_pairs.extend(val_pairs)
+
+        holdout_ids = {e.id for e in splits.holdout_records}
+        holdout_gt = {
+            (left_id, right_id)
+            for left_id, right_id in benchmark_data.ground_truth
+            if left_id in holdout_ids and right_id in holdout_ids
+        }
+
+        per_dataset_info[ds_name] = {
+            "splits": splits,
+            "train_pairs": train_pairs,
+            "val_pairs": val_pairs,
+            "holdout_pairs": holdout_pairs,
+            "holdout_gt": holdout_gt,
+        }
+
+    if not all_train_pairs:
+        raise ValueError(
+            f"No positive pairs found in training split for datasets: {datasets_to_run}"
+        )
 
     logger.info(
-        f"Splits for {dataset_name}: train={len(splits.train_records)}, "
-        f"val={len(splits.val_records)}, holdout={len(splits.holdout_records)}"
+        f"Total pairs across {len(datasets_to_run)} dataset(s): "
+        f"train={len(all_train_pairs)}, val={len(all_val_pairs)}"
     )
 
-    # 3. Generate labeled pairs for train, val, and holdout
-    train_pairs = generate_labeled_pairs(
-        splits.train_records,
-        benchmark_data.ground_truth,
-        negative_ratio=negative_ratio,
-        strategy=strategy,
-        seed=seed,
-    )
-    val_pairs = generate_labeled_pairs(
-        splits.val_records,
-        benchmark_data.ground_truth,
-        negative_ratio=negative_ratio,
-        strategy=strategy,
-        seed=seed + 1,
-    )
-    holdout_pairs = generate_labeled_pairs(
-        splits.holdout_records,
-        benchmark_data.ground_truth,
-        negative_ratio=negative_ratio,
-        strategy=strategy,
-        seed=seed + 2,
-    )
+    # Shuffle combined training and validation sets
+    rng = random.Random(seed)
+    rng.shuffle(all_train_pairs)
+    rng.shuffle(all_val_pairs)
 
-    if not train_pairs:
-        raise ValueError(f"No positive pairs found in training split for dataset {dataset_name}")
-
-    logger.info(
-        f"Generated pairs: train={len(train_pairs)}, val={len(val_pairs)}, "
-        f"holdout={len(holdout_pairs)}"
-    )
-
-    train_ds = pairs_to_dataset(train_pairs)
-    val_ds = pairs_to_dataset(val_pairs) if val_pairs else train_ds
-    holdout_ds = pairs_to_dataset(holdout_pairs) if holdout_pairs else val_ds
+    train_ds = pairs_to_dataset(all_train_pairs)
+    val_ds = pairs_to_dataset(all_val_pairs) if all_val_pairs else train_ds
 
     prompt = str(config.get("models.embedding_prompt", ""))
 
-    # 4. Load base model
+    # Load base model
     logger.info(f"Loading base model {model_name} on {device}")
     model = SentenceTransformer(
         model_name,
@@ -379,33 +441,8 @@ def run_fine_tune(
         model_card_data=SentenceTransformerModelCardData(
             language="en",
             license="apache-2.0",
-            model_name=f"{model_name}-finetuned-{dataset_name}",
+            model_name=f"{model_name}-finetuned-{tag_name}",
         ),
-    )
-
-    # 5. Build holdout evaluator for pre- and post-training measurement
-    # Prefix prompt if present to stay aligned with retrieval/blocking embeddings
-    holdout_s1 = (
-        [(prompt + s if prompt else s) for s in holdout_ds["sentence1"]]
-        if len(holdout_ds) > 0
-        else []
-    )
-    holdout_s2 = (
-        [(prompt + s if prompt else s) for s in holdout_ds["sentence2"]]
-        if len(holdout_ds) > 0
-        else []
-    )
-    holdout_labels = holdout_ds["label"] if len(holdout_ds) > 0 else []
-
-    holdout_evaluator = (
-        BinaryClassificationEvaluator(
-            sentences1=holdout_s1,
-            sentences2=holdout_s2,
-            labels=holdout_labels,
-            name=f"{dataset_name}-holdout",
-        )
-        if len(holdout_labels) > 0
-        else None
     )
 
     # Build validation evaluator for trainer (checkpoint selection on validation, NEVER holdout)
@@ -418,44 +455,65 @@ def run_fine_tune(
             sentences1=val_s1,
             sentences2=val_s2,
             labels=val_labels,
-            name=f"{dataset_name}-val",
+            name=f"{tag_name}-val",
         )
         if len(val_labels) > 0
         else None
     )
 
-    logger.info("Evaluating raw baseline model on holdout split...")
-    raw_eval: dict[str, Any] = {}
-    if holdout_evaluator is not None:
-        raw_eval = holdout_evaluator(model)
-        logger.info(f"Raw model holdout evaluation: {raw_eval}")
-
-    # Also evaluate blocking recall baseline on holdout (restricted to holdout records)
-    holdout_ids = {e.id for e in splits.holdout_records}
-    holdout_ground_truth = {
-        (left_id, right_id)
-        for left_id, right_id in benchmark_data.ground_truth
-        if left_id in holdout_ids and right_id in holdout_ids
-    }
-
+    # 2. Evaluate raw baseline model on each dataset's holdout split
     target_block = int(config.get("er.blocking.target_block_size", 30))
     max_block = int(config.get("er.blocking.max_block_size", 100))
-    raw_blocking = evaluate_blocking(
-        splits.holdout_records,
-        holdout_ground_truth,
-        dataset=dataset_name,
-        model_name=model_name,
-        prompt=prompt,
-        target_block_size=target_block,
-        max_block_size=max_block,
-        strategy=strategy,
-    )
-    raw_recall = raw_blocking.blocking_recall
-    logger.info(f"Raw model holdout blocking recall: {raw_recall:.4f}")
 
-    # 6. Configure loss
+    logger.info("Evaluating raw baseline model on holdout splits...")
+    dataset_results: dict[str, DatasetHoldoutResult] = {}
+
+    for ds_name in datasets_to_run:
+        ds_info = per_dataset_info[ds_name]
+        h_pairs = ds_info["holdout_pairs"]
+        h_splits = ds_info["splits"]
+        h_gt = ds_info["holdout_gt"]
+
+        h_ds = pairs_to_dataset(h_pairs) if h_pairs else None
+        h_eval: dict[str, Any] = {}
+        if h_ds and len(h_ds) > 0:
+            h_s1 = [(prompt + s if prompt else s) for s in h_ds["sentence1"]]
+            h_s2 = [(prompt + s if prompt else s) for s in h_ds["sentence2"]]
+            h_evaluator = BinaryClassificationEvaluator(
+                sentences1=h_s1,
+                sentences2=h_s2,
+                labels=h_ds["label"],
+                name=f"{ds_name}-holdout",
+            )
+            h_eval = h_evaluator(model)
+
+        raw_blocking = evaluate_blocking(
+            h_splits.holdout_records,
+            h_gt,
+            dataset=ds_name,
+            model_name=model_name,
+            prompt=prompt,
+            target_block_size=target_block,
+            max_block_size=max_block,
+            strategy=strategy,
+        )
+
+        dataset_results[ds_name] = DatasetHoldoutResult(
+            dataset=ds_name,
+            gold_pairs=len(h_gt),
+            raw_eval_metrics=h_eval,
+            tuned_eval_metrics={},
+            raw_blocking_recall=raw_blocking.blocking_recall,
+            tuned_blocking_recall=0.0,
+            raw_co_blocked=raw_blocking.co_blocked,
+            tuned_co_blocked=0,
+            raw_blocked_pairs=raw_blocking.blocked_pairs,
+            tuned_blocked_pairs=0,
+        )
+
+    # 3. Configure loss
     if loss_type == "mnrl":
-        pos_train_pairs = [p for p in train_pairs if p.label == 1.0]
+        pos_train_pairs = [p for p in all_train_pairs if p.label == 1.0]
         train_ds = pairs_to_dataset(pos_train_pairs)
         train_loss = MultipleNegativesRankingLoss(model)
     elif loss_type == "online_contrastive":
@@ -465,7 +523,7 @@ def run_fine_tune(
     else:
         train_loss = ContrastiveLoss(model=model, margin=margin)
 
-    # 7. Configure TrainingArguments
+    # 4. Configure TrainingArguments
     use_fp16 = torch.cuda.is_available()
     training_args = SentenceTransformerTrainingArguments(
         output_dir=str(out_path / "checkpoints"),
@@ -473,7 +531,7 @@ def run_fine_tune(
         per_device_train_batch_size=batch_size,
         per_device_eval_batch_size=batch_size,
         learning_rate=learning_rate,
-        warmup_steps=warmup_ratio,  # Transformers 5+ float warmup ratio
+        warmup_steps=warmup_ratio,
         weight_decay=weight_decay,
         fp16=use_fp16,
         eval_strategy="steps" if len(val_ds) > 0 else "no",
@@ -489,7 +547,7 @@ def run_fine_tune(
         prompts=prompt if prompt else None,
     )
 
-    # 8. Train (evaluated on val_ds, NEVER on holdout_ds)
+    # 5. Train (evaluated on val_ds, NEVER on holdout_ds)
     trainer = SentenceTransformerTrainer(
         model=model,
         args=training_args,
@@ -499,56 +557,97 @@ def run_fine_tune(
         evaluator=val_evaluator if len(val_ds) > 0 else None,
     )
 
-    logger.info(f"Starting fine-tuning for {epochs} epochs with {loss_type} loss...")
+    logger.info(f"Starting fine-tuning for {epochs} epochs with {loss_type} loss on {tag_name}...")
     trainer.train()
 
-    # 9. Save final fine-tuned model
+    # 6. Save final fine-tuned model
     model.save_pretrained(str(out_path))
     logger.info(f"Saved fine-tuned model to {out_path}")
 
-    # 10. Final evaluation on holdout
-    tuned_eval: dict[str, Any] = {}
-    if holdout_evaluator is not None:
-        tuned_eval = holdout_evaluator(model)
-        logger.info(f"Fine-tuned model holdout evaluation: {tuned_eval}")
+    # 7. Final evaluation on each dataset's holdout split
+    logger.info("Evaluating fine-tuned model on holdout splits...")
+    for ds_name in datasets_to_run:
+        ds_info = per_dataset_info[ds_name]
+        h_pairs = ds_info["holdout_pairs"]
+        h_splits = ds_info["splits"]
+        h_gt = ds_info["holdout_gt"]
 
-    # Evaluate blocking recall with fine-tuned model
-    tuned_blocking = evaluate_blocking(
-        splits.holdout_records,
-        holdout_ground_truth,
-        dataset=dataset_name,
-        model_name=str(out_path),
-        prompt=prompt,
-        target_block_size=target_block,
-        max_block_size=max_block,
-        strategy=strategy,
-    )
-    tuned_recall = tuned_blocking.blocking_recall
-    logger.info(f"Fine-tuned model holdout blocking recall: {tuned_recall:.4f}")
+        h_ds = pairs_to_dataset(h_pairs) if h_pairs else None
+        tuned_eval: dict[str, Any] = {}
+        if h_ds and len(h_ds) > 0:
+            h_s1 = [(prompt + s if prompt else s) for s in h_ds["sentence1"]]
+            h_s2 = [(prompt + s if prompt else s) for s in h_ds["sentence2"]]
+            h_evaluator = BinaryClassificationEvaluator(
+                sentences1=h_s1,
+                sentences2=h_s2,
+                labels=h_ds["label"],
+                name=f"{ds_name}-holdout",
+            )
+            tuned_eval = h_evaluator(model)
 
-    # Metric evaluation & verdict line
-    score = float(tuned_eval.get(f"{dataset_name}-holdout_cosine_f1", 0.0))
-    baseline_eval = float(raw_eval.get(f"{dataset_name}-holdout_cosine_f1", 0.0))
-    delta = score - baseline_eval
-    verdict = "WIN" if delta >= 0.005 else "MARGINAL" if delta >= 0 else "REGRESSION"
-    logger.info(
-        f"VERDICT: {verdict} | score={score:.4f} | baseline={baseline_eval:.4f} | delta={delta:+.4f} "
-        f"| holdout_blocking_recall={tuned_recall:.4f} (raw={raw_recall:.4f}, delta={tuned_recall - raw_recall:+.4f})"
-    )
+        tuned_blocking = evaluate_blocking(
+            h_splits.holdout_records,
+            h_gt,
+            dataset=ds_name,
+            model_name=str(out_path),
+            prompt=prompt,
+            target_block_size=target_block,
+            max_block_size=max_block,
+            strategy=strategy,
+        )
+
+        res = dataset_results[ds_name]
+        res.tuned_eval_metrics = tuned_eval
+        res.tuned_blocking_recall = tuned_blocking.blocking_recall
+        res.tuned_co_blocked = tuned_blocking.co_blocked
+        res.tuned_blocked_pairs = tuned_blocking.blocked_pairs
+
+        score = float(tuned_eval.get(f"{ds_name}-holdout_cosine_f1", 0.0))
+        baseline_eval = float(res.raw_eval_metrics.get(f"{ds_name}-holdout_cosine_f1", 0.0))
+        delta_f1 = score - baseline_eval
+        delta_recall = res.tuned_blocking_recall - res.raw_blocking_recall
+        verdict = (
+            "WIN"
+            if delta_recall > 0 or delta_f1 >= 0.005
+            else "MARGINAL"
+            if delta_recall == 0
+            else "REGRESSION"
+        )
+        logger.info(
+            f"VERDICT [{ds_name}]: {verdict} | cosine_f1={score:.4f} (delta={delta_f1:+.4f}) "
+            f"| holdout_blocking_recall={res.tuned_blocking_recall:.4f} (raw={res.raw_blocking_recall:.4f}, delta={delta_recall:+.4f}) "
+            f"| co_blocked={res.tuned_co_blocked}/{res.gold_pairs} (raw={res.raw_co_blocked}) "
+            f"| blocked_pairs={res.tuned_blocked_pairs} (raw={res.raw_blocked_pairs})"
+        )
+
+    # Aggregate metrics across datasets
+    primary_name = datasets_to_run[0]
+    primary_res = dataset_results[primary_name]
+    total_holdout_pairs = sum(len(per_dataset_info[d]["holdout_pairs"]) for d in datasets_to_run)
+    if len(datasets_to_run) == 1:
+        overall_raw_recall = primary_res.raw_blocking_recall
+        overall_tuned_recall = primary_res.tuned_blocking_recall
+    else:
+        total_gold = sum(res.gold_pairs for res in dataset_results.values())
+        raw_total_co_blocked = sum(res.raw_co_blocked for res in dataset_results.values())
+        tuned_total_co_blocked = sum(res.tuned_co_blocked for res in dataset_results.values())
+        overall_raw_recall = raw_total_co_blocked / total_gold if total_gold > 0 else 0.0
+        overall_tuned_recall = tuned_total_co_blocked / total_gold if total_gold > 0 else 0.0
 
     return FineTuneResult(
-        dataset=dataset_name,
+        dataset=tag_name,
         base_model=model_name,
         output_dir=str(out_path),
         loss_name=loss_type,
         epochs=epochs,
         batch_size=batch_size,
         learning_rate=learning_rate,
-        train_pairs=len(train_pairs),
-        val_pairs=len(val_pairs),
-        holdout_pairs=len(holdout_pairs),
-        raw_eval_metrics=raw_eval,
-        tuned_eval_metrics=tuned_eval,
-        raw_blocking_recall=raw_recall,
-        tuned_blocking_recall=tuned_recall,
+        train_pairs=len(all_train_pairs),
+        val_pairs=len(all_val_pairs),
+        holdout_pairs=total_holdout_pairs,
+        raw_eval_metrics=primary_res.raw_eval_metrics if len(datasets_to_run) == 1 else {},
+        tuned_eval_metrics=primary_res.tuned_eval_metrics if len(datasets_to_run) == 1 else {},
+        raw_blocking_recall=overall_raw_recall,
+        tuned_blocking_recall=overall_tuned_recall,
+        dataset_results=dataset_results,
     )

@@ -198,3 +198,65 @@ def test_run_fine_tune_different_losses(
             holdout_records=5,
         )
         assert result.loss_name == loss
+
+
+@patch("serf.embedding.fine_tune.evaluate_blocking")
+@patch("serf.embedding.fine_tune.SentenceTransformerTrainer")
+@patch("serf.embedding.fine_tune.SentenceTransformer")
+@patch("serf.embedding.fine_tune.BenchmarkDataset.download")
+def test_run_fine_tune_all_datasets(
+    mock_download: MagicMock,
+    mock_sbert_cls: MagicMock,
+    mock_trainer_cls: MagicMock,
+    mock_eval_blocking: MagicMock,
+    tmp_path: Path,
+) -> None:
+    # Return mock benchmark dataset for all requested datasets
+    def make_mock_ds(dataset_name: str) -> MagicMock:
+        mock_ds = MagicMock()
+        left = [_entity(i, f"{dataset_name} left {i}") for i in range(10)]
+        right = [_entity(100000 + i, f"{dataset_name} right {i}") for i in range(10)]
+        mock_ds.to_entities.return_value = (left, right)
+        mock_ds.ground_truth = {(i, 100000 + i) for i in range(10)}
+        return mock_ds
+
+    mock_download.side_effect = make_mock_ds
+
+    mock_model = MagicMock()
+    mock_model.similarity_fn_name = "cosine"
+    mock_model.encode.side_effect = lambda texts, **kwargs: np.array(
+        [[0.1, 0.2]] * len(texts), dtype=np.float32
+    )
+    mock_sbert_cls.return_value = mock_model
+
+    # 5 datasets * 2 evaluations (raw + tuned)
+    mock_eval_blocking.side_effect = [
+        MagicMock(blocking_recall=0.70 + i * 0.02, co_blocked=7, blocked_pairs=50)
+        for i in range(10)
+    ]
+
+    mock_trainer = MagicMock()
+    mock_trainer_cls.return_value = mock_trainer
+
+    result = run_fine_tune(
+        "all",
+        model_name="BAAI/bge-small-en-v1.5",
+        output_dir=str(tmp_path / "model_all"),
+        epochs=1,
+        batch_size=8,
+        loss_type="contrastive",
+        strategy="name",
+        seed=42,
+        train_records=10,
+        val_records=5,
+        holdout_records=5,
+    )
+
+    assert isinstance(result, FineTuneResult)
+    assert result.dataset == "all"
+    assert result.dataset_results is not None
+    assert len(result.dataset_results) == 5
+    assert "dblp-acm" in result.dataset_results
+    assert "abt-buy" in result.dataset_results
+    mock_trainer.train.assert_called_once()
+    mock_model.save_pretrained.assert_called_once()

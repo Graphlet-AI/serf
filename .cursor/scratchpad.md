@@ -200,7 +200,7 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Port and adapt research documentation from PR #19 (`docs/MISSION.md`, `docs/CODING_STANDARDS.md`, `docs/ID_INVARIANTS.md`, `docs/RESEARCH_LOOP.md`)
 - [x] Add "Read These First" to `CLAUDE.md`, update `README.md` and `docs/SERF_LONG_SHOT_PLAN.md` with doc cross-references
 - [x] Run test suite, linters, and type checks
-- [ ] Push branch and open new PR based on `cursor/embedding-contrastive-finetune-66f9`
+- [x] Push branch and open new PR #24 based on `cursor/embedding-contrastive-finetune-66f9`
 
 ## Executor's Feedback or Assistance Requests
 

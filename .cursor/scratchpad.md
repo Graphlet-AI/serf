@@ -197,10 +197,30 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Implement short-form embedding fine-tuning via contrastive learning for labeled datasets (CLI `serf fine-tune`)
 - [x] Add tests for dataset generation, loss, and CLI command
 - [x] Verified with pytest, ruff, zuban
+- [x] Port and adapt research documentation from PR #19 (`docs/MISSION.md`, `docs/CODING_STANDARDS.md`, `docs/ID_INVARIANTS.md`, `docs/RESEARCH_LOOP.md`)
+- [x] Add "Read These First" to `CLAUDE.md`, update `README.md` and `docs/SERF_LONG_SHOT_PLAN.md` with doc cross-references
+- [x] Run test suite, linters, and type checks
+- [ ] Push branch and open new PR based on `cursor/embedding-contrastive-finetune-66f9`
 
 ## Executor's Feedback or Assistance Requests
 
+- **Research & Architecture Documentation Port from PR #19**:
+
+  - Analyzed PR #19 (`cursor/serf-long-shot-plan-system-b0d4`) against current working branch (`cursor/embedding-contrastive-finetune-66f9`).
+  - PR #19 contained 4 high-value foundational documentation files:
+    1. `docs/MISSION.md`: Project mission, 4 core claims, scaling argument, hard constraints, and paper roadmap.
+    2. `docs/CODING_STANDARDS.md`: Engineering philosophy, anti-patterns, Spark dataflow conventions, adapted to document Zuban static type checking.
+    3. `docs/ID_INVARIANTS.md`: Specification of the identifier-conservation contract, MDM lowest-ID master convention, stripping/restoring block-local mapped integers, and two-phase recovery.
+    4. `docs/RESEARCH_LOOP.md`: Karpathy-style research loop, evaluation protocols, metric set, cost accounting per 1,000 records, and experiment registry E1-E8 (cleaned up stray characters from original PR).
+  - Also ported the "Read These First" orientation block into `CLAUDE.md`, added the documentation summary table to `README.md`, and added the document relationship table to `docs/SERF_LONG_SHOT_PLAN.md`.
+  - Discarded outdated/conflicting components from PR #19:
+    - Outdated `src/serf/cli/main.py` changes (from March 2026, which lacked modern options like `--signature-mode`, `--trained-prompts`, `--eval-split`, etc.).
+    - Deletion of `docs/QUICKSTART.md` (which remains current and useful).
+    - Deletion of Zuban typechecking hook from `.pre-commit-config.yaml` and `CLAUDE.md`.
+    - Stale speculative embedding model suggestions (`microsoft/harrier-oss-v1-0.6b`), which were superseded by BGE small and contrastive fine-tuning.
+
 - **Embedding fine-tuning design**:
+
   - Module `serf.embedding.fine_tune` created to support contrastive fine-tuning using `SentenceTransformerTrainer` with `ContrastiveLoss` (or `MultipleNegativesRankingLoss`).
   - Labeled dataset generation from benchmark datasets: pairing entities across sources based on labels (matches as positive pairs label 1.0, non-matches/hard-negatives as negative pairs label 0.0).
   - Uses `BAAI/bge-small-en-v1.5` as default base model (modern small embedding) instead of intfloat.

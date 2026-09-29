@@ -400,8 +400,11 @@ def test_benchmark_help_documents_the_eval_split() -> None:
     assert "holdout" in result.output
 
 
-def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data() -> None:
+def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Separation is enforced, not merely warned about."""
+    monkeypatch.setattr("serf.cli.main.setup_mlflow", lambda: None)
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -423,8 +426,15 @@ def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data() -> None:
     assert "--eval-split holdout" in result.output
 
 
-def test_the_shipped_prompt_may_be_scored_over_all_the_data() -> None:
+def test_the_shipped_prompt_may_be_scored_over_all_the_data(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Nothing was optimized against it, and a full-table number needs every record."""
+    monkeypatch.setattr("serf.cli.main.setup_mlflow", lambda: None)
+    monkeypatch.setattr(
+        "serf.cli.main._benchmark_llm_matching",
+        lambda *args, **kwargs: (set(), []),
+    )
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -438,6 +448,11 @@ def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.Mo
     """Measuring the fit on purpose is allowed; it just has to be asked for."""
     from serf.cli import main as cli_main
 
+    monkeypatch.setattr("serf.cli.main.setup_mlflow", lambda: None)
+    monkeypatch.setattr(
+        "serf.cli.main._benchmark_llm_matching",
+        lambda *args, **kwargs: (set(), []),
+    )
     real_get = cli_main.serf_config.get
 
     def fake_get(key: str, default: object = None) -> object:

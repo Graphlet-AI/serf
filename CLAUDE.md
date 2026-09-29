@@ -2,6 +2,21 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with the SERF: Semantic Entity Resolution Framework in this repository. See @README.md for general project information.
 
+## Read These First
+
+SERF is a research project aimed at an academic paper. These documents are authoritative and take precedence over habit:
+
+- @docs/MISSION.md — what we are proving, what counts as state of the art, and the non-negotiables
+- @docs/CODING_STANDARDS.md — **the project coding standard: simple, minimal code that satisfies the specific requirement alone.** Read before writing any code.
+- @docs/ID_INVARIANTS.md — the identifier-conservation contract for match/merge. These semantics were proven in Abzu and must be reproduced exactly. The implementation may improve; the semantics may not change.
+- @docs/RESEARCH_LOOP.md — experiment registry (E1–E8), metrics, evaluation protocols, and reproducibility rules
+- @.cursor/scratchpad.md — the current plan, task breakdown, and status board
+
+Two rules that come from those documents and are easy to violate:
+
+1. **Never compare F1 across evaluation protocols.** Every reported number carries its protocol label.
+2. **Identifier conservation always holds.** Every integer identifier entering a block appears on the way out, either as an output record's identifier or in exactly one output record's merge list.
+
 ## Commands
 
 ### Development

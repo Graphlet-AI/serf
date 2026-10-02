@@ -249,8 +249,10 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   - Strengthened `_is_auth_error` to catch `invalid_api_key` and litellm's client-level token sync.
   - Tuned `optimize.num_threads: 2` in `config.yml` to prevent burst contention against Vertex quotas while maintaining parallel LM rollouts.
   - Fine-tuned `data/models/fine-tuned-dblp-acm-bge-small-contrastive` on `dblp-acm` (holdout blocking recall 0.9961, reducing matcher candidate comparisons by 29% from 26,735 to 18,969).
-  - Started background GEPA training run on `dblp-acm` with the fine-tuned contrastive blocking model.
-  - Once training completes, optimized programs will be saved to `data/trained_prompts/{dataset}_gepa.json` and holdout validation scores recorded.
+  - Raised default `models.request_timeout_seconds` to 300s in `config.yml` and added exponential backoff retry for transport errors, timeouts, and rate limits in `VertexRefreshingLM`.
+  - Configured `dspy.settings.configure(max_errors=100)` in `optimize_module`.
+  - Running GEPA training on `dblp-acm` with the fine-tuned contrastive blocking model in tmux session `gepa-train` (PID 6559, logged to `/opt/cursor/artifacts/gepa_train_dblp_acm.log`).
+  - Created draft pull request #25 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
 
 - **Research & Architecture Documentation Port from PR #19**:
 

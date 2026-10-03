@@ -332,6 +332,32 @@ def test_refreshing_lm_retries_on_rate_limit_error() -> None:
     mock_sleep.assert_called_once()
 
 
+def test_refreshing_lm_retries_on_timeout_transport_error() -> None:
+    """forward() catches read timeout / transport errors, backs off, and retries."""
+    credentials = _fake_credentials("valid-token", timedelta(hours=1))
+    lm = _refreshing_lm(credentials)
+    call_count = 0
+
+    def mock_forward(*_args: Any, **_kwargs: Any) -> str:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            raise RuntimeError(
+                "dspy.utils.exceptions.LMTransportError: read timed out waiting for headers: no bytes for 180s"
+            )
+        return "timeout-recovered"
+
+    with (
+        patch("serf.dspy.lm.time.sleep") as mock_sleep,
+        patch.object(dspy.LM, "forward", side_effect=mock_forward),
+    ):
+        result = lm.forward(messages=[{"role": "user", "content": "hi"}])
+
+    assert result == "timeout-recovered"
+    assert call_count == 2
+    mock_sleep.assert_called_once()
+
+
 def test_create_lm_student_uses_refreshing_lm_for_service_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -377,7 +403,7 @@ def test_a_request_timeout_is_configured() -> None:
     """An unbounded request can hang a whole run; a bounded one costs a retry."""
     from serf.dspy.lm import request_timeout
 
-    assert request_timeout() == 180
+    assert request_timeout() == int(config.get("models.request_timeout_seconds"))
 
 
 def test_every_lm_carries_the_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,7 +424,8 @@ def test_every_lm_carries_the_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     lm_module._create_gemini_lm("gemini/gemini-3.8-flash", temperature=0.0, max_tokens=64)
 
     assert captured, "no LM was constructed"
-    assert all(kwargs.get("timeout") == 180 for kwargs in captured)
+    expected_timeout = int(config.get("models.request_timeout_seconds"))
+    assert all(kwargs.get("timeout") == expected_timeout for kwargs in captured)
 
 
 def test_the_teacher_is_gemini_38_flash() -> None:

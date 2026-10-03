@@ -236,8 +236,8 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Unit tests for blocking model/strategy in `tests/test_train.py` and `tests/test_cli.py`
 - [x] Vertex AI rate limit retry handler with exponential backoff and safe token refresh in `VertexRefreshingLM`
 - [x] Launch GEPA training on `amazon-google` and `dblp-acm` with improved blocking in tmux session `gepa-train`
-- [ ] Complete GEPA training and record validation & holdout metrics in `experiments/gepa-tuning-results.md`
-- [ ] Final verification: linters, typecheck, tests, commit, push, update PR #23
+- [ ] Complete GEPA training with improved blocking model and record validation & holdout metrics in `experiments/gepa-tuning-results.md`
+- [ ] Final verification: linters, typecheck, tests, commit, push, update PR
 
 ## Executor's Feedback or Assistance Requests
 
@@ -246,11 +246,13 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   - Added `--blocking-model` to `serf benchmark` CLI.
   - Included blocking model and strategy in `run_log_dir` SHA-256 fingerprinting so training cache/logs never collide across different embedding or blocking setups.
   - Implemented exponential backoff retry in `VertexRefreshingLM` for Vertex AI MaaS 429 / ResourceExhausted rate limit errors with up to 6 retry attempts.
+  - Strengthened `_is_auth_error` to catch `invalid_api_key` and litellm's client-level token sync.
   - Tuned `optimize.num_threads: 2` in `config.yml` to prevent burst contention against Vertex quotas while maintaining parallel LM rollouts.
-  - Started local MLflow tracking server at `http://127.0.0.1:5001`.
-  - Launched GEPA training on `amazon-google` and `dblp-acm` using `--blocking-model data/models/fine-tuned-all-bge-small-contrastive --auto light` in tmux session `gepa-train` (output logged to `/opt/cursor/artifacts/gepa_train_improved_blocking.log`).
-  - Active progress: GEPA proposed candidate 1 with specialized domain-specific matching rules (publisher vs manufacturer verification, Yamaha MIDI arranger prefixes, edition strictness), passed acceptance on train minibatch, and is evaluating the 35 validation blocks.
-  - Once training completes, optimized programs will be saved to `data/trained_prompts/{dataset}_gepa.json` and holdout validation scores recorded.
+  - Fine-tuned `data/models/fine-tuned-dblp-acm-bge-small-contrastive` on `dblp-acm` (holdout blocking recall 0.9961, reducing matcher candidate comparisons by 29% from 26,735 to 18,969).
+  - Raised default `models.request_timeout_seconds` to 300s in `config.yml` and added exponential backoff retry for transport errors, timeouts, and rate limits in `VertexRefreshingLM`.
+  - Configured `dspy.settings.configure(max_errors=100)` in `optimize_module`.
+  - Running GEPA training on `dblp-acm` with the fine-tuned contrastive blocking model in tmux session `gepa-train` (PID 6559, logged to `/opt/cursor/artifacts/gepa_train_dblp_acm.log`).
+  - Created draft pull request #25 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
 
 - **Research & Architecture Documentation Port from PR #19**:
 

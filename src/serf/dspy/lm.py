@@ -165,39 +165,61 @@ class VertexRefreshingLM(dspy.LM):
             if force or self._token_is_stale():
                 self.credentials.refresh(Request())
                 logger.info("Refreshed Vertex AI access token")
+            # Update instance kwargs, and litellm's internal api_key if present
             if self.kwargs.get("api_key") != self.credentials.token:
                 self.kwargs["api_key"] = self.credentials.token
+            client = getattr(self, "client", None)
+            if client is not None and hasattr(client, "api_key"):
+                client.api_key = self.credentials.token
 
     @staticmethod
     def _is_auth_error(exc: Exception) -> bool:
         """Return whether an exception indicates an expired or invalid token."""
         msg = str(exc).lower()
+        exc_name = type(exc).__name__.lower()
         return any(
-            err in msg
+            err in msg or err in exc_name
             for err in (
                 "access_token_expired",
                 "unauthenticated",
                 "authenticationerror",
                 "invalid authentication credentials",
+                "invalid_api_key",
+                "api key is correct",
                 "401",
             )
         )
 
     @staticmethod
     def _is_rate_limit_error(exc: Exception) -> bool:
-        """Return whether an exception indicates a rate limit or resource exhaustion."""
+        """Return whether an exception indicates a rate limit, timeout, or transient transport error."""
         msg = str(exc).lower()
         exc_name = type(exc).__name__.lower()
         return any(
             err in msg or err in exc_name
             for err in (
                 "lmratelimiterror",
+                "lmtransporterror",
+                "transporterror",
                 "rate_limit",
                 "ratelimit",
                 "429",
                 "resource_exhausted",
                 "too many requests",
                 "quota",
+                "timed out",
+                "timeout",
+                "no bytes for",
+                "connection reset",
+                "connection error",
+                "econnreset",
+                "remote disconnected",
+                "502",
+                "503",
+                "504",
+                "bad gateway",
+                "service unavailable",
+                "gateway timeout",
             )
         )
 

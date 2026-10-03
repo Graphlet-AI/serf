@@ -405,6 +405,7 @@ def optimize_module(
     )
     gepa_metric: GEPAFeedbackMetric = metric or er_metric
     _patch_bootstrap_trace()
+    dspy.settings.configure(max_errors=100)
     optimizer = dspy.GEPA(
         metric=gepa_metric,
         reflection_lm=teacher_lm,

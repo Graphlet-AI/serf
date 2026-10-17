@@ -236,6 +236,7 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Unit tests for blocking model/strategy in `tests/test_train.py` and `tests/test_cli.py`
 - [x] Vertex AI rate limit retry handler with exponential backoff and safe token refresh in `VertexRefreshingLM`
 - [x] Launch GEPA training on `amazon-google` and `dblp-acm` with improved blocking in tmux session `gepa-train`
+- [x] Configure teacher model to `gemini/gemini-4-argon` with `models.teacher_reasoning_effort: "medium"` in `config.yml` and `src/serf/dspy/lm.py`
 - [ ] Complete GEPA training with improved blocking model and record validation & holdout metrics in `experiments/gepa-tuning-results.md`
 - [ ] Final verification: linters, typecheck, tests, commit, push, update PR
 
@@ -251,7 +252,8 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   - Fine-tuned `data/models/fine-tuned-dblp-acm-bge-small-contrastive` on `dblp-acm` (holdout blocking recall 0.9961, reducing matcher candidate comparisons by 29% from 26,735 to 18,969).
   - Raised default `models.request_timeout_seconds` to 300s in `config.yml` and added exponential backoff retry for transport errors, timeouts, and rate limits in `VertexRefreshingLM`.
   - Configured `dspy.settings.configure(max_errors=100)` in `optimize_module`.
-  - Running GEPA training on `dblp-acm` with the fine-tuned contrastive blocking model in tmux session `gepa-train` (PID 6559, logged to `/opt/cursor/artifacts/gepa_train_dblp_acm.log`).
+  - Updated `models.teacher` to `"gemini/gemini-4-argon"` and added `models.teacher_reasoning_effort: "medium"` in `config.yml` and `src/serf/dspy/lm.py`.
+  - Running GEPA training on `dblp-acm` with the fine-tuned contrastive blocking model and `gemini/gemini-4-argon` (`medium` reasoning effort) teacher in tmux session `gepa-train` (logged to `/opt/cursor/artifacts/gepa_train_dblp_acm.log`).
   - Created draft pull request #25 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
 
 - **Research & Architecture Documentation Port from PR #19**:
@@ -633,3 +635,11 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   PairClassification at 89.9 and raises `Cannot use chat template functions because
 tokenizer.chat_template is not set`, because it is an LLM-based embedder. Load-test a candidate
   before planning a sweep around it.
+- **`/cursor/stores/self/` is a FUSE mount without `mmap` support.** `safetensors` (`model.safetensors`)
+  and `diskcache` (SQLite WAL in `.dspy_cache`) both call `mmap` and fail with `OSError: [Errno 22]
+Invalid argument` if pointed at `/cursor/stores/self/`. Keep `data/models` and `~/.dspy_cache` on
+  local container disk, and symlink only JSON/pickle directories (`data/gepa_logs`,
+  `data/trained_prompts`, `data/benchmarks`) to the persistent store.
+- **GEPA's rollout bar updates per batch, not per block.** `dspy.GEPA` stays at `0/520` until all
+  35 validation blocks finish. Read `len(dspy.cache.disk_cache)` to observe block-by-block student
+  completions during a batch.

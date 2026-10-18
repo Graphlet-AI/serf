@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with the SERF: Semantic Entity Resolution Framework in this repository. See @README.md for general project information.
 
+## Speak and Write in ASD-STE100
+
+I want you to use the standard of ASD-STE100 when you interact with me and write text.
+
 ## Read These First
 
 SERF is a research project aimed at an academic paper. These documents are authoritative and take precedence over habit:

@@ -50,3 +50,15 @@ def test_detect_field_type_field_name_heuristics() -> None:
     assert detect_field_type("address", ["123 Main St"]) == "address"
     assert detect_field_type("id", ["abc-123"]) == "identifier"
     assert detect_field_type("sku", ["SKU-001"]) == "identifier"
+
+
+def test_detect_field_type_plural_list_field_names_and_list_values() -> None:
+    """Plural list field names and list-valued sample entries are detected accurately."""
+    assert detect_field_type("addresses", [["123 Main St", "456 Oak Ave"]]) == "address"
+    assert detect_field_type("names", [["Russell Jurney", "Russ Journey"]]) == "name"
+    assert detect_field_type("aliases", [["Bob Dorf", "Robert Dorf"]]) == "name"
+    assert detect_field_type("emails", [["a@b.com", "c@d.org"]]) == "email"
+    assert detect_field_type("phones", [["415-555-0100"]]) == "phone"
+    assert detect_field_type("urls", [["https://example.com"]]) == "url"
+    assert detect_field_type("identifiers", [["SKU-1", "SKU-2"]]) == "identifier"
+    assert detect_field_type("locations", [["123 Main Street", "456 Elm Road"]]) == "address"

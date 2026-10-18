@@ -336,6 +336,8 @@ def test_schema_shows_the_fields_and_the_policy_each_one_resolves_to() -> None:
     result = runner.invoke(cli, ["schema", "schemas/person.yml"])
     assert result.exit_code == 0, result.output
     assert "CanonicalPerson" in result.output
+    assert "MergePerson" in result.output
+    assert "MatchAndMergePerson" in result.output
     # `address` is fuzzy by default; the schema overrides state to exact.
     assert "state address   str       no  exact" in " ".join(result.output.split("\n"))
 
@@ -393,6 +395,62 @@ def test_schema_merge_rejects_a_payload_that_is_not_a_list(tmp_path: Path) -> No
 
     assert result.exit_code != 0
     assert "non-empty JSON list" in result.output
+
+
+def test_schema_merge_supports_singular_and_list_fields_with_use_llm(tmp_path: Path) -> None:
+    schema_path = tmp_path / "contact.yml"
+    schema_path.write_text(
+        json.dumps(
+            {
+                "entity": "Contact",
+                "fields": [
+                    {"name": "display_name", "type": "name", "cardinality": "single"},
+                    {"name": "addresses", "type": "address", "cardinality": "list"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    records_path = tmp_path / "contacts.json"
+    records_path.write_text(
+        json.dumps(
+            [
+                {
+                    "uuid": "11111111-1111-4111-8111-111111111111",
+                    "display_name": "Alice Smith",
+                    "addresses": ["123 Main St", "456 Oak Ave"],
+                },
+                {
+                    "uuid": "22222222-2222-4222-8222-222222222222",
+                    "display_name": "Dr. Alice M. Smith",
+                    "addresses": ["123 Main Street"],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    fake_prediction = MagicMock()
+    fake_prediction.display_name = "Dr. Alice M. Smith"
+    fake_prediction.addresses = ["123 Main Street", "456 Oak Ave"]
+    fake_predictor = MagicMock(return_value=fake_prediction)
+
+    runner = CliRunner()
+    with patch("serf.merge.semantics.dspy.Predict", return_value=fake_predictor):
+        result = runner.invoke(
+            cli,
+            ["schema", str(schema_path), "--merge", str(records_path), "--use-llm"],
+        )
+
+    assert result.exit_code == 0, result.output
+    emitted = [
+        json.loads(line.strip())
+        for line in result.output.splitlines()
+        if line.strip().startswith("{")
+    ]
+    assert len(emitted) == 1
+    assert emitted[0]["display_name"] == "Dr. Alice M. Smith"
+    assert emitted[0]["addresses"] == ["123 Main Street", "456 Oak Ave"]
 
 
 def test_benchmark_help_documents_the_eval_split() -> None:

@@ -9,24 +9,43 @@ logger = get_logger(__name__)
 
 # Field name patterns that suggest specific types
 NAME_PATTERNS = (
-    r"^(name|title|product_name|company_name|entity_name|display_name|full_name)$",
-    r"^(first_name|last_name|given_name|surname)$",
+    r"^(names?|titles?|product_names?|company_names?|entity_names?|display_names?|full_names?)$",
+    r"^(first_names?|last_names?|given_names?|surnames?|alias(es)?|aka|alternate_names?)$",
 )
-EMAIL_PATTERNS = r"^(email|e_mail|mail)$"
-URL_PATTERNS = r"^(url|website|link|uri|homepage)$"
-PHONE_PATTERNS = r"^(phone|tel|mobile|fax|contact_number)$"
-ADDRESS_PATTERNS = r"^(address|street|city|state|zip|country|location)$"
-IDENTIFIER_PATTERNS = r"^(id|uuid|sku|ean|upc|isbn|asin|identifier)$"
-DATE_PATTERNS = r"^(date|created|updated|timestamp|dob|birth_date)$"
-NUMERIC_PATTERNS = r"^(price|revenue|amount|count|quantity|num|size)$"
+EMAIL_PATTERNS = r"^(emails?|e_mails?|mails?|email_address(es)?)$"
+URL_PATTERNS = r"^(urls?|websites?|links?|uris?|homepages?)$"
+PHONE_PATTERNS = r"^(phones?|tels?|mobiles?|fax(es)?|contact_numbers?|phone_numbers?)$"
+ADDRESS_PATTERNS = (
+    r"^(address(es)?|streets?|street_address(es)?|mailing_address(es)?|billing_address(es)?"
+    r"|shipping_address(es)?|home_address(es)?|work_address(es)?|city|cities|states?"
+    r"|zips?|zip_?codes?|postal_?codes?|country|countries|locations?)$"
+)
+IDENTIFIER_PATTERNS = r"^(ids?|uuids?|skus?|eans?|upcs?|isbns?|asins?|identifiers?)$"
+DATE_PATTERNS = r"^(dates?|created|updated|timestamps?|dobs?|birth_dates?)$"
+NUMERIC_PATTERNS = r"^(prices?|revenues?|amounts?|counts?|quantity|quantities|nums?|sizes?)$"
 
 # Value patterns (regex)
 EMAIL_VALUE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", re.IGNORECASE)
 URL_VALUE = re.compile(r"^https?://|^www\.", re.IGNORECASE)
 PHONE_VALUE = re.compile(r"^[\d\s\-\(\)\.\+]+$")
+ADDRESS_VALUE = re.compile(
+    r"^\d+\s+.*\b(st|street|ave|avenue|rd|road|blvd|boulevard|dr|drive|ln|lane|ct|court|pl|place|sq|square|pkwy|parkway|hwy|highway)\b",
+    re.IGNORECASE,
+)
 DATE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}")
 DATE_US = re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}")
 NUMERIC_VALUE = re.compile(r"^[\d\.,\-]+$")
+
+
+def _flatten_sample_values(values: list[Any]) -> list[Any]:
+    """Flatten scalar and list/tuple/set sample values into one list."""
+    flat: list[Any] = []
+    for item in values:
+        if isinstance(item, (list, tuple, set)):
+            flat.extend(_flatten_sample_values(list(item)))
+        else:
+            flat.append(item)
+    return flat
 
 
 def detect_field_type(field_name: str, values: list[Any]) -> str:
@@ -80,7 +99,8 @@ def detect_field_type(field_name: str, values: list[Any]) -> str:
         return "numeric"
 
     # Fall back to value-based detection
-    str_values = [str(v).strip() for v in values if v is not None and str(v).strip()]
+    flat_values = _flatten_sample_values(values)
+    str_values = [str(v).strip() for v in flat_values if v is not None and str(v).strip()]
     if not str_values:
         return "text"
 
@@ -100,6 +120,10 @@ def detect_field_type(field_name: str, values: list[Any]) -> str:
     phone_count = sum(1 for v in str_values if len(v) >= 7 and PHONE_VALUE.match(v))
     if phone_count >= len(str_values) * 0.5:
         return "phone"
+
+    address_count = sum(1 for v in str_values if ADDRESS_VALUE.match(v))
+    if address_count >= len(str_values) * 0.5:
+        return "address"
 
     numeric_count = sum(1 for v in str_values if NUMERIC_VALUE.match(v))
     if numeric_count >= len(str_values) * 0.5:

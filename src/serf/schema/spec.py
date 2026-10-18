@@ -19,6 +19,7 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from serf.dspy.schemas.base import annotated_merge_field, field_merge_instruction
 from serf.logs import get_logger
 from serf.merge.semantics import (
     CARDINALITIES,
@@ -241,6 +242,40 @@ class FieldSpec(BaseModel):
         """Return whether this field resolves to a single best value."""
         return self.merge_policy().cardinality == CARDINALITY_SINGLE
 
+    def merge_description(self) -> str:
+        """Return the field description combined with its LLM merge instruction.
+
+        Returns
+        -------
+        str
+            Field-level merge semantics instruction for DSPy prompts
+        """
+        policy = self.merge_policy()
+        return field_merge_instruction(
+            self.type,
+            cardinality=policy.cardinality,
+            dedupe=policy.dedupe,
+            description=self.description,
+        )
+
+    def dspy_annotation(self) -> Any:
+        """Return the ``Annotated[..., dspy.OutputField(...)]`` type for this field.
+
+        Returns
+        -------
+        Any
+            DSPy annotated field type carrying the merge semantics for this field
+        """
+        policy = self.merge_policy()
+        return annotated_merge_field(
+            self.scalar_type(),
+            self.type,
+            cardinality=policy.cardinality,
+            dedupe=policy.dedupe,
+            description=self.description,
+            required=self.required,
+        )
+
 
 class EntitySchema(BaseModel):
     """The fields of one kind of entity, and how they merge.
@@ -344,6 +379,16 @@ class EntitySchema(BaseModel):
             Field name to description
         """
         return {field.name: field.description for field in self.fields}
+
+    def dspy_field_annotations(self) -> dict[str, Any]:
+        """Return each field's DSPy ``Annotated[..., dspy.OutputField(...)]`` type.
+
+        Returns
+        -------
+        dict[str, Any]
+            Field name to DSPy annotated output type
+        """
+        return {field.name: field.dspy_annotation() for field in self.fields}
 
 
 def parse_schema(data: dict[str, Any]) -> EntitySchema:

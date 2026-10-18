@@ -200,14 +200,14 @@ def test_canonicalize_supports_singular_and_list_fields_together() -> None:
             "uuid": RUSSELL,
             "primary_name": "Russell Jurney",
             "names": ["Russell Jurney", "Russ Jurney"],
-            "addresses": ["123 Main St, San Francisco, CA", "456 Market St, San Francisco, CA"],
+            "addresses": ["123 Main St", "456 Market Ave, Suite 200"],
             "emails": ["russell@example.com"],
         },
         {
             "uuid": RUSSELL_H,
             "primary_name": "Russell H Jurney",
             "names": ["Russell H Jurney", "R. J. Alias"],
-            "addresses": ["123 Main Street, San Francisco, CA", "789 Broadway, New York, NY"],
+            "addresses": ["123 Main Street", "789 Broadway, New York, NY"],
             "emails": ["RUSSELL@example.com", "rjurney@work.org"],
         },
     ]
@@ -228,16 +228,17 @@ def test_canonicalize_supports_singular_and_list_fields_together() -> None:
     assert rendered["primary_name"] == "Russell H Jurney"
     assert rendered["names"] == ["Russell H Jurney", "R. J. Alias"]
     assert rendered["addresses"] == [
-        "123 Main Street, San Francisco, CA",
-        "456 Market St, San Francisco, CA",
         "789 Broadway, New York, NY",
+        "456 Market Ave, Suite 200",
+        "123 Main Street",
     ]
     assert rendered["emails"] == ["russell@example.com", "rjurney@work.org"]
 
 
-def test_canonicalize_singular_field_uses_llm_when_enabled() -> None:
+def test_canonicalize_singular_and_list_fields_use_dspy_annotated_llm_merge() -> None:
     fake_prediction = MagicMock()
-    fake_prediction.best_value = "Dr. Eleanor Vance"
+    fake_prediction.title_name = "Dr. Eleanor Vance"
+    fake_prediction.addresses = ["10 Elm Street", "20 Oak Ave"]
     fake_predictor = MagicMock(return_value=fake_prediction)
 
     group = [
@@ -262,3 +263,4 @@ def test_canonicalize_singular_field_uses_llm_when_enabled() -> None:
 
     assert merged.fields["title_name"] == "Dr. Eleanor Vance"
     assert merged.fields["addresses"] == ["10 Elm Street", "20 Oak Ave"]
+    fake_predictor.assert_called_once()

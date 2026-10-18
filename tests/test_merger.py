@@ -118,7 +118,7 @@ def test_merger_deduplicates_list_fields_for_addresses_and_names() -> None:
         id=1,
         name="Russell Jurney",
         attributes={
-            "addresses": ["123 Main St, Seattle, WA", "500 Pine St, Seattle, WA"],
+            "addresses": ["123 Main St", "500 Pine Blvd, Suite 400, Austin, TX"],
             "names": ["Russell Jurney", "Russ Journey"],
             "phones": ["(415) 555-0100"],
         },
@@ -127,7 +127,7 @@ def test_merger_deduplicates_list_fields_for_addresses_and_names() -> None:
         id=2,
         name="Russell H Jurney",
         attributes={
-            "addresses": ["123 Main Street, Seattle, WA", "900 Madison Ave, New York, NY"],
+            "addresses": ["123 Main Street", "900 Madison Ave, New York, NY"],
             "names": ["Russell H Jurney", "Bob Dorf"],
             "phones": ["4155550100", "212-555-0199"],
         },
@@ -140,9 +140,9 @@ def test_merger_deduplicates_list_fields_for_addresses_and_names() -> None:
 
     assert result.name == "Russell H Jurney"
     assert result.attributes["addresses"] == [
+        "500 Pine Blvd, Suite 400, Austin, TX",
         "900 Madison Ave, New York, NY",
-        "123 Main Street, Seattle, WA",
-        "500 Pine St, Seattle, WA",
+        "123 Main Street",
     ]
     assert result.attributes["names"] == ["Russell H Jurney", "Bob Dorf"]
     assert result.attributes["phones"] == ["(415) 555-0100", "212-555-0199"]
@@ -163,10 +163,15 @@ def test_merger_promotes_scalar_inputs_for_configured_list_fields() -> None:
     assert result.attributes["address"] == ["123 Main Street", "456 Oak Avenue"]
 
 
-def test_merger_selects_best_value_for_singular_fields_via_llm() -> None:
-    """Singular fields select the best value via the LLM when use_llm is enabled."""
+def test_merger_selects_best_value_and_deduplicates_lists_via_dspy_annotations() -> None:
+    """Singular and list fields are merged via the DSPy annotated signature when use_llm is enabled."""
     fake_prediction = MagicMock()
-    fake_prediction.best_value = "International Business Machines Corporation"
+    fake_prediction.best_value = "International Business Machines"
+    fake_prediction.legal_name = "International Business Machines Corporation"
+    fake_prediction.addresses = [
+        "1 New Orchard Road, Armonk, NY",
+        "590 Madison Ave, New York, NY",
+    ]
     fake_predictor = MagicMock(return_value=fake_prediction)
 
     schema = parse_schema(

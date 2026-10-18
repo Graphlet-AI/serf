@@ -35,6 +35,7 @@ from serf.merge.semantics import (
     CARDINALITY_SINGLE,
     MergePolicy,
     flatten_values,
+    merge_records_with_dspy,
     merge_values,
     policy_for,
     select_best_value,
@@ -162,6 +163,7 @@ def canonicalize(
     field_types: dict[str, str] | None = None,
     policies: dict[str, MergePolicy] | None = None,
     *,
+    schema: Any = None,
     singular_fields: Iterable[str] | None = None,
     list_fields: Iterable[str] | None = None,
     field_descriptions: dict[str, str] | None = None,
@@ -174,10 +176,10 @@ def canonicalize(
     several gets a minted uuid, and every uuid in the group - including the
     ones the group members had already absorbed - moves into ``source_uuids``.
 
-    List fields are deduplicated into a list of individual values according to
-    their semantic type (for example, individual addresses or names). Singular
-    fields resolve to a single best value, selected via the LLM when ``use_llm``
-    is True (or ``lm`` is supplied) or by completeness ranking otherwise.
+    When ``use_llm`` is True (or ``lm`` is supplied) and the group has more
+    than one record, field-level comparisons and merges are performed by the
+    LLM using a DSPy signature whose output fields carry ``Annotated[...,
+    dspy.OutputField(...)]`` merge semantics for each singular and list field.
 
     Parameters
     ----------
@@ -190,16 +192,19 @@ def canonicalize(
     policies : dict[str, MergePolicy] | None
         Field name to merge policy, overriding the one the field's type would
         get. Supply this from a schema.
+    schema : EntitySchema | None
+        Optional ``EntitySchema`` providing field types, policies, cardinalities,
+        and DSPy field annotations
     singular_fields : Iterable[str] | None
         Field names that should resolve to a single best value instead of a list
     list_fields : Iterable[str] | None
         Field names that should resolve to a deduplicated list of values
     field_descriptions : dict[str, str] | None
-        Optional per-field descriptions passed to the LLM for singular fields
+        Optional per-field descriptions passed to the LLM
     use_llm : bool
-        Select the best value for singular fields via the LLM
+        Merge singular and list fields via the LLM using DSPy field annotations
     lm : Any
-        Optional DSPy LM instance for singular field value selection
+        Optional DSPy LM instance
 
     Returns
     -------
@@ -228,32 +233,88 @@ def canonicalize(
                 ordered_fields.append(key)
             collected[key].extend(flatten_values([value]))
 
-    overrides = field_types or {}
-    policy_overrides = policies or {}
-    singular_set = set(singular_fields or ())
-    list_set = set(list_fields or ())
-    descriptions = field_descriptions or {}
+    overrides: dict[str, str] = {}
+    policy_overrides: dict[str, MergePolicy] = {}
+    singular_set: set[str] = set()
+    list_set: set[str] = set()
+    descriptions: dict[str, str] = {}
+    if schema is not None:
+        overrides.update(schema.field_types())
+        policy_overrides.update(schema.merge_policies())
+        singular_set.update(schema.singular_fields())
+        list_set.update(schema.list_fields())
+        descriptions.update(schema.field_descriptions())
+    if field_types:
+        overrides.update(field_types)
+    if policies:
+        policy_overrides.update(policies)
+    if singular_fields is not None:
+        singular_set.update(singular_fields)
+    if list_fields is not None:
+        list_set.update(list_fields)
+    if field_descriptions:
+        descriptions.update(field_descriptions)
+
+    resolved_field_types: dict[str, str] = {}
+    resolved_policies: dict[str, MergePolicy] = {}
+    effective_singular: set[str] = set()
+    for key in ordered_fields:
+        ftype = overrides.get(key) or detect_field_type(key, collected[key])
+        policy = policy_overrides.get(key) or policy_for(ftype)
+        resolved_field_types[key] = ftype
+        resolved_policies[key] = policy
+        if key in singular_set or (
+            key not in list_set and policy.cardinality == CARDINALITY_SINGLE
+        ):
+            effective_singular.add(key)
+
+    llm_fields: dict[str, Any] = {}
+    if (use_llm or lm is not None) and len(records) > 1 and ordered_fields:
+        record_inputs = [
+            {k: v for k, v in record.items() if k not in RESERVED_FIELDS} for record in records
+        ]
+        try:
+            llm_fields = merge_records_with_dspy(
+                record_inputs,
+                ordered_fields,
+                resolved_field_types,
+                resolved_policies,
+                effective_singular,
+                descriptions,
+                lm=lm,
+            )
+        except Exception as e:
+            logger.warning(
+                f"DSPy annotated record merge failed, falling back to field-level merge: {e}"
+            )
+
     fields: dict[str, Any] = {}
     for key in ordered_fields:
-        field_type = overrides.get(key) or detect_field_type(key, collected[key])
-        policy = policy_overrides.get(key) or policy_for(field_type)
-        is_singular = key in singular_set or (
-            key not in list_set and policy.cardinality == CARDINALITY_SINGLE
-        )
-        if is_singular:
+        if key in llm_fields:
+            fields[key] = llm_fields[key]
+            continue
+        field_type = resolved_field_types[key]
+        policy = resolved_policies[key]
+        if key in effective_singular:
             best = select_best_value(
                 collected[key],
                 field_type,
                 policy,
                 field_name=key,
                 field_description=descriptions.get(key, ""),
-                use_llm=use_llm,
-                lm=lm,
+                use_llm=False,
             )
             if best is not None:
                 fields[key] = best
         else:
-            merged = merge_values(collected[key], field_type, policy)
+            merged = merge_values(
+                collected[key],
+                field_type,
+                policy,
+                field_name=key,
+                field_description=descriptions.get(key, ""),
+                use_llm=False,
+            )
             if merged:
                 fields[key] = merged
 
@@ -269,6 +330,7 @@ def canonicalize_groups(
     field_types: dict[str, str] | None = None,
     policies: dict[str, MergePolicy] | None = None,
     *,
+    schema: Any = None,
     singular_fields: Iterable[str] | None = None,
     list_fields: Iterable[str] | None = None,
     field_descriptions: dict[str, str] | None = None,
@@ -285,16 +347,18 @@ def canonicalize_groups(
         Field name to inferred type, overriding detection
     policies : dict[str, MergePolicy] | None
         Field name to merge policy, overriding the field type's
+    schema : EntitySchema | None
+        Optional ``EntitySchema`` supplying field types, policies, and DSPy annotations
     singular_fields : Iterable[str] | None
         Field names that should resolve to a single best value
     list_fields : Iterable[str] | None
         Field names that should resolve to a deduplicated list of values
     field_descriptions : dict[str, str] | None
-        Optional per-field descriptions passed to the LLM for singular fields
+        Optional per-field descriptions passed to the LLM
     use_llm : bool
-        Select the best value for singular fields via the LLM
+        Merge singular and list fields via the LLM using DSPy field annotations
     lm : Any
-        Optional DSPy LM instance for singular field value selection
+        Optional DSPy LM instance
 
     Returns
     -------
@@ -306,6 +370,7 @@ def canonicalize_groups(
             group,
             field_types,
             policies,
+            schema=schema,
             singular_fields=singular_fields,
             list_fields=list_fields,
             field_descriptions=field_descriptions,

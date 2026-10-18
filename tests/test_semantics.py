@@ -11,6 +11,7 @@ from serf.merge.semantics import (
     MergePolicy,
     completeness,
     flatten_values,
+    merge_records_with_dspy,
     merge_values,
     normalize,
     normalize_cardinality,
@@ -125,32 +126,90 @@ def test_non_string_values_keep_their_type() -> None:
     assert merge_values([2005, 2005, 1999], "numeric") == [1999, 2005]
 
 
-def test_addresses_with_different_street_numbers_stay_separate_individual_addresses() -> None:
-    """Two street numbers on the same street are two distinct addresses."""
+def test_address_list_deduplicates_via_llm_into_individual_addresses() -> None:
+    """Rely on the LLM via DSPy annotations to deduplicate address lists into individual addresses."""
+    fake_prediction = MagicMock()
+    fake_prediction.deduplicated_values = [
+        "123 Main Street, Springfield, IL",
+        "456 Main Street, Springfield, IL",
+    ]
+    fake_predictor = MagicMock(return_value=fake_prediction)
+
     values = [
         "123 Main St, Springfield, IL",
         "123 Main Street, Springfield, IL",
         "456 Main Street, Springfield, IL",
     ]
-    merged = merge_values(values, "address")
+    with patch("serf.merge.semantics.dspy.Predict", return_value=fake_predictor):
+        merged = merge_values(values, "address", field_name="addresses", use_llm=True)
+
     assert merged == [
         "123 Main Street, Springfield, IL",
         "456 Main Street, Springfield, IL",
     ]
+    fake_predictor.assert_called_once()
 
 
-def test_addresses_with_different_unit_numbers_stay_separate_individual_addresses() -> None:
-    """Different apartments or suites at the same street number are distinct addresses."""
-    values = [
-        "100 Broadway Apt 2A",
+def test_merge_records_with_dspy_uses_field_level_output_annotations() -> None:
+    """merge_records_with_dspy builds a DSPy signature annotated per field for singular and list fields."""
+    captured_sigs: list[type] = []
+
+    def fake_predict(sig: type) -> MagicMock:
+        captured_sigs.append(sig)
+        pred = MagicMock()
+        pred.display_name = "Russell H Jurney"
+        pred.addresses = [
+            "100 Broadway Apartment 2A",
+            "100 Broadway Apt 3B",
+        ]
+        pred.aliases = ["Russell H Jurney", "Bob M. Dorf"]
+        return MagicMock(return_value=pred)
+
+    records = [
+        {
+            "display_name": "Russell Jurney",
+            "addresses": ["100 Broadway Apt 2A", "100 Broadway Apt 3B"],
+            "aliases": ["Russell Jurney", "Bob Dorf"],
+        },
+        {
+            "display_name": "Russell H Jurney",
+            "addresses": ["100 Broadway Apartment 2A"],
+            "aliases": ["Russell H Jurney", "Bob M. Dorf"],
+        },
+    ]
+    with patch("serf.merge.semantics.dspy.Predict", side_effect=fake_predict):
+        resolved = merge_records_with_dspy(
+            records,
+            ["display_name", "addresses", "aliases"],
+            {"display_name": "name", "addresses": "address", "aliases": "name"},
+            {
+                "display_name": policy_for("name", cardinality=CARDINALITY_SINGLE),
+                "addresses": policy_for("address", cardinality=CARDINALITY_LIST),
+                "aliases": policy_for("name", cardinality=CARDINALITY_LIST),
+            },
+            {"display_name"},
+            {
+                "display_name": "Primary name",
+                "addresses": "Mailing addresses",
+                "aliases": "Known aliases",
+            },
+        )
+
+    assert len(captured_sigs) == 1
+    sig = captured_sigs[0]
+    assert "records" in sig.input_fields
+    assert sig.output_fields["display_name"].annotation == str | None
+    assert sig.output_fields["addresses"].annotation == list[str]
+    assert sig.output_fields["aliases"].annotation == list[str]
+    assert "select the single best" in (sig.output_fields["display_name"].description or "").lower()
+    assert "individual addresses" in (sig.output_fields["addresses"].description or "").lower()
+    assert "individual names" in (sig.output_fields["aliases"].description or "").lower()
+    assert resolved["display_name"] == "Russell H Jurney"
+    assert resolved["addresses"] == [
         "100 Broadway Apartment 2A",
         "100 Broadway Apt 3B",
     ]
-    merged = merge_values(values, "address")
-    assert merged == [
-        "100 Broadway Apartment 2A",
-        "100 Broadway Apt 3B",
-    ]
+    assert resolved["aliases"] == ["Russell H Jurney", "Bob M. Dorf"]
 
 
 def test_name_list_deduplicates_variants_into_individual_names() -> None:

@@ -138,27 +138,46 @@ merge:
   #   exact  - collapse only values that normalise to the same string
   #   none   - keep every distinct value; for freeform prose, where two
   #            descriptions are two facts rather than two spellings of one
+  exact_list_instruction: "Compare values across the matched records and deduplicate into a list of individual values, collapsing only exact case or formatting variants while keeping distinct values separate."
   semantics:
     name:
       dedupe: fuzzy
       threshold: 0.8
+      single_instruction: "Compare name values across the matched records and select the single best, most complete, and accurate name."
+      list_instruction: "Compare name values across the matched records and deduplicate into a list of individual names, collapsing spelling, initial, and abbreviation variants into the most complete form while keeping distinct names separate."
     address:
       dedupe: fuzzy
       threshold: 0.8
+      single_instruction: "Compare address values across the matched records and select the single best, most complete, and accurate address."
+      list_instruction: "Compare address values across the matched records and deduplicate into a list of individual addresses, collapsing spelling, formatting, and street or unit abbreviation variants into the most complete form while keeping distinct addresses separate."
     url:
       dedupe: exact
+      single_instruction: "Compare URL values across the matched records and select the single best, most complete canonical URL."
+      list_instruction: "Compare URL values across the matched records and deduplicate into a list of individual URLs, collapsing scheme, www, and trailing-slash variants while keeping distinct URLs separate."
     email:
       dedupe: exact
+      single_instruction: "Compare email values across the matched records and select the single best, most complete email address."
+      list_instruction: "Compare email values across the matched records and deduplicate into a list of individual email addresses, collapsing case variants while keeping distinct email addresses separate."
     phone:
       dedupe: exact
+      single_instruction: "Compare phone numbers across the matched records and select the single best, most complete phone number."
+      list_instruction: "Compare phone numbers across the matched records and deduplicate into a list of individual phone numbers, collapsing formatting and punctuation variants that share the same digits while keeping distinct phone numbers separate."
     identifier:
       dedupe: exact
+      single_instruction: "Compare identifiers across the matched records and select the single best, most complete identifier."
+      list_instruction: "Compare identifiers across the matched records and deduplicate into a list of individual identifiers, collapsing case and punctuation variants while keeping identifiers that differ in any character or digit separate."
     date:
       dedupe: exact
+      single_instruction: "Compare date values across the matched records and select the single best, most complete, and most specific date."
+      list_instruction: "Compare date values across the matched records and deduplicate into a list of individual dates, collapsing formatting variants of the same date while keeping distinct dates separate."
     numeric:
       dedupe: exact
+      single_instruction: "Compare numeric values across the matched records and select the single most accurate numeric value."
+      list_instruction: "Compare numeric values across the matched records and deduplicate into a list of distinct numeric values."
     text:
       dedupe: none
+      single_instruction: "Compare text values across the matched records and select the single most complete and informative text value."
+      list_instruction: "Keep all distinct freeform text values across the matched records as separate list items, dropping only exact duplicates."
 
   conservation:
     # Abzu's lineage checks, ported. Coverage is the share of input uuids that

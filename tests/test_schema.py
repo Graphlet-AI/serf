@@ -16,6 +16,9 @@ from serf.schema import (
     clear_cache,
     load_schema,
     load_schemas,
+    match_and_merge_signature,
+    merge_field_annotation,
+    merge_signature,
     parse_schema,
     source_model,
 )
@@ -246,3 +249,68 @@ def test_schema_supports_singular_and_list_cardinalities() -> None:
 def test_an_unknown_cardinality_is_rejected_at_load() -> None:
     with pytest.raises(ValidationError, match="cardinality must be one of"):
         parse_schema({"entity": "Thing", "fields": [{"name": "x", "cardinality": "many"}]})
+
+
+def test_schema_generates_dspy_annotations_and_signatures_for_singular_and_list_fields() -> None:
+    """Each schema field becomes a DSPy OutputField annotation on CanonicalEntity and Merge<Entity>."""
+    schema = parse_schema(
+        {
+            "entity": "Contact",
+            "description": "A person or organization contact record.",
+            "fields": [
+                {
+                    "name": "display_name",
+                    "type": "name",
+                    "cardinality": "single",
+                    "required": True,
+                    "description": "Primary display name",
+                },
+                {
+                    "name": "aliases",
+                    "type": "name",
+                    "cardinality": "list",
+                    "description": "Alternate names and aliases",
+                },
+                {
+                    "name": "addresses",
+                    "type": "address",
+                    "cardinality": "list",
+                    "description": "Known street addresses",
+                },
+            ],
+        }
+    )
+
+    display_field = schema.field("display_name")
+    assert display_field is not None
+    annotation = merge_field_annotation(display_field)
+    assert annotation is not None
+
+    canonical = canonical_model(schema)
+    assert canonical.model_fields["display_name"].json_schema_extra == {
+        "desc": display_field.merge_description(),
+        "__dspy_field_type": "output",
+    }
+    assert (
+        "select the single best"
+        in (canonical.model_fields["display_name"].description or "").lower()
+    )
+    assert "individual names" in (canonical.model_fields["aliases"].description or "").lower()
+    assert "individual addresses" in (canonical.model_fields["addresses"].description or "").lower()
+
+    merge_sig = merge_signature(schema)
+    assert merge_sig is merge_signature(schema)
+    assert "records" in merge_sig.input_fields
+    assert merge_sig.output_fields["display_name"].annotation is str
+    assert merge_sig.output_fields["aliases"].annotation == list[str]
+    assert merge_sig.output_fields["addresses"].annotation == list[str]
+    assert (
+        "individual addresses" in (merge_sig.output_fields["addresses"].description or "").lower()
+    )
+
+    match_merge_sig = match_and_merge_signature(schema)
+    assert match_merge_sig is match_and_merge_signature(schema)
+    assert "records" in match_merge_sig.input_fields
+    assert "resolved" in match_merge_sig.output_fields
+    assert "Primary display name" in match_merge_sig.instructions
+    assert "individual addresses" in match_merge_sig.instructions.lower()

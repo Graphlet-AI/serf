@@ -2,9 +2,16 @@
 
 import dspy
 
+from serf.dspy.schemas.base import (
+    AddressList,
+    NameList,
+    SingularAddress,
+    SingularName,
+)
 from serf.dspy.signatures import (
     AnalyzeDataset,
     BlockMatch,
+    DeduplicateListValues,
     EdgeResolve,
     EntityMerge,
     GenerateERConfig,
@@ -89,3 +96,39 @@ def test_select_best_value_can_create_predict() -> None:
     """Test that SelectBestValue can be used with dspy.Predict."""
     predictor = dspy.Predict(SelectBestValue)
     assert predictor is not None
+
+
+def test_deduplicate_list_values_signature_fields() -> None:
+    """Test DeduplicateListValues has the expected input/output fields."""
+    assert "field_name" in DeduplicateListValues.input_fields
+    assert "field_type" in DeduplicateListValues.input_fields
+    assert "field_description" in DeduplicateListValues.input_fields
+    assert "candidate_values" in DeduplicateListValues.input_fields
+    assert "deduplicated_values" in DeduplicateListValues.output_fields
+    assert DeduplicateListValues.output_fields["deduplicated_values"].annotation == list[str]
+
+
+def test_dspy_field_annotations_work_directly_in_custom_signature() -> None:
+    """Reusable DSPy Annotated field types carry merge semantics into a dspy.Signature."""
+
+    class MergeContactSignature(dspy.Signature):
+        """Merge contact records."""
+
+        records: list[dict[str, object]] = dspy.InputField()
+        primary_name: SingularName
+        primary_address: SingularAddress
+        known_names: NameList
+        known_addresses: AddressList
+
+    assert MergeContactSignature.output_fields["primary_name"].annotation is str
+    assert MergeContactSignature.output_fields["primary_address"].annotation is str
+    assert MergeContactSignature.output_fields["known_names"].annotation == list[str]
+    assert MergeContactSignature.output_fields["known_addresses"].annotation == list[str]
+    assert (
+        "individual names"
+        in (MergeContactSignature.output_fields["known_names"].description or "").lower()
+    )
+    assert (
+        "individual addresses"
+        in (MergeContactSignature.output_fields["known_addresses"].description or "").lower()
+    )

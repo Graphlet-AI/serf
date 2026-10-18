@@ -18,10 +18,11 @@ from serf.merge.semantics import (
     FIELD_TYPE_NAME,
     FIELD_TYPE_TEXT,
     MergePolicy,
+    merge_records_with_dspy,
     merge_values,
+    policy_for,
     select_best_value,
 )
-from serf.schema.spec import EntitySchema
 
 logger = get_logger(__name__)
 
@@ -116,33 +117,38 @@ class EntityMerger:
         list_fields: Iterable[str] | dict[str, str] | None = None,
         singular_fields: Iterable[str] | dict[str, str] | None = None,
         policies: dict[str, MergePolicy] | None = None,
-        schema: EntitySchema | None = None,
+        schema: Any = None,
         use_llm: bool = False,
         lm: Any = None,
     ) -> None:
+        self.schema = schema
         self.field_types: dict[str, str] = {}
         self.policies: dict[str, MergePolicy] = {}
         self.field_descriptions: dict[str, str] = {}
+        self.list_fields: set[str] = set()
+        self.singular_fields: set[str] = set()
         if schema is not None:
             self.field_types.update(schema.field_types())
             self.policies.update(schema.merge_policies())
             self.field_descriptions.update(schema.field_descriptions())
+            self.list_fields.update(schema.list_fields())
+            self.singular_fields.update(schema.singular_fields())
         if field_types:
             self.field_types.update(field_types)
         if policies:
             self.policies.update(policies)
 
         if isinstance(list_fields, dict):
-            self.list_fields: set[str] = set(list_fields.keys())
+            self.list_fields.update(list_fields.keys())
             self.field_types.update(list_fields)
-        else:
-            self.list_fields = set(list_fields or ())
+        elif list_fields is not None:
+            self.list_fields.update(list_fields)
 
         if isinstance(singular_fields, dict):
-            self.singular_fields: set[str] = set(singular_fields.keys())
+            self.singular_fields.update(singular_fields.keys())
             self.field_types.update(singular_fields)
-        else:
-            self.singular_fields = set(singular_fields or ())
+        elif singular_fields is not None:
+            self.singular_fields.update(singular_fields)
 
         self.use_llm = use_llm
         self.lm = lm
@@ -195,22 +201,66 @@ class EntityMerger:
                     ordered_keys.append(key)
                 collected[key].append(value)
 
-        merged: dict[str, Any] = {}
+        if not ordered_keys:
+            return {}
+
+        resolved_types: dict[str, str] = {}
+        resolved_policies: dict[str, MergePolicy] = {}
+        singular_keys: set[str] = set()
         for key in ordered_keys:
             values = collected[key]
-            if self._is_list_field(key, values):
-                field_type = self.field_types.get(key) or detect_field_type(key, values)
-                merged[key] = merge_values(values, field_type, self.policies.get(key))
+            is_list = self._is_list_field(key, values)
+            ftype = self.field_types.get(key)
+            if ftype is None and (is_list or self.use_llm or self.lm is not None):
+                ftype = detect_field_type(key, values)
+            ftype = ftype or FIELD_TYPE_TEXT
+            resolved_types[key] = ftype
+            resolved_policies[key] = self.policies.get(key) or policy_for(
+                ftype,
+                cardinality=CARDINALITY_LIST if is_list else CARDINALITY_SINGLE,
+            )
+            if not is_list:
+                singular_keys.add(key)
+
+        llm_resolved: dict[str, Any] = {}
+        if (self.use_llm or self.lm is not None) and len(entities) > 1:
+            record_inputs = [dict(entity.attributes) for entity in entities]
+            try:
+                llm_resolved = merge_records_with_dspy(
+                    record_inputs,
+                    ordered_keys,
+                    resolved_types,
+                    resolved_policies,
+                    singular_keys,
+                    self.field_descriptions,
+                    lm=self.lm,
+                )
+            except Exception as e:
+                logger.warning(
+                    f"DSPy annotated attribute merge failed, falling back to deterministic merge: {e}"
+                )
+
+        merged: dict[str, Any] = {}
+        for key in ordered_keys:
+            if key in llm_resolved:
+                merged[key] = llm_resolved[key]
+                continue
+            values = collected[key]
+            if key not in singular_keys:
+                merged[key] = merge_values(
+                    values,
+                    resolved_types[key],
+                    self.policies.get(key),
+                    field_name=key,
+                    field_description=self.field_descriptions.get(key, ""),
+                    use_llm=False,
+                )
             else:
-                inferred = self.field_types.get(key)
-                if inferred is None and (self.use_llm or self.lm is not None):
-                    inferred = detect_field_type(key, values)
-                resolved = self._resolve_singular(
+                merged[key] = self._resolve_singular(
                     key,
                     values,
-                    default_type=inferred or FIELD_TYPE_TEXT,
+                    default_type=resolved_types[key],
                 )
-                merged[key] = resolved
         return merged
 
     def merge_entities(self, entities: list[Entity]) -> Entity:

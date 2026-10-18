@@ -1480,7 +1480,13 @@ def schema_command(
     """
     from serf.dspy.lm import create_lm
     from serf.merge.canonical import canonicalize_groups
-    from serf.schema import canonical_model, load_schema, source_model
+    from serf.schema import (
+        canonical_model,
+        load_schema,
+        match_and_merge_signature,
+        merge_signature,
+        source_model,
+    )
 
     entity_schema = load_schema(path)
     click.echo(f"Schema: {entity_schema.entity}")
@@ -1511,8 +1517,12 @@ def schema_command(
 
     source = source_model(entity_schema)
     canonical = canonical_model(entity_schema)
-    click.echo(f"\nGenerated classes:\n  source:    {source.__name__}")
-    click.echo(f"  canonical: {canonical.__name__}")
+    merge_sig = merge_signature(entity_schema)
+    match_merge_sig = match_and_merge_signature(entity_schema)
+    click.echo(f"\nGenerated classes:\n  source:          {source.__name__}")
+    click.echo(f"  canonical:       {canonical.__name__}")
+    click.echo(f"  merge signature: {merge_sig.__name__}")
+    click.echo(f"  match signature: {match_merge_sig.__name__}")
 
     if not merge_path:
         return
@@ -1529,9 +1539,7 @@ def schema_command(
     click.echo(f"\nMerging {len(records)} records in {len(groups)} group(s) from {merge_path}")
     merged = canonicalize_groups(
         groups,
-        field_types=entity_schema.field_types(),
-        policies=policies,
-        field_descriptions=entity_schema.field_descriptions(),
+        schema=entity_schema,
         use_llm=use_llm or lm is not None,
         lm=lm,
     )

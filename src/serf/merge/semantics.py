@@ -21,7 +21,12 @@ import dspy
 from serf.config import config
 from serf.dspy.adapter import RepairingXMLAdapter
 from serf.dspy.lm import create_lm
-from serf.dspy.signatures import SelectBestValue
+from serf.dspy.schemas.base import (
+    annotated_merge_field,
+    build_merge_signature,
+    field_merge_instruction,
+)
+from serf.dspy.signatures import DeduplicateListValues, SelectBestValue
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
@@ -90,7 +95,6 @@ _ADDRESS_ABBREVIATIONS = {
 }
 
 _URL_PREFIXES = ("https://", "http://", "//")
-_UNIT_MARKERS = frozenset({"apartment", "suite", "floor", "unit", "box"})
 
 
 @dataclass(frozen=True)
@@ -224,29 +228,6 @@ def normalize(value: Any, field_type: str = FIELD_TYPE_TEXT) -> str:
     return " ".join(tokens)
 
 
-def _addresses_conflict(left_tokens: list[str], right_tokens: list[str]) -> bool:
-    """Return True when two normalised addresses name different street numbers or units."""
-    if (
-        left_tokens
-        and right_tokens
-        and left_tokens[0][0].isdigit()
-        and right_tokens[0][0].isdigit()
-        and left_tokens[0] != right_tokens[0]
-    ):
-        return True
-    for marker in _UNIT_MARKERS:
-        if marker in left_tokens and marker in right_tokens:
-            left_idx = left_tokens.index(marker) + 1
-            right_idx = right_tokens.index(marker) + 1
-            if (
-                left_idx < len(left_tokens)
-                and right_idx < len(right_tokens)
-                and left_tokens[left_idx] != right_tokens[right_idx]
-            ):
-                return True
-    return False
-
-
 def similarity(left: Any, right: Any, field_type: str = FIELD_TYPE_TEXT) -> float:
     """Score how alike two values are once normalised.
 
@@ -269,8 +250,6 @@ def similarity(left: Any, right: Any, field_type: str = FIELD_TYPE_TEXT) -> floa
         return 0.0
     if a == b:
         return 1.0
-    if field_type == FIELD_TYPE_ADDRESS and _addresses_conflict(a.split(), b.split()):
-        return 0.0
     return SequenceMatcher(None, a, b).ratio()
 
 
@@ -327,13 +306,19 @@ def merge_values(
     values: Iterable[Any],
     field_type: str = FIELD_TYPE_TEXT,
     policy: MergePolicy | None = None,
+    *,
+    field_name: str = "",
+    field_description: str = "",
+    use_llm: bool = False,
+    lm: Any = None,
 ) -> list[Any]:
     """Combine every value one field held across a group of merged records.
 
-    Values that are spellings of one another collapse to the most complete of
-    them; values that genuinely differ are all kept. The result is ordered most
-    complete first, so a consumer that wants a single value can take the head
-    and get the one this field's type says is the fullest.
+    When ``use_llm`` is True (or ``lm`` is supplied) and multiple distinct
+    values exist, the LLM compares and deduplicates the values into a list of
+    individual values via the ``DeduplicateListValues`` DSPy signature using
+    the field's DSPy merge annotation. Otherwise, deterministic normalisation
+    and clustering order the distinct values most complete first.
 
     Parameters
     ----------
@@ -344,6 +329,14 @@ def merge_values(
     policy : MergePolicy | None
         Policy to apply, overriding the one configured for ``field_type``.
         A schema passes its per-field override here.
+    field_name : str
+        Name of the field, passed to the LLM prompt when ``use_llm`` is True
+    field_description : str
+        Description of the field, passed to the LLM prompt when ``use_llm`` is True
+    use_llm : bool
+        Deduplicate candidate values into a list of individual values via the LLM
+    lm : Any
+        Optional DSPy LM instance overriding ``dspy.settings.lm`` / ``create_lm()``
 
     Returns
     -------
@@ -356,6 +349,44 @@ def merge_values(
         return []
 
     policy = policy or policy_for(field_type)
+
+    if use_llm or lm is not None:
+        distinct_by_text: dict[str, Any] = {}
+        for value in populated:
+            distinct_by_text.setdefault(str(value).strip(), value)
+        if len(distinct_by_text) == 1:
+            return [next(iter(distinct_by_text.values()))]
+        try:
+            active_lm = lm or getattr(dspy.settings, "lm", None) or create_lm(role="student")
+            instruction = field_merge_instruction(
+                field_type,
+                cardinality=CARDINALITY_LIST,
+                dedupe=policy.dedupe,
+                description=field_description,
+            )
+            predictor = cast(dspy.Predict, dspy.Predict(DeduplicateListValues))
+            with dspy.context(lm=active_lm, adapter=RepairingXMLAdapter()):
+                prediction = predictor(
+                    field_name=field_name or field_type,
+                    field_type=field_type,
+                    field_description=instruction,
+                    candidate_values=list(distinct_by_text.keys()),
+                )
+            raw_items = getattr(prediction, "deduplicated_values", None)
+            if isinstance(raw_items, list):
+                resolved_list: list[Any] = []
+                for item in raw_items:
+                    text = str(item).strip()
+                    if not text:
+                        continue
+                    resolved_list.append(distinct_by_text.get(text, item))
+                if resolved_list:
+                    return resolved_list
+        except Exception as e:
+            logger.warning(
+                f"LLM list deduplication failed for field '{field_name or field_type}', "
+                f"falling back to deterministic merge: {e}"
+            )
 
     if policy.dedupe == DEDUPE_NONE:
         seen: dict[str, Any] = {}
@@ -450,12 +481,18 @@ def select_best_value(
 
     try:
         active_lm = lm or getattr(dspy.settings, "lm", None) or create_lm(role="student")
+        instruction = field_merge_instruction(
+            field_type,
+            cardinality=CARDINALITY_SINGLE,
+            dedupe=policy.dedupe if policy is not None else None,
+            description=field_description,
+        )
         predictor = cast(dspy.Predict, dspy.Predict(SelectBestValue))
         with dspy.context(lm=active_lm, adapter=RepairingXMLAdapter()):
             prediction = predictor(
                 field_name=field_name or field_type,
                 field_type=field_type,
-                field_description=field_description or f"Singular {field_type} field",
+                field_description=instruction,
                 candidate_values=list(distinct_by_text.keys()),
             )
         chosen_text = str(getattr(prediction, "best_value", "") or "").strip()
@@ -474,6 +511,115 @@ def select_best_value(
             f"falling back to completeness ranking: {e}"
         )
     return fallback
+
+
+def _extract_prediction_field(
+    prediction: Any,
+    key: str,
+    *,
+    is_singular: bool,
+) -> Any:
+    """Read one field from a DSPy prediction without triggering mock auto-attributes."""
+    if isinstance(prediction, dict):
+        return prediction.get(key)
+    store = getattr(prediction, "_store", None)
+    if isinstance(store, dict) and key in store:
+        return store[key]
+    obj_vars: dict[str, Any] = vars(prediction) if hasattr(prediction, "__dict__") else {}
+    if key in obj_vars:
+        return obj_vars[key]
+    if is_singular and "best_value" in obj_vars:
+        return obj_vars["best_value"]
+    if not is_singular and "deduplicated_values" in obj_vars:
+        return obj_vars["deduplicated_values"]
+    return None
+
+
+def merge_records_with_dspy(
+    records: list[dict[str, Any]],
+    ordered_fields: list[str],
+    field_types: dict[str, str],
+    policies: dict[str, MergePolicy],
+    singular_fields: set[str],
+    field_descriptions: dict[str, str],
+    *,
+    signature: type[dspy.Signature] | None = None,
+    lm: Any = None,
+) -> dict[str, Any]:
+    """Merge field values across matched records using a DSPy signature annotated per field.
+
+    Builds a DSPy signature whose output fields carry ``Annotated[..., dspy.OutputField(...)]``
+    merge semantics for each singular and list field, and calls the LLM once to
+    resolve all fields of the record group.
+
+    Parameters
+    ----------
+    records : list[dict[str, Any]]
+        Input records denoting the same entity (reserved identity fields stripped)
+    ordered_fields : list[str]
+        Field names in first-seen order
+    field_types : dict[str, str]
+        Mapping of field name to semantic type
+    policies : dict[str, MergePolicy]
+        Mapping of field name to merge policy
+    singular_fields : set[str]
+        Field names that resolve to a single best value
+    field_descriptions : dict[str, str]
+        Mapping of field name to description
+    signature : type[dspy.Signature] | None
+        Optional pre-built DSPy signature from ``serf.schema.generate.merge_signature``
+    lm : Any
+        Optional DSPy LM instance
+
+    Returns
+    -------
+    dict[str, Any]
+        Field values resolved by the LLM
+    """
+    if not ordered_fields or len(records) <= 1:
+        return {}
+
+    sig = signature
+    if sig is None:
+        annotations: dict[str, Any] = {}
+        for key in ordered_fields:
+            ftype = field_types.get(key, FIELD_TYPE_TEXT)
+            policy = policies.get(key) or policy_for(ftype)
+            cardinality = CARDINALITY_SINGLE if key in singular_fields else CARDINALITY_LIST
+            annotations[key] = annotated_merge_field(
+                str,
+                ftype,
+                cardinality=cardinality,
+                dedupe=policy.dedupe,
+                description=field_descriptions.get(key, ""),
+                required=False,
+            )
+        sig = build_merge_signature("MergeEntityFields", annotations)
+
+    active_lm = lm or getattr(dspy.settings, "lm", None) or create_lm(role="student")
+    predictor = cast(dspy.Predict, dspy.Predict(sig))
+    with dspy.context(lm=active_lm, adapter=RepairingXMLAdapter()):
+        prediction = predictor(records=records)
+
+    resolved: dict[str, Any] = {}
+    for key in ordered_fields:
+        is_singular = key in singular_fields
+        raw_val = _extract_prediction_field(prediction, key, is_singular=is_singular)
+        if raw_val is None:
+            continue
+        if is_singular:
+            text = str(raw_val).strip()
+            if text:
+                resolved[key] = raw_val if not isinstance(raw_val, str) else text
+        elif isinstance(raw_val, list):
+            cleaned = [
+                item.strip() if isinstance(item, str) else item
+                for item in flatten_values(raw_val)
+                if normalize(item, field_types.get(key, FIELD_TYPE_TEXT))
+            ]
+            if cleaned:
+                resolved[key] = cleaned
+    return resolved
 
 
 def _collapse_similar(

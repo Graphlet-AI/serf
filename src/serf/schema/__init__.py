@@ -4,6 +4,9 @@ from serf.schema.generate import (
     CanonicalEntity,
     canonical_model,
     clear_cache,
+    match_and_merge_signature,
+    merge_field_annotation,
+    merge_signature,
     source_model,
 )
 from serf.schema.spec import (
@@ -34,6 +37,9 @@ __all__ = [
     "clear_cache",
     "load_schema",
     "load_schemas",
+    "match_and_merge_signature",
+    "merge_field_annotation",
+    "merge_signature",
     "parse_schema",
     "source_model",
 ]

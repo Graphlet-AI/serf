@@ -1,9 +1,12 @@
 """Tests for EntityMerger."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
 
 from serf.dspy.types import Entity
 from serf.merge.merger import EntityMerger
+from serf.schema import parse_schema
 
 
 def test_merge_pair_lowest_id_becomes_master() -> None:
@@ -107,3 +110,97 @@ def test_merge_pair_deduplicates_source_uuids() -> None:
     assert "uuid-x" in result.source_uuids
     assert "uuid-b" in result.source_uuids
     assert "uuid-a" not in result.source_uuids
+
+
+def test_merger_deduplicates_list_fields_for_addresses_and_names() -> None:
+    """List attributes such as addresses and names deduplicate into lists of individual items."""
+    a = Entity(
+        id=1,
+        name="Russell Jurney",
+        attributes={
+            "addresses": ["123 Main St, Seattle, WA", "500 Pine St, Seattle, WA"],
+            "names": ["Russell Jurney", "Russ Journey"],
+            "phones": ["(415) 555-0100"],
+        },
+    )
+    b = Entity(
+        id=2,
+        name="Russell H Jurney",
+        attributes={
+            "addresses": ["123 Main Street, Seattle, WA", "900 Madison Ave, New York, NY"],
+            "names": ["Russell H Jurney", "Bob Dorf"],
+            "phones": ["4155550100", "212-555-0199"],
+        },
+    )
+    merger = EntityMerger(
+        field_types={"addresses": "address", "names": "name", "phones": "phone"},
+        list_fields={"addresses", "names", "phones"},
+    )
+    result = merger.merge_pair(a, b)
+
+    assert result.name == "Russell H Jurney"
+    assert result.attributes["addresses"] == [
+        "900 Madison Ave, New York, NY",
+        "123 Main Street, Seattle, WA",
+        "500 Pine St, Seattle, WA",
+    ]
+    assert result.attributes["names"] == ["Russell H Jurney", "Bob Dorf"]
+    assert result.attributes["phones"] == ["(415) 555-0100", "212-555-0199"]
+
+
+def test_merger_promotes_scalar_inputs_for_configured_list_fields() -> None:
+    """When a field is configured as a list field, scalar inputs across entities become a deduplicated list."""
+    a = Entity(id=1, name="Acme", attributes={"address": "123 Main St"})
+    b = Entity(id=2, name="Acme Corp", attributes={"address": "123 Main Street"})
+    c = Entity(id=3, name="Acme Inc", attributes={"address": "456 Oak Avenue"})
+
+    merger = EntityMerger(
+        field_types={"address": "address"},
+        list_fields={"address"},
+    )
+    result = merger.merge_entities([a, b, c])
+
+    assert result.attributes["address"] == ["123 Main Street", "456 Oak Avenue"]
+
+
+def test_merger_selects_best_value_for_singular_fields_via_llm() -> None:
+    """Singular fields select the best value via the LLM when use_llm is enabled."""
+    fake_prediction = MagicMock()
+    fake_prediction.best_value = "International Business Machines Corporation"
+    fake_predictor = MagicMock(return_value=fake_prediction)
+
+    schema = parse_schema(
+        {
+            "entity": "Organization",
+            "fields": [
+                {"name": "legal_name", "type": "name", "cardinality": "single"},
+                {"name": "addresses", "type": "address", "cardinality": "list"},
+            ],
+        }
+    )
+    a = Entity(
+        id=1,
+        name="IBM",
+        attributes={
+            "legal_name": "IBM Corp.",
+            "addresses": ["1 New Orchard Rd, Armonk, NY"],
+        },
+    )
+    b = Entity(
+        id=2,
+        name="International Business Machines",
+        attributes={
+            "legal_name": "International Business Machines Corporation",
+            "addresses": ["1 New Orchard Road, Armonk, NY", "590 Madison Ave, New York, NY"],
+        },
+    )
+
+    with patch("serf.merge.semantics.dspy.Predict", return_value=fake_predictor):
+        merger = EntityMerger(schema=schema, use_llm=True)
+        result = merger.merge_pair(a, b)
+
+    assert result.attributes["legal_name"] == "International Business Machines Corporation"
+    assert result.attributes["addresses"] == [
+        "1 New Orchard Road, Armonk, NY",
+        "590 Madison Ave, New York, NY",
+    ]

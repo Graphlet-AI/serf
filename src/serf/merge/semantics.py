@@ -11,11 +11,17 @@ Freeform prose is the exception that proves the rule: two descriptions of one
 company are two facts, not two spellings, so nothing here ever merges them.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from difflib import SequenceMatcher
-from typing import Any
+from typing import Any, cast
+
+import dspy
 
 from serf.config import config
+from serf.dspy.adapter import RepairingXMLAdapter
+from serf.dspy.lm import create_lm
+from serf.dspy.signatures import SelectBestValue
 from serf.logs import get_logger
 
 logger = get_logger(__name__)
@@ -24,6 +30,10 @@ DEDUPE_FUZZY = "fuzzy"
 DEDUPE_EXACT = "exact"
 DEDUPE_NONE = "none"
 DEDUPE_STRATEGIES = (DEDUPE_FUZZY, DEDUPE_EXACT, DEDUPE_NONE)
+
+CARDINALITY_LIST = "list"
+CARDINALITY_SINGLE = "single"
+CARDINALITIES = (CARDINALITY_LIST, CARDINALITY_SINGLE)
 
 FIELD_TYPE_NAME = "name"
 FIELD_TYPE_ADDRESS = "address"
@@ -34,6 +44,17 @@ FIELD_TYPE_IDENTIFIER = "identifier"
 FIELD_TYPE_DATE = "date"
 FIELD_TYPE_NUMERIC = "numeric"
 FIELD_TYPE_TEXT = "text"
+FIELD_TYPES = (
+    FIELD_TYPE_NAME,
+    FIELD_TYPE_ADDRESS,
+    FIELD_TYPE_URL,
+    FIELD_TYPE_EMAIL,
+    FIELD_TYPE_PHONE,
+    FIELD_TYPE_IDENTIFIER,
+    FIELD_TYPE_DATE,
+    FIELD_TYPE_NUMERIC,
+    FIELD_TYPE_TEXT,
+)
 
 _DEFAULT_THRESHOLD = 0.8
 _PUNCTUATION = ".,;:!?'\"()[]{}<>@#*_\\/|`~^"
@@ -69,6 +90,7 @@ _ADDRESS_ABBREVIATIONS = {
 }
 
 _URL_PREFIXES = ("https://", "http://", "//")
+_UNIT_MARKERS = frozenset({"apartment", "suite", "floor", "unit", "box"})
 
 
 @dataclass(frozen=True)
@@ -83,19 +105,46 @@ class MergePolicy:
         to keep every distinct value
     threshold : float
         Similarity above which two values are treated as one, used by ``fuzzy``
+    cardinality : str
+        ``list`` to deduplicate values into a list of individual values, or
+        ``single`` to select one canonical value for a singular field
     """
 
     dedupe: str = DEDUPE_EXACT
     threshold: float = _DEFAULT_THRESHOLD
+    cardinality: str = CARDINALITY_LIST
 
 
-def policy_for(field_type: str) -> MergePolicy:
+def normalize_cardinality(value: str | None) -> str:
+    """Normalise a cardinality name, accepting ``singular`` as ``single``.
+
+    Parameters
+    ----------
+    value : str | None
+        Raw cardinality string
+
+    Returns
+    -------
+    str
+        ``list`` or ``single``
+    """
+    if value is None:
+        return CARDINALITY_LIST
+    cleaned = str(value).strip().lower()
+    if cleaned == "singular":
+        return CARDINALITY_SINGLE
+    return cleaned
+
+
+def policy_for(field_type: str, cardinality: str | None = None) -> MergePolicy:
     """Return the configured merge policy for an inferred field type.
 
     Parameters
     ----------
     field_type : str
         Type from ``serf.analyze.field_detection.detect_field_type``
+    cardinality : str | None
+        Optional override for ``list`` or ``single`` cardinality
 
     Returns
     -------
@@ -111,8 +160,21 @@ def policy_for(field_type: str) -> MergePolicy:
             f"using '{DEDUPE_EXACT}'. Valid strategies: {DEDUPE_STRATEGIES}"
         )
         dedupe = DEDUPE_EXACT
+    resolved_cardinality = normalize_cardinality(
+        cardinality or settings.get("cardinality", CARDINALITY_LIST)
+    )
+    if resolved_cardinality not in CARDINALITIES:
+        logger.warning(
+            f"Unknown cardinality '{resolved_cardinality}' for field type '{field_type}'; "
+            f"using '{CARDINALITY_LIST}'. Valid cardinalities: {CARDINALITIES}"
+        )
+        resolved_cardinality = CARDINALITY_LIST
     default_threshold = float(config.get("matcher.similarity.min_threshold", _DEFAULT_THRESHOLD))
-    return MergePolicy(dedupe=dedupe, threshold=float(settings.get("threshold", default_threshold)))
+    return MergePolicy(
+        dedupe=dedupe,
+        threshold=float(settings.get("threshold", default_threshold)),
+        cardinality=resolved_cardinality,
+    )
 
 
 def normalize(value: Any, field_type: str = FIELD_TYPE_TEXT) -> str:
@@ -162,6 +224,29 @@ def normalize(value: Any, field_type: str = FIELD_TYPE_TEXT) -> str:
     return " ".join(tokens)
 
 
+def _addresses_conflict(left_tokens: list[str], right_tokens: list[str]) -> bool:
+    """Return True when two normalised addresses name different street numbers or units."""
+    if (
+        left_tokens
+        and right_tokens
+        and left_tokens[0][0].isdigit()
+        and right_tokens[0][0].isdigit()
+        and left_tokens[0] != right_tokens[0]
+    ):
+        return True
+    for marker in _UNIT_MARKERS:
+        if marker in left_tokens and marker in right_tokens:
+            left_idx = left_tokens.index(marker) + 1
+            right_idx = right_tokens.index(marker) + 1
+            if (
+                left_idx < len(left_tokens)
+                and right_idx < len(right_tokens)
+                and left_tokens[left_idx] != right_tokens[right_idx]
+            ):
+                return True
+    return False
+
+
 def similarity(left: Any, right: Any, field_type: str = FIELD_TYPE_TEXT) -> float:
     """Score how alike two values are once normalised.
 
@@ -184,6 +269,8 @@ def similarity(left: Any, right: Any, field_type: str = FIELD_TYPE_TEXT) -> floa
         return 0.0
     if a == b:
         return 1.0
+    if field_type == FIELD_TYPE_ADDRESS and _addresses_conflict(a.split(), b.split()):
+        return 0.0
     return SequenceMatcher(None, a, b).ratio()
 
 
@@ -214,8 +301,30 @@ def completeness(value: Any, field_type: str = FIELD_TYPE_TEXT) -> tuple[int, in
     return (len(normalize(value, field_type).split()), len(str(value).strip()))
 
 
+def flatten_values(values: Iterable[Any]) -> list[Any]:
+    """Flatten scalar and nested list/tuple/set values into individual items.
+
+    Parameters
+    ----------
+    values : Iterable[Any]
+        Raw field values, some of which may already be lists, tuples, or sets
+
+    Returns
+    -------
+    list[Any]
+        Individual scalar items in encounter order
+    """
+    flat: list[Any] = []
+    for item in values:
+        if isinstance(item, (list, tuple, set)):
+            flat.extend(flatten_values(item))
+        else:
+            flat.append(item)
+    return flat
+
+
 def merge_values(
-    values: list[Any],
+    values: Iterable[Any],
     field_type: str = FIELD_TYPE_TEXT,
     policy: MergePolicy | None = None,
 ) -> list[Any]:
@@ -228,8 +337,8 @@ def merge_values(
 
     Parameters
     ----------
-    values : list[Any]
-        Every value the field held, in record order, blanks included
+    values : Iterable[Any]
+        Every value the field held, in record order, blanks and nested lists included
     field_type : str
         Type from ``serf.analyze.field_detection.detect_field_type``
     policy : MergePolicy | None
@@ -242,7 +351,7 @@ def merge_values(
         Distinct values, most complete first, ties broken by text so the output
         does not depend on the order the records arrived in
     """
-    populated = [value for value in values if normalize(value, field_type)]
+    populated = [value for value in flatten_values(values) if normalize(value, field_type)]
     if not populated:
         return []
 
@@ -272,6 +381,99 @@ def merge_values(
 
     survivors = [max(cluster, key=rank) for cluster in clusters]
     return sorted(survivors, key=lambda item: (-rank(item)[0], -rank(item)[1], str(item)))
+
+
+def select_best_value(
+    values: Iterable[Any],
+    field_type: str = FIELD_TYPE_TEXT,
+    policy: MergePolicy | None = None,
+    *,
+    field_name: str = "",
+    field_description: str = "",
+    use_llm: bool = False,
+    lm: Any = None,
+) -> Any:
+    """Select the single best canonical value for a singular field.
+
+    When ``use_llm`` is True (or ``lm`` is supplied) and more than one distinct
+    value is present, the choice goes through the ``SelectBestValue`` DSPy
+    signature so the language model picks the most complete and accurate form.
+    When all values are identical, or when ``use_llm`` is False, the most
+    complete deduplicated value is returned directly.
+
+    Parameters
+    ----------
+    values : Iterable[Any]
+        Candidate values from the records being merged
+    field_type : str
+        Semantic field type
+    policy : MergePolicy | None
+        Optional per-field merge policy
+    field_name : str
+        Name of the field, passed to the LLM prompt when ``use_llm`` is True
+    field_description : str
+        Description of the field, passed to the LLM prompt when ``use_llm`` is True
+    use_llm : bool
+        Use the LLM via DSPy ``SelectBestValue`` when multiple distinct values exist
+    lm : Any
+        Optional DSPy LM instance overriding ``dspy.settings.lm`` / ``create_lm()``
+
+    Returns
+    -------
+    Any
+        The selected canonical scalar value, or ``None`` if no non-blank value exists
+    """
+    populated = [value for value in flatten_values(values) if normalize(value, field_type)]
+    if not populated:
+        return None
+
+    distinct_by_text: dict[str, Any] = {}
+    for value in populated:
+        distinct_by_text.setdefault(str(value).strip(), value)
+
+    if len(distinct_by_text) == 1:
+        return next(iter(distinct_by_text.values()))
+
+    merged = merge_values(populated, field_type, policy)
+    candidates_for_fallback = merged if merged else list(distinct_by_text.values())
+    fallback = min(
+        candidates_for_fallback,
+        key=lambda item: (
+            -completeness(item, field_type)[0],
+            -completeness(item, field_type)[1],
+            str(item),
+        ),
+    )
+
+    if not use_llm and lm is None:
+        return fallback
+
+    try:
+        active_lm = lm or getattr(dspy.settings, "lm", None) or create_lm(role="student")
+        predictor = cast(dspy.Predict, dspy.Predict(SelectBestValue))
+        with dspy.context(lm=active_lm, adapter=RepairingXMLAdapter()):
+            prediction = predictor(
+                field_name=field_name or field_type,
+                field_type=field_type,
+                field_description=field_description or f"Singular {field_type} field",
+                candidate_values=list(distinct_by_text.keys()),
+            )
+        chosen_text = str(getattr(prediction, "best_value", "") or "").strip()
+        if chosen_text in distinct_by_text:
+            return distinct_by_text[chosen_text]
+        chosen_norm = normalize(chosen_text, field_type)
+        if chosen_norm:
+            for candidate_text, original_value in distinct_by_text.items():
+                if normalize(candidate_text, field_type) == chosen_norm:
+                    return original_value
+            if isinstance(fallback, str):
+                return chosen_text
+    except Exception as e:
+        logger.warning(
+            f"LLM value selection failed for singular field '{field_name or field_type}', "
+            f"falling back to completeness ranking: {e}"
+        )
+    return fallback
 
 
 def _collapse_similar(

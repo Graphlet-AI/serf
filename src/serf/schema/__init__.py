@@ -7,6 +7,9 @@ from serf.schema.generate import (
     source_model,
 )
 from serf.schema.spec import (
+    CARDINALITIES,
+    CARDINALITY_LIST,
+    CARDINALITY_SINGLE,
     FIELD_TYPES,
     PYTHON_TYPES,
     EntitySchema,
@@ -18,6 +21,9 @@ from serf.schema.spec import (
 )
 
 __all__ = [
+    "CARDINALITIES",
+    "CARDINALITY_LIST",
+    "CARDINALITY_SINGLE",
     "FIELD_TYPES",
     "PYTHON_TYPES",
     "CanonicalEntity",

@@ -183,3 +183,66 @@ def test_a_schema_written_by_hand_survives_a_yaml_round_trip(tmp_path: Path) -> 
     path.write_text(yaml.safe_dump(schema.model_dump(exclude_none=True)), encoding="utf-8")
 
     assert load_schema(path) == schema
+
+
+def test_schema_supports_singular_and_list_cardinalities() -> None:
+    schema = parse_schema(
+        {
+            "entity": "Contact",
+            "fields": [
+                {
+                    "name": "canonical_name",
+                    "type": "name",
+                    "cardinality": "single",
+                    "required": True,
+                },
+                {"name": "aliases", "type": "name", "cardinality": "list"},
+                {"name": "addresses", "type": "address", "merge": {"cardinality": "list"}},
+                {"name": "primary_email", "type": "email", "merge": {"cardinality": "singular"}},
+            ],
+        }
+    )
+
+    assert schema.singular_fields() == ["canonical_name", "primary_email"]
+    assert schema.list_fields() == ["aliases", "addresses"]
+
+    model = canonical_model(schema)
+    assert model.model_fields["canonical_name"].annotation is str
+    assert model.model_fields["primary_email"].annotation == str | None
+    assert model.model_fields["aliases"].annotation == list[str]
+    assert model.model_fields["addresses"].annotation == list[str]
+
+    groups = [
+        [
+            {
+                "uuid": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+                "canonical_name": "Russell Jurney",
+                "aliases": ["Russell Jurney", "R. Jurney"],
+                "addresses": ["123 Main St", "456 Oak Ave"],
+                "primary_email": "russell@example.com",
+            },
+            {
+                "uuid": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+                "canonical_name": "Russell H Jurney",
+                "aliases": ["Russell H Jurney"],
+                "addresses": ["123 Main Street"],
+                "primary_email": "RUSSELL@EXAMPLE.COM",
+            },
+        ]
+    ]
+    merged = canonicalize_groups(
+        groups,
+        field_types=schema.field_types(),
+        policies=schema.merge_policies(),
+        field_descriptions=schema.field_descriptions(),
+    )[0]
+
+    assert merged.fields["canonical_name"] == "Russell H Jurney"
+    assert merged.fields["primary_email"] == "russell@example.com"
+    assert merged.fields["aliases"] == ["Russell H Jurney", "R. Jurney"]
+    assert merged.fields["addresses"] == ["123 Main Street", "456 Oak Ave"]
+
+
+def test_an_unknown_cardinality_is_rejected_at_load() -> None:
+    with pytest.raises(ValidationError, match="cardinality must be one of"):
+        parse_schema({"entity": "Thing", "fields": [{"name": "x", "cardinality": "many"}]})

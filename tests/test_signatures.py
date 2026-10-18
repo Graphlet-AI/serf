@@ -8,6 +8,7 @@ from serf.dspy.signatures import (
     EdgeResolve,
     EntityMerge,
     GenerateERConfig,
+    SelectBestValue,
 )
 
 
@@ -72,4 +73,19 @@ def test_generate_er_config_signature_fields() -> None:
 def test_generate_er_config_can_create_predict() -> None:
     """Test that GenerateERConfig can be used with dspy.Predict."""
     predictor = dspy.Predict(GenerateERConfig)
+    assert predictor is not None
+
+
+def test_select_best_value_signature_fields() -> None:
+    """Test SelectBestValue has the expected input/output fields."""
+    assert "field_name" in SelectBestValue.input_fields
+    assert "field_type" in SelectBestValue.input_fields
+    assert "field_description" in SelectBestValue.input_fields
+    assert "candidate_values" in SelectBestValue.input_fields
+    assert "best_value" in SelectBestValue.output_fields
+
+
+def test_select_best_value_can_create_predict() -> None:
+    """Test that SelectBestValue can be used with dspy.Predict."""
+    predictor = dspy.Predict(SelectBestValue)
     assert predictor is not None

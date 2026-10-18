@@ -1,14 +1,21 @@
 """Tests for type-aware field value merging."""
 
+from unittest.mock import MagicMock, patch
+
 from serf.merge.semantics import (
+    CARDINALITY_LIST,
+    CARDINALITY_SINGLE,
     DEDUPE_EXACT,
     DEDUPE_FUZZY,
     DEDUPE_NONE,
     MergePolicy,
     completeness,
+    flatten_values,
     merge_values,
     normalize,
+    normalize_cardinality,
     policy_for,
+    select_best_value,
     similarity,
 )
 
@@ -116,3 +123,112 @@ def test_an_unconfigured_field_type_deduplicates_exactly() -> None:
 
 def test_non_string_values_keep_their_type() -> None:
     assert merge_values([2005, 2005, 1999], "numeric") == [1999, 2005]
+
+
+def test_addresses_with_different_street_numbers_stay_separate_individual_addresses() -> None:
+    """Two street numbers on the same street are two distinct addresses."""
+    values = [
+        "123 Main St, Springfield, IL",
+        "123 Main Street, Springfield, IL",
+        "456 Main Street, Springfield, IL",
+    ]
+    merged = merge_values(values, "address")
+    assert merged == [
+        "123 Main Street, Springfield, IL",
+        "456 Main Street, Springfield, IL",
+    ]
+
+
+def test_addresses_with_different_unit_numbers_stay_separate_individual_addresses() -> None:
+    """Different apartments or suites at the same street number are distinct addresses."""
+    values = [
+        "100 Broadway Apt 2A",
+        "100 Broadway Apartment 2A",
+        "100 Broadway Apt 3B",
+    ]
+    merged = merge_values(values, "address")
+    assert merged == [
+        "100 Broadway Apartment 2A",
+        "100 Broadway Apt 3B",
+    ]
+
+
+def test_name_list_deduplicates_variants_into_individual_names() -> None:
+    """Variants of each person's name collapse while distinct people stay separate."""
+    values = [
+        ["Russell Jurney", "Bob Dorf"],
+        ["Russell H Jurney", "Bob M. Dorf"],
+        "Russ Journey",
+    ]
+    merged = merge_values(values, "name")
+    assert merged == ["Russell H Jurney", "Bob M. Dorf"]
+
+
+def test_flatten_values_unpacks_nested_sequences() -> None:
+    raw = ["a", ["b", ("c", None)], "d"]
+    assert flatten_values(raw) == ["a", "b", "c", None, "d"]
+
+
+def test_normalize_cardinality_accepts_single_and_singular_and_list() -> None:
+    assert normalize_cardinality("list") == CARDINALITY_LIST
+    assert normalize_cardinality("single") == CARDINALITY_SINGLE
+    assert normalize_cardinality("singular") == CARDINALITY_SINGLE
+    assert normalize_cardinality("SINGULAR") == CARDINALITY_SINGLE
+    assert normalize_cardinality(None) == CARDINALITY_LIST
+
+
+def test_select_best_value_deterministic_picks_most_complete_representative() -> None:
+    best = select_best_value(
+        ["Russell Jurney", "Russell H Jurney", "Russ Journey"],
+        "name",
+    )
+    assert best == "Russell H Jurney"
+
+
+def test_select_best_value_returns_none_when_all_values_are_blank() -> None:
+    assert select_best_value([None, "", "   "], "name") is None
+
+
+def test_select_best_value_skips_llm_when_only_one_candidate_remains() -> None:
+    """When all non-blank inputs are identical text, no LLM call is needed."""
+    with patch("serf.merge.semantics.dspy.Predict") as mock_predict:
+        best = select_best_value(
+            ["123 Main Street", "  123 Main Street  ", None],
+            "address",
+            use_llm=True,
+        )
+        assert best == "123 Main Street"
+        mock_predict.assert_not_called()
+
+
+def test_select_best_value_uses_llm_when_multiple_distinct_candidates_exist() -> None:
+    """When multiple distinct values exist for a singular field, the LLM selects the best one."""
+    fake_prediction = MagicMock()
+    fake_prediction.best_value = "Acme Corporation International"
+    fake_predictor = MagicMock(return_value=fake_prediction)
+
+    with patch("serf.merge.semantics.dspy.Predict", return_value=fake_predictor):
+        best = select_best_value(
+            ["Brand X", "Acme Corporation International"],
+            "name",
+            field_name="company_name",
+            field_description="Official registered company name",
+            use_llm=True,
+        )
+
+    assert best == "Acme Corporation International"
+    fake_predictor.assert_called_once()
+
+
+def test_select_best_value_falls_back_to_completeness_if_llm_raises() -> None:
+    fake_predictor = MagicMock(side_effect=RuntimeError("LLM unavailable"))
+
+    with patch("serf.merge.semantics.dspy.Predict", return_value=fake_predictor):
+        best = select_best_value(
+            ["Short Bio", "A much more complete biography with details"],
+            "text",
+            field_name="bio",
+            use_llm=True,
+        )
+
+    assert best == "A much more complete biography with details"

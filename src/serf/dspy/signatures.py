@@ -20,8 +20,9 @@ class BlockMatch(dspy.Signature):
     1. Select the entity with the LOWEST input id as the master record
     2. Collect ALL OTHER input ids into source_ids
     3. Merge all source_ids from inputs into a single output source_ids list
-    4. Choose the most complete field values across all matched records
-    5. Return ALL entities (merged + non-matched)
+    4. For singular fields, choose the single most complete and accurate value across all matched records
+    5. For list fields (such as addresses or names), deduplicate values into a list of individual values, collapsing spelling or abbreviation variants while keeping distinct values separate
+    6. Return ALL entities (merged + non-matched)
     """
 
     block_records: str = dspy.InputField(desc="JSON array of entity records in this block")
@@ -35,14 +36,37 @@ class BlockMatch(dspy.Signature):
 class EntityMerge(dspy.Signature):
     """Merge two matched entities into a single canonical record.
 
-    The entity with the LOWEST id becomes the master. All field values
-    are chosen by selecting the most complete/informative value.
-    The other entity's id goes into source_ids.
+    The entity with the LOWEST id becomes the master. Singular field values
+    are chosen by selecting the single most complete and accurate value.
+    List field values (such as addresses or names) are deduplicated into a
+    list of individual values, collapsing variants while keeping distinct
+    values separate. The other entity's id goes into source_ids.
     """
 
     entity_a: str = dspy.InputField(desc="First entity as JSON")
     entity_b: str = dspy.InputField(desc="Second entity as JSON")
     merged: Entity = dspy.OutputField()
+
+
+class SelectBestValue(dspy.Signature):
+    """Select the single best canonical value for a singular entity field.
+
+    Given candidate values collected from matched records that denote the same
+    real-world entity, choose the most complete, accurate, and well-formed
+    value. Prefer full forms over abbreviations, clean text over corrupted
+    text, and specific values over generic placeholders. Return one of the
+    candidate values verbatim without inventing new facts.
+    """
+
+    field_name: str = dspy.InputField(desc="Name of the entity field being resolved")
+    field_type: str = dspy.InputField(
+        desc="Semantic type of the field (name, address, url, email, phone, identifier, date, numeric, text)"
+    )
+    field_description: str = dspy.InputField(desc="What the field means in the entity schema")
+    candidate_values: list[str] = dspy.InputField(
+        desc="Distinct candidate values from the matched records"
+    )
+    best_value: str = dspy.OutputField(desc="The single best value chosen from candidate_values")
 
 
 class EdgeResolve(dspy.Signature):

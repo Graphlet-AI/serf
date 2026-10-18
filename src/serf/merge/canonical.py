@@ -31,7 +31,14 @@ from pydantic import BaseModel, Field
 
 from serf.analyze.field_detection import detect_field_type
 from serf.logs import get_logger
-from serf.merge.semantics import MergePolicy, merge_values
+from serf.merge.semantics import (
+    CARDINALITY_SINGLE,
+    MergePolicy,
+    flatten_values,
+    merge_values,
+    policy_for,
+    select_best_value,
+)
 
 logger = get_logger(__name__)
 
@@ -89,14 +96,15 @@ class CanonicalRecord(BaseModel):
     source_uuids : list[str]
         Every input uuid this record absorbed, transitively, sorted. Excludes
         ``uuid`` itself.
-    fields : dict[str, list[Any]]
-        Field values, each a list ordered most complete first, in the order the
-        fields were first seen across the inputs
+    fields : dict[str, Any]
+        Field values in the order the fields were first seen across the inputs:
+        a deduplicated list ordered most complete first for list fields, or a
+        single selected scalar for singular fields
     """
 
     uuid: str
     source_uuids: list[str] = Field(default_factory=list)
-    fields: dict[str, list[Any]] = Field(default_factory=dict)
+    fields: dict[str, Any] = Field(default_factory=dict)
 
     def to_dict(self, include_empty_source_uuids: bool = False) -> dict[str, Any]:
         """Render the record as a flat mapping, identity first and lineage last.
@@ -153,12 +161,23 @@ def canonicalize(
     records: list[dict[str, Any]],
     field_types: dict[str, str] | None = None,
     policies: dict[str, MergePolicy] | None = None,
+    *,
+    singular_fields: Iterable[str] | None = None,
+    list_fields: Iterable[str] | None = None,
+    field_descriptions: dict[str, str] | None = None,
+    use_llm: bool = False,
+    lm: Any = None,
 ) -> CanonicalRecord:
     """Combine a group of matched records into the single entity they denote.
 
     A group of one keeps its uuid, because nothing was merged. A group of
     several gets a minted uuid, and every uuid in the group - including the
     ones the group members had already absorbed - moves into ``source_uuids``.
+
+    List fields are deduplicated into a list of individual values according to
+    their semantic type (for example, individual addresses or names). Singular
+    fields resolve to a single best value, selected via the LLM when ``use_llm``
+    is True (or ``lm`` is supplied) or by completeness ranking otherwise.
 
     Parameters
     ----------
@@ -171,11 +190,21 @@ def canonicalize(
     policies : dict[str, MergePolicy] | None
         Field name to merge policy, overriding the one the field's type would
         get. Supply this from a schema.
+    singular_fields : Iterable[str] | None
+        Field names that should resolve to a single best value instead of a list
+    list_fields : Iterable[str] | None
+        Field names that should resolve to a deduplicated list of values
+    field_descriptions : dict[str, str] | None
+        Optional per-field descriptions passed to the LLM for singular fields
+    use_llm : bool
+        Select the best value for singular fields via the LLM
+    lm : Any
+        Optional DSPy LM instance for singular field value selection
 
     Returns
     -------
     CanonicalRecord
-        The merged entity, every field a list ordered most complete first
+        The merged entity
 
     Raises
     ------
@@ -197,16 +226,36 @@ def canonicalize(
             if key not in collected:
                 collected[key] = []
                 ordered_fields.append(key)
-            collected[key].extend(value if isinstance(value, list) else [value])
+            collected[key].extend(flatten_values([value]))
 
     overrides = field_types or {}
     policy_overrides = policies or {}
-    fields: dict[str, list[Any]] = {}
+    singular_set = set(singular_fields or ())
+    list_set = set(list_fields or ())
+    descriptions = field_descriptions or {}
+    fields: dict[str, Any] = {}
     for key in ordered_fields:
         field_type = overrides.get(key) or detect_field_type(key, collected[key])
-        merged = merge_values(collected[key], field_type, policy_overrides.get(key))
-        if merged:
-            fields[key] = merged
+        policy = policy_overrides.get(key) or policy_for(field_type)
+        is_singular = key in singular_set or (
+            key not in list_set and policy.cardinality == CARDINALITY_SINGLE
+        )
+        if is_singular:
+            best = select_best_value(
+                collected[key],
+                field_type,
+                policy,
+                field_name=key,
+                field_description=descriptions.get(key, ""),
+                use_llm=use_llm,
+                lm=lm,
+            )
+            if best is not None:
+                fields[key] = best
+        else:
+            merged = merge_values(collected[key], field_type, policy)
+            if merged:
+                fields[key] = merged
 
     return CanonicalRecord(
         uuid=identity,
@@ -219,6 +268,12 @@ def canonicalize_groups(
     groups: list[list[dict[str, Any]]],
     field_types: dict[str, str] | None = None,
     policies: dict[str, MergePolicy] | None = None,
+    *,
+    singular_fields: Iterable[str] | None = None,
+    list_fields: Iterable[str] | None = None,
+    field_descriptions: dict[str, str] | None = None,
+    use_llm: bool = False,
+    lm: Any = None,
 ) -> list[CanonicalRecord]:
     """Canonicalize every group of a partition.
 
@@ -230,10 +285,32 @@ def canonicalize_groups(
         Field name to inferred type, overriding detection
     policies : dict[str, MergePolicy] | None
         Field name to merge policy, overriding the field type's
+    singular_fields : Iterable[str] | None
+        Field names that should resolve to a single best value
+    list_fields : Iterable[str] | None
+        Field names that should resolve to a deduplicated list of values
+    field_descriptions : dict[str, str] | None
+        Optional per-field descriptions passed to the LLM for singular fields
+    use_llm : bool
+        Select the best value for singular fields via the LLM
+    lm : Any
+        Optional DSPy LM instance for singular field value selection
 
     Returns
     -------
     list[CanonicalRecord]
         One record per group, in group order
     """
-    return [canonicalize(group, field_types, policies) for group in groups]
+    return [
+        canonicalize(
+            group,
+            field_types,
+            policies,
+            singular_fields=singular_fields,
+            list_fields=list_fields,
+            field_descriptions=field_descriptions,
+            use_llm=use_llm,
+            lm=lm,
+        )
+        for group in groups
+    ]

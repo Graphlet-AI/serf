@@ -90,8 +90,9 @@ def source_model(schema: EntitySchema) -> type[EntitySide]:
 def canonical_model(schema: EntitySchema) -> type[BaseModel]:
     """Build the Pydantic class for a resolved record of this entity type.
 
-    Every field is a list, because a merged record can legitimately hold two
-    states, and the list is ordered most complete first.
+    List fields hold ``list[scalar]`` ordered most complete first. Singular
+    fields hold a single ``scalar`` (or ``scalar | None`` when optional)
+    representing the best value selected across the merged records.
 
     Parameters
     ----------
@@ -101,8 +102,7 @@ def canonical_model(schema: EntitySchema) -> type[BaseModel]:
     Returns
     -------
     type[BaseModel]
-        Subclass of ``CanonicalEntity`` with one list-valued field per schema
-        field
+        Subclass of ``CanonicalEntity`` with one field per schema field
     """
     key = schema.model_dump_json()
     cached = _canonical_cache.get(key)
@@ -113,12 +113,23 @@ def canonical_model(schema: EntitySchema) -> type[BaseModel]:
     for field in schema.fields:
         scalar = field.scalar_type()
         description = field.description
-        if description:
-            description = f"{description} Most complete value first."
-        definitions[field.name] = (
-            list[scalar],  # type: ignore[valid-type]
-            Field(default_factory=list, description=description),
-        )
+        if field.is_singular():
+            if description:
+                description = f"{description} Single best value."
+            if field.required:
+                definitions[field.name] = (scalar, Field(description=description))
+            else:
+                definitions[field.name] = (
+                    scalar | None,
+                    Field(default=None, description=description),
+                )
+        else:
+            if description:
+                description = f"{description} Most complete value first."
+            definitions[field.name] = (
+                list[scalar],  # type: ignore[valid-type]
+                Field(default_factory=list, description=description),
+            )
 
     model = create_model(
         f"Canonical{schema.entity}",
@@ -127,7 +138,7 @@ def canonical_model(schema: EntitySchema) -> type[BaseModel]:
     )
     model.__doc__ = (
         f"{schema.description} " if schema.description else ""
-    ) + "Every field holds a list, most complete value first."
+    ) + "Every field holds a list, most complete value first, unless marked singular."
     _canonical_cache[key] = model
     return model
 

@@ -11,6 +11,7 @@ While general-purpose sentence transformers like `BAAI/bge-small-en-v1.5` provid
 ### Task: GEPA Prompt Optimization Given Improved Semantic Blocking
 
 Contrastive fine-tuning (`serf fine-tune all`) produced a unified embedding checkpoint (`data/models/fine-tuned-all-bge-small-contrastive`) that significantly improves blocking performance across all 5 benchmark datasets:
+
 - +4.99% overall holdout blocking recall lift (1,688 -> 1,782 recovered gold pairs).
 - Amazon-Google experienced a massive +23.58% recall jump (0.6705 -> 0.9062), recovering 83 previously unreachable gold pairs.
 - Downstream candidate pairs presented to the LLM matcher decreased by 13.1% overall (and by 28.2% on DBLP-ACM, 20.8% on DBLP-Scholar), demonstrating much tighter clusters.
@@ -243,6 +244,7 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 ## Executor's Feedback or Assistance Requests
 
 - **GEPA Prompt Optimization with Improved Contrastive Blocking**:
+
   - Wired `--blocking-model` and `--blocking-strategy` into `serf train` CLI and `train_dataset`.
   - Added `--blocking-model` to `serf benchmark` CLI.
   - Included blocking model and strategy in `run_log_dir` SHA-256 fingerprinting so training cache/logs never collide across different embedding or blocking setups.
@@ -267,6 +269,15 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
     - Validation F1 improved from **0.8253** (Candidate 0) to **0.9236** (Candidate 3, **+0.0983**, Pareto frontier **0.9290**).
     - Disjoint holdout F1 improved from **0.8213** to **0.8982** (**+0.0769**).
     - Saved winning program to `data/trained_prompts/amazon-google_gepa.json`.
+  - Completed GEPA training on `walmart-amazon` (`data/models/fine-tuned-walmart-amazon-bge-small-contrastive`, 140 train / 35 val / 42 holdout examples):
+    - Validation F1 improved from **0.8745** (Candidate 0) to **0.9471** (Candidate 2, **+0.0726**, Pareto frontier **0.9709**).
+    - Disjoint holdout F1 improved from **0.8785** to **0.9533** (**+0.0748**).
+    - Saved winning program to `data/trained_prompts/walmart-amazon_gepa.json`.
+  - Completed GEPA training on `dblp-scholar` (`data/models/fine-tuned-dblp-scholar-bge-small-contrastive`, 119 train / 35 val / 44 holdout examples):
+    - Validation F1 improved from **0.6016** (Candidate 0) to **0.9685** (Candidate 1, **+0.3669**, Pareto frontier **0.9807**).
+    - Disjoint holdout F1 improved from **0.6661** to **0.9577** (**+0.2916**).
+    - Saved winning program to `data/trained_prompts/dblp-scholar_gepa.json`.
+  - Set `kwargs.setdefault("num_retries", 0)` in `VertexRefreshingLM.__init__` (`src/serf/dspy/lm.py`) so `dspy.LM`'s inner retry loop does not multiply `VertexRefreshingLM.forward`'s outer retry loop (`4 * 7 = 28` attempts).
   - Disabled `mlflow.autolog.log_traces` and `mlflow.autolog.log_traces_from_eval` in `config.yml` so `serf train` exits immediately after holdout evaluation without hanging in MLflow's `atexit` trace exporter.
   - Opened pull request #27 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
 

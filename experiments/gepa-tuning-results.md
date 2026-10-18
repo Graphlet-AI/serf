@@ -18,14 +18,15 @@ prompt is actually better on records nothing in the run was allowed to see.
 
 ## Results
 
-| Dataset                             | Train ex | Val ex | Holdout ex | Val: written → trained | Holdout: written → trained | Holdout gain |
-| ----------------------------------- | -------: | -----: | ---------: | ---------------------- | -------------------------- | -----------: |
-| amazon-google (default BGE, 6-val)  |       33 |      6 |         32 | 0.8997 → 0.9376        | 0.8550 → 0.8566            |  **+0.0016** |
-| dblp-acm (contrastive fine-tuned)   |       90 |     35 |         36 | 0.9842 → 0.9915        | 0.9803 → 0.9849            |  **+0.0046** |
-| abt-buy (contrastive fine-tuned)    |       22 |     25 |         25 | 0.8791 → 0.9761        | 0.9152 → 0.9517            |  **+0.0365** |
-| amazon-google (contrastive, 35-val) |       66 |     35 |         35 | 0.8253 → 0.9236        | 0.8213 → 0.8982            |  **+0.0769** |
-| walmart-amazon (contrastive, 35-val)|      236 |     35 |         42 | 0.9039 → 0.9471        | running (Iter 6, 129/155)  |           —  |
-| dblp-scholar (contrastive, 35-val)  |      256 |     35 |         49 | 0.5880 → 0.9685        | running (Iter 4, 123/155)  |           —  |
+| Dataset                              | Train ex | Val ex | Holdout ex | Val: written → trained | Holdout: written → trained | Holdout gain |
+| ------------------------------------ | -------: | -----: | ---------: | ---------------------- | -------------------------- | -----------: |
+| amazon-google (default BGE, 6-val)   |       33 |      6 |         32 | 0.8997 → 0.9376        | 0.8550 → 0.8566            |  **+0.0016** |
+| dblp-acm (contrastive fine-tuned)    |       90 |     35 |         36 | 0.9842 → 0.9915        | 0.9803 → 0.9849            |  **+0.0046** |
+| abt-buy (contrastive fine-tuned)     |       22 |     25 |         25 | 0.8791 → 0.9761        | 0.9152 → 0.9517            |  **+0.0365** |
+| amazon-google (contrastive, 35-val)  |       66 |     35 |         35 | 0.8253 → 0.9236        | 0.8213 → 0.8982            |  **+0.0769** |
+| walmart-amazon (contrastive, 35-val) |      140 |     35 |         42 | 0.8745 → 0.9471        | 0.8785 → 0.9533            |  **+0.0748** |
+| dblp-scholar (contrastive, 35-val)   |      119 |     35 |         44 | 0.6016 → 0.9685        | 0.6661 → 0.9577            |  **+0.2916** |
+| **5-dataset mean (contrastive)**     |          |        |            | **0.8329 → 0.9613**    | **0.8523 → 0.9492**        |  **+0.0969** |
 
 ## Abt-Buy with contrastive fine-tuned blocking (25 validation blocks, 25 holdout blocks)
 
@@ -47,6 +48,7 @@ iterations with student `openai/gpt-oss-120b-maas` and teacher
 
 The winning `AbtBuyBlockMatch` instructions (`9,338 → 12,821` characters, saved
 to `data/trained_prompts/abt-buy_gepa.json`) added:
+
 1. Stripping retailer/kit suffixes (`BD`, `KIT`, `2PK`, `B2`, `360`) and brand
    prefixes (`SON` in `SONKDLS32XBR9`) and checking `abt.description` for
    manufacturer model codes when `abt.name` lists an internal SKU.
@@ -94,33 +96,51 @@ validation and holdout splits.
 ## Walmart-Amazon with contrastive fine-tuned blocking (35 validation blocks, 42 holdout blocks)
 
 Blocking with `data/models/fine-tuned-walmart-amazon-bge-small-contrastive`
-over the 10,000 train / 2,000 validation / 2,000 holdout record splits
-(`seed=42`, `val_blocks=35`) produced 236 train examples, 35 validation
+over the 5,321 train / 1,701 validation / 1,700 holdout record splits
+(`seed=42`, `val_blocks=35`) produced 140 train examples, 35 validation
 examples, and 42 holdout examples:
 
-- **Candidate 0 (shipped baseline)**: validation F1 **0.9039** (31.64 / 35
+- **Candidate 0 (shipped baseline)**: validation F1 **0.8745** (initial pass;
+  **0.9039** on full 35-block evaluation), holdout F1 **0.8785** (36.90 / 42
   blocks).
-- **Candidate 1 (Iteration 1)**: validation F1 **0.9163** (+0.0124 over
-  baseline, 32.07 / 35 blocks).
-- **Candidate 2 (Iteration 4)**: validation F1 **0.9471** (**+0.0432** over
-  baseline, 33.15 / 35 blocks), Pareto frontier **0.9614**.
+- **Candidate 1 (Iteration 1)**: validation F1 **0.9163** (32.07 / 35 blocks).
+- **Candidate 2 (Iteration 4, winner)**: validation F1 **0.9471** (**+0.0726**
+  over initial baseline, 33.15 / 35 blocks), Pareto frontier **0.9709**,
+  disjoint holdout F1 **0.9533** (**+0.0748** over baseline, 40.04 / 42
+  blocks).
+- **Candidate 3 (Iteration 6)**: validation F1 **0.9135** (31.97 / 35 blocks).
 
-## DBLP-Scholar with contrastive fine-tuned blocking (35 validation blocks, 49 holdout blocks)
+The winning `WalmartAmazonBlockMatch` instructions (`7,315 → 6,984` characters,
+saved to `data/trained_prompts/walmart-amazon_gepa.json`) enforce emitting
+separate 2-element `[walmart_record_id, amazon_record_id]` groups when one
+Walmart product matches multiple Amazon listings, plus character-by-character
+normalized model number comparison against both `amazon.modelno` and
+`amazon.title`.
+
+## DBLP-Scholar with contrastive fine-tuned blocking (35 validation blocks, 44 holdout blocks)
 
 Blocking with `data/models/fine-tuned-dblp-scholar-bge-small-contrastive` over
-the 10,000 train / 2,000 validation / 2,000 holdout record splits (`seed=42`,
-`val_blocks=35`) produced 256 train examples, 35 validation examples, and 49
+the 4,672 train / 2,100 validation / 2,101 holdout record splits (`seed=42`,
+`val_blocks=35`) produced 119 train examples, 35 validation examples, and 44
 holdout examples:
 
-- **Candidate 0 (shipped baseline)**: validation F1 **0.5880** (20.58 / 35
+- **Candidate 0 (shipped baseline)**: validation F1 **0.6016** (initial pass;
+  **0.5880** on 35-block evaluation), holdout F1 **0.6661** (29.31 / 44
   blocks). Because one DBLP paper frequently matches 2 to 6 Scholar entries in
   the same block, placing `[dblp_id, scholar_1, scholar_2, ...]` into a single
   group caused quadratic same-source `(scholar_i, scholar_j)` false positives
   in `predicted_pairs`.
-- **Candidate 1 (Iteration 1)**: validation F1 **0.9685** (**+0.3805** over
-  baseline, 33.90 / 35 blocks).
-- **Candidate 2 (Iteration 3)**: validation F1 **0.9649** (33.77 / 35 blocks),
-  lifting the Pareto frontier aggregate to **0.9768**.
+- **Candidate 1 (Iteration 1, winner)**: validation F1 **0.9685** (**+0.3669**
+  over initial baseline, 33.90 / 35 blocks), disjoint holdout F1 **0.9577**
+  (**+0.2916** over baseline, 42.14 / 44 blocks).
+- **Candidate 2 (Iteration 3)**: validation F1 **0.9649** (33.77 / 35 blocks).
+- **Candidate 3 (Iteration 4)**: validation F1 **0.9679** (33.88 / 35 blocks),
+  lifting the Pareto frontier aggregate to **0.9807**.
+
+The winning `DblpScholarBlockMatch` instructions (`6,379 → 6,410` characters,
+saved to `data/trained_prompts/dblp-scholar_gepa.json`) instruct the student to
+emit a 2-element `[dblp_record_id, scholar_record_id]` group for each matching
+Scholar entry and never place two Scholar records into the same group.
 
 ## DBLP-ACM with contrastive fine-tuned blocking and 35 validation blocks
 

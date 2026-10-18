@@ -553,7 +553,7 @@ def score_on_examples(
     lm = create_lm(student_model, role="student")
     resolved_threads = max(
         1,
-        num_threads if num_threads is not None else int(config.get("optimize.num_threads", 8)),
+        num_threads if num_threads is not None else int(config.get("optimize.num_threads", 16)),
     )
 
     def _score_one(example: dspy.Example) -> tuple[float, bool]:

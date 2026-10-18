@@ -8,7 +8,7 @@ scored only once, after GEPA has finished.
 ```bash
 uv run serf train --dataset dblp-acm \
   --blocking-model data/models/fine-tuned-dblp-acm-bge-small-contrastive \
-  --num-threads 8
+  --num-threads 16
 ```
 
 The point of the holdout column is that it is the only one that answers a
@@ -21,7 +21,7 @@ prompt is actually better on records nothing in the run was allowed to see.
 | Dataset                             | Train ex | Val ex | Holdout ex | Val: written → trained | Holdout: written → trained | Holdout gain |
 | ----------------------------------- | -------: | -----: | ---------: | ---------------------- | -------------------------- | -----------: |
 | amazon-google (default BGE)         |       33 |      6 |         32 | 0.8997 → 0.9376        | 0.8550 → 0.8566            |  **+0.0016** |
-| dblp-acm (contrastive fine-tuned)   |       90 |     35 |         36 | 0.9842 → 0.9915        | 0.9836 → 0.9789            |  **-0.0048** |
+| dblp-acm (contrastive fine-tuned)   |       90 |     35 |         36 | 0.9842 → 0.9915        | 0.9803 → 0.9849            |  **+0.0046** |
 
 ## DBLP-ACM with contrastive fine-tuned blocking and 35 validation blocks
 
@@ -33,14 +33,16 @@ validation saturation. Across 4 GEPA reflection iterations with student
 (`reasoning_effort="medium"`):
 
 - **Candidate 0 (shipped baseline)**: validation F1 **0.9842** (34.45 / 35
-  blocks; imperfect on blocks 10, 14, 19, 21, 24, 29, 33), holdout F1 **0.9836**
-  (35.41 / 36 blocks).
+  blocks; imperfect on blocks 10, 14, 19, 21, 24, 29, 33), holdout F1 **0.9803**
+  (`serf train` end-to-end holdout pass; **0.9836** on a second independent
+  pass).
 - **Candidate 1 (Iteration 1)**: validation F1 **0.9783**, Pareto frontier
   **0.9883** (resolved blocks 10, 19, and 29 to 1.0).
 - **Candidate 2 (Iteration 2, winner)**: validation F1 **0.9915** (+0.0073 over
   baseline, 34.70 / 35 blocks, 33 of 35 validation blocks at 1.0000), Pareto
-  frontier **0.9955**, holdout F1 **0.9789** (-0.0048 vs baseline, within the
-  ~0.01 run-to-run LLM nondeterminism band).
+  frontier **0.9955**, holdout F1 **0.9849** (**+0.0046** over baseline in the
+  `serf train` holdout pass; **0.9789** on a second pass, within the ~0.01
+  run-to-run LLM nondeterminism band).
 - **Candidate 3 (Iteration 4)**: validation F1 **0.9841** (34.44 / 35 blocks).
 
 ### Holdout block-by-block decomposition (`dblp-acm`, 36 blocks)

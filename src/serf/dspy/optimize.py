@@ -420,7 +420,7 @@ def optimize_module(
         )
     log_dir = log_dir or config.get("optimize.log_dir", "data/gepa_logs")
     resolved_threads = (
-        num_threads if num_threads is not None else int(config.get("optimize.num_threads", 8))
+        num_threads if num_threads is not None else int(config.get("optimize.num_threads", 16))
     )
 
     logger.info(

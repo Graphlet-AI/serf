@@ -253,8 +253,13 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   - Raised default `models.request_timeout_seconds` to 300s in `config.yml` and added exponential backoff retry for transport errors, timeouts, and rate limits in `VertexRefreshingLM`.
   - Configured `dspy.settings.configure(max_errors=100)` in `optimize_module`.
   - Updated `models.teacher` to `"gemini/gemini-4-argon"` and added `models.teacher_reasoning_effort: "medium"` in `config.yml` and `src/serf/dspy/lm.py`.
-  - Running GEPA training on `dblp-acm` with the fine-tuned contrastive blocking model and `gemini/gemini-4-argon` (`medium` reasoning effort) teacher in tmux session `gepa-train` (logged to `/opt/cursor/artifacts/gepa_train_dblp_acm.log`).
-  - Created draft pull request #25 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
+  - Parallelized `score_on_examples` in `src/serf/dspy/train.py` with `ThreadPoolExecutor` (`optimize.num_threads: 8`), cutting 36-block holdout evaluation time by ~8x.
+  - Disabled `mlflow.autolog.log_traces_from_compile` in `config.yml` to eliminate SQLite trace-logging connection pool bottlenecks during multi-threaded GEPA compilation.
+  - Completed GEPA training on `dblp-acm` with the fine-tuned contrastive blocking model (`data/models/fine-tuned-dblp-acm-bge-small-contrastive`), student `openai/gpt-oss-120b-maas`, and teacher `gemini/gemini-4-argon` (`medium` reasoning effort):
+    - Validation F1 improved from **0.9842** (Candidate 0) to **0.9915** (Candidate 2, +0.0073, Pareto frontier **0.9955**, 33 of 35 validation blocks at 1.0000).
+    - Holdout F1 (36 blocks, 1,100 held-out records): Candidate 0 scored **0.9836** and Candidate 2 scored **0.9789** (-0.0048, within ~0.01 LLM run-to-run variance; both prompts scored 1.0000 on 30 of 36 holdout blocks, with Candidate 2 recovering 3 subtitle/prefix/missing-author blocks to 1.0000 while eliminating same-source false positives on recurring `SIGMOD Record` columns).
+    - Saved winning program to `data/trained_prompts/dblp-acm_gepa.json` and recorded results in `experiments/gepa-tuning-results.md`.
+  - Updated pull request #25 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
 
 - **Research & Architecture Documentation Port from PR #19**:
 

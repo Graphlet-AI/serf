@@ -193,9 +193,9 @@ mlflow:
   host: "127.0.0.1"
   port: 5001
   autolog:
-    log_traces: true
+    log_traces: false
     log_traces_from_compile: false
-    log_traces_from_eval: true
+    log_traces_from_eval: false
 
 benchmarks:
   output_dir: "data/benchmarks"

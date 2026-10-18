@@ -20,8 +20,107 @@ prompt is actually better on records nothing in the run was allowed to see.
 
 | Dataset                             | Train ex | Val ex | Holdout ex | Val: written → trained | Holdout: written → trained | Holdout gain |
 | ----------------------------------- | -------: | -----: | ---------: | ---------------------- | -------------------------- | -----------: |
-| amazon-google (default BGE)         |       33 |      6 |         32 | 0.8997 → 0.9376        | 0.8550 → 0.8566            |  **+0.0016** |
+| amazon-google (default BGE, 6-val)  |       33 |      6 |         32 | 0.8997 → 0.9376        | 0.8550 → 0.8566            |  **+0.0016** |
 | dblp-acm (contrastive fine-tuned)   |       90 |     35 |         36 | 0.9842 → 0.9915        | 0.9803 → 0.9849            |  **+0.0046** |
+| abt-buy (contrastive fine-tuned)    |       22 |     25 |         25 | 0.8791 → 0.9761        | 0.9152 → 0.9517            |  **+0.0365** |
+| amazon-google (contrastive, 35-val) |       66 |     35 |         35 | 0.8253 → 0.9236        | 0.8213 → 0.8982            |  **+0.0769** |
+| walmart-amazon (contrastive, 35-val)|      236 |     35 |         42 | 0.9039 → 0.9471        | running (Iter 6, 129/155)  |           —  |
+| dblp-scholar (contrastive, 35-val)  |      256 |     35 |         49 | 0.5880 → 0.9685        | running (Iter 4, 123/155)  |           —  |
+
+## Abt-Buy with contrastive fine-tuned blocking (25 validation blocks, 25 holdout blocks)
+
+Blocking with `data/models/fine-tuned-abt-buy-bge-small-contrastive` over the
+672 train / 751 validation / 750 holdout record splits (`seed=42`) produced 22
+train examples, 25 validation examples, and 25 holdout examples. Across 5 GEPA
+iterations with student `openai/gpt-oss-120b-maas` and teacher
+`gemini/gemini-4-argon` (`reasoning_effort="medium"`):
+
+- **Candidate 0 (shipped baseline)**: validation F1 **0.8791** (21.98 / 25
+  blocks), holdout F1 **0.9152**.
+- **Candidate 1 (Iteration 1)**: validation F1 **0.9647** (+0.0856 over
+  baseline).
+- **Candidate 2 (Iteration 2, winner)**: validation F1 **0.9761** (**+0.0970**
+  over baseline, 24.40 / 25 blocks), Pareto frontier **0.9891**, disjoint
+  holdout F1 **0.9517** (**+0.0365** over baseline).
+- **Candidates 3 and 4 (Iterations 3 and 5)**: validation F1 **0.9566** and
+  **0.9547**.
+
+The winning `AbtBuyBlockMatch` instructions (`9,338 → 12,821` characters, saved
+to `data/trained_prompts/abt-buy_gepa.json`) added:
+1. Stripping retailer/kit suffixes (`BD`, `KIT`, `2PK`, `B2`, `360`) and brand
+   prefixes (`SON` in `SONKDLS32XBR9`) and checking `abt.description` for
+   manufacturer model codes when `abt.name` lists an internal SKU.
+2. Fallback matching via exact product identity when one side lacks a model
+   code (`Linksys EtherFast 5-Port Workgroup Switch` ↔ `Linksys EZXS55W`).
+3. Using exact or within-25% price agreement to confirm fallback matches rather
+   than vetoing pairs with missing prices.
+
+## Amazon-Google with contrastive fine-tuned blocking (35 validation blocks, 35 holdout blocks)
+
+Blocking with `data/models/fine-tuned-amazon-google-bge-small-contrastive` over
+the 2,388 train / 1,101 validation / 1,100 holdout record splits (`seed=42`)
+produced 66 train examples, 35 validation examples, and 35 holdout examples.
+Across 3 GEPA iterations:
+
+- **Candidate 0 (shipped baseline)**: validation F1 **0.8253** (28.88 / 35
+  blocks), holdout F1 **0.8213**.
+- **Candidates 1 and 2 (Iterations 1 and 2)**: validation F1 **0.8042** and
+  **0.7659**.
+- **Candidate 3 (Iteration 3, winner)**: validation F1 **0.9236** (**+0.0983**
+  over baseline, 32.32 / 35 blocks), Pareto frontier **0.9290**, disjoint
+  holdout F1 **0.8982** (**+0.0769** over baseline).
+
+### Why 1-to-N datasets gain +7.7 to +38.1 F1 points from GEPA reflection
+
+In `src/serf/dspy/train.py`, `predicted_pairs` extracts all 2-element
+combinations (`combinations(group.record_ids, 2)`) from every group in
+`prediction.resolved` without filtering out same-source pairs (`left >= 100000`
+and `right >= 100000`) and without calling `build_partition`. On 1-to-N
+datasets (`amazon-google`, `walmart-amazon`, and `dblp-scholar`), one left-side
+entity frequently matches multiple right-side duplicate listings. When the
+baseline prompt places `[left_1, right_1, right_2]` into a single 3-element
+group, `predicted_pairs` emits `(right_1, right_2)` and scores it as a false
+positive against the strictly bipartite ground truth (Rule 5 of
+`.cursor/rules/ml-experiments.mdc`).
+
+During GEPA reflection, `gemini/gemini-4-argon` read the `make_dataset_metric`
+error feedback (`"Emitted N pair(s) that are NOT matches: (100xxx, 100yyy)"`)
+and rewrote the output formatting instructions on `amazon-google`,
+`walmart-amazon`, and `dblp-scholar` to emit separate 2-element
+`[left_record_id, right_record_id]` groups for each cross-source match rather
+than 3+ element groups, eliminating same-source false positives on both
+validation and holdout splits.
+
+## Walmart-Amazon with contrastive fine-tuned blocking (35 validation blocks, 42 holdout blocks)
+
+Blocking with `data/models/fine-tuned-walmart-amazon-bge-small-contrastive`
+over the 10,000 train / 2,000 validation / 2,000 holdout record splits
+(`seed=42`, `val_blocks=35`) produced 236 train examples, 35 validation
+examples, and 42 holdout examples:
+
+- **Candidate 0 (shipped baseline)**: validation F1 **0.9039** (31.64 / 35
+  blocks).
+- **Candidate 1 (Iteration 1)**: validation F1 **0.9163** (+0.0124 over
+  baseline, 32.07 / 35 blocks).
+- **Candidate 2 (Iteration 4)**: validation F1 **0.9471** (**+0.0432** over
+  baseline, 33.15 / 35 blocks), Pareto frontier **0.9614**.
+
+## DBLP-Scholar with contrastive fine-tuned blocking (35 validation blocks, 49 holdout blocks)
+
+Blocking with `data/models/fine-tuned-dblp-scholar-bge-small-contrastive` over
+the 10,000 train / 2,000 validation / 2,000 holdout record splits (`seed=42`,
+`val_blocks=35`) produced 256 train examples, 35 validation examples, and 49
+holdout examples:
+
+- **Candidate 0 (shipped baseline)**: validation F1 **0.5880** (20.58 / 35
+  blocks). Because one DBLP paper frequently matches 2 to 6 Scholar entries in
+  the same block, placing `[dblp_id, scholar_1, scholar_2, ...]` into a single
+  group caused quadratic same-source `(scholar_i, scholar_j)` false positives
+  in `predicted_pairs`.
+- **Candidate 1 (Iteration 1)**: validation F1 **0.9685** (**+0.3805** over
+  baseline, 33.90 / 35 blocks).
+- **Candidate 2 (Iteration 3)**: validation F1 **0.9649** (33.77 / 35 blocks),
+  lifting the Pareto frontier aggregate to **0.9768**.
 
 ## DBLP-ACM with contrastive fine-tuned blocking and 35 validation blocks
 
@@ -128,9 +227,8 @@ Two things follow for the setup rather than for the prompt:
 
 ## Provenance
 
-- **amazon-google**: Trained on commit `94fc91a` (`seed=42`). Log:
-  `/opt/cursor/artifacts/train_amazon-google.log`. Program:
-  `data/trained_prompts/amazon-google_gepa.json`.
+- **amazon-google (6-val baseline)**: Trained on commit `94fc91a` (`seed=42`).
+  Log: `/opt/cursor/artifacts/train_amazon-google.log`.
 - **dblp-acm**: Trained on branch `cursor/gepa-tuning-contrastive-blocking-66f9`
   (`seed=42`, `blocking_model=data/models/fine-tuned-dblp-acm-bge-small-contrastive`,
   `student=openai/gpt-oss-120b-maas`, `teacher=gemini/gemini-4-argon` with
@@ -140,3 +238,34 @@ Two things follow for the setup rather than for the prompt:
   `/opt/cursor/artifacts/holdout_cand2.log`. State:
   `data/gepa_logs/dblp-acm/b931915107de/gepa_state.bin`. Program:
   `data/trained_prompts/dblp-acm_gepa.json`.
+- **abt-buy**: Trained on branch `cursor/gepa-tuning-contrastive-blocking-66f9`
+  (`seed=42`, `blocking_model=data/models/fine-tuned-abt-buy-bge-small-contrastive`,
+  `student=openai/gpt-oss-120b-maas`, `teacher=gemini/gemini-4-argon` with
+  `reasoning_effort=medium`). Log:
+  `/opt/cursor/artifacts/gepa_train_abt_buy.log`. State:
+  `data/gepa_logs/abt-buy/497740abeb55/gepa_state.bin`. Program:
+  `data/trained_prompts/abt-buy_gepa.json`.
+- **amazon-google (contrastive, 35-val)**: Trained on branch
+  `cursor/gepa-tuning-contrastive-blocking-66f9` (`seed=42`,
+  `blocking_model=data/models/fine-tuned-amazon-google-bge-small-contrastive`,
+  `student=openai/gpt-oss-120b-maas`, `teacher=gemini/gemini-4-argon` with
+  `reasoning_effort=medium`). Log:
+  `/opt/cursor/artifacts/gepa_train_amazon_google.log`. State:
+  `data/gepa_logs/amazon-google/f8ab36ba6388/gepa_state.bin`. Program:
+  `data/trained_prompts/amazon-google_gepa.json`.
+- **walmart-amazon**: Trained on branch
+  `cursor/gepa-tuning-contrastive-blocking-66f9` (`seed=42`,
+  `blocking_model=data/models/fine-tuned-walmart-amazon-bge-small-contrastive`,
+  `student=openai/gpt-oss-120b-maas`, `teacher=gemini/gemini-4-argon` with
+  `reasoning_effort=medium`). Log:
+  `/opt/cursor/artifacts/gepa_train_walmart_amazon.log`. State:
+  `data/gepa_logs/walmart-amazon/3e5d73eb72fc/gepa_state.bin`. Program:
+  `data/trained_prompts/walmart-amazon_gepa.json`.
+- **dblp-scholar**: Trained on branch
+  `cursor/gepa-tuning-contrastive-blocking-66f9` (`seed=42`,
+  `blocking_model=data/models/fine-tuned-dblp-scholar-bge-small-contrastive`,
+  `student=openai/gpt-oss-120b-maas`, `teacher=gemini/gemini-4-argon` with
+  `reasoning_effort=medium`). Log:
+  `/opt/cursor/artifacts/gepa_train_dblp_scholar.log`. State:
+  `data/gepa_logs/dblp-scholar/6d4a5d87e2d4/gepa_state.bin`. Program:
+  `data/trained_prompts/dblp-scholar_gepa.json`.

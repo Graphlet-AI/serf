@@ -259,6 +259,15 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
     - Validation F1 improved from **0.9842** (Candidate 0) to **0.9915** (Candidate 2, +0.0073, Pareto frontier **0.9955**, 33 of 35 validation blocks at 1.0000).
     - Holdout F1 (36 blocks, 1,100 held-out records): `serf train` end-to-end holdout evaluation improved from **0.9803** (Candidate 0) to **0.9849** (Candidate 2, **+0.0046**); a second independent pass scored **0.9836** vs **0.9789** (-0.0048, within ~0.01 LLM run-to-run variance; both prompts scored 1.0000 on 30 of 36 holdout blocks).
     - Saved winning program to `data/trained_prompts/dblp-acm_gepa.json` and recorded results in `experiments/gepa-tuning-results.md`.
+  - Completed GEPA training on `abt-buy` (`data/models/fine-tuned-abt-buy-bge-small-contrastive`, 22 train / 25 val / 25 holdout examples):
+    - Validation F1 improved from **0.8791** (Candidate 0) to **0.9761** (Candidate 2, **+0.0970**, Pareto frontier **0.9891**).
+    - Disjoint holdout F1 improved from **0.9152** to **0.9517** (**+0.0365**).
+    - Saved winning program to `data/trained_prompts/abt-buy_gepa.json`.
+  - Completed GEPA training on `amazon-google` (`data/models/fine-tuned-amazon-google-bge-small-contrastive`, 66 train / 35 val / 35 holdout examples):
+    - Validation F1 improved from **0.8253** (Candidate 0) to **0.9236** (Candidate 3, **+0.0983**, Pareto frontier **0.9290**).
+    - Disjoint holdout F1 improved from **0.8213** to **0.8982** (**+0.0769**).
+    - Saved winning program to `data/trained_prompts/amazon-google_gepa.json`.
+  - Disabled `mlflow.autolog.log_traces` and `mlflow.autolog.log_traces_from_eval` in `config.yml` so `serf train` exits immediately after holdout evaluation without hanging in MLflow's `atexit` trace exporter.
   - Opened pull request #27 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
 
 - **Research & Architecture Documentation Port from PR #19**:

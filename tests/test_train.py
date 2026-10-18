@@ -1,7 +1,7 @@
 """Tests for GEPA training of the per-dataset matching prompts."""
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import MagicMock, patch
 
 import dspy
@@ -20,6 +20,7 @@ from serf.dspy.train import (
     make_dataset_metric,
     predicted_pairs,
     run_log_dir,
+    score_on_examples,
     train_dataset,
 )
 from serf.dspy.trained import (
@@ -480,3 +481,34 @@ def test_the_state_directory_root_comes_from_config_by_default() -> None:
 
     root = str(config.get("optimize.log_dir"))
     assert run_log_dir("dblp-acm", "x").startswith(root)
+
+
+@patch("serf.dspy.train.create_lm")
+def test_score_on_examples_runs_in_parallel_and_scores_failures_as_zero(
+    mock_create_lm: MagicMock,
+) -> None:
+    """Holdout blocks run across worker threads and failed blocks count as zero."""
+    mock_create_lm.return_value = MagicMock()
+    examples = [
+        dspy.Example(
+            **{SPEC.left_field: [], SPEC.right_field: [], GOLD_PAIRS_FIELD: [[1, 2]]}
+        ).with_inputs(SPEC.left_field, SPEC.right_field)
+        for _ in range(4)
+    ]
+    calls = 0
+
+    def fake_program(**_kwargs: Any) -> dspy.Prediction:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("transient timeout")
+        return _prediction([(1, 2)])
+
+    metric = make_dataset_metric(SPEC)
+    score = score_on_examples(
+        cast(dspy.Module, fake_program),
+        examples,
+        metric,
+        num_threads=4,
+    )
+    assert score == pytest.approx(0.75)

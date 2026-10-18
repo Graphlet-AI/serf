@@ -9,7 +9,7 @@ models:
   # in-flight calls never returned and the async gather they belonged to could
   # not finish. LiteLLM retries a timeout, so a bounded wait costs a retry
   # where an unbounded one costs the run.
-  request_timeout_seconds: 300
+  request_timeout_seconds: 90
 
   # The blocking embedding. It won `serf blocking-sweep` over the five Leipzig
   # benchmarks against every candidate that fits 3B parameters and 1024
@@ -44,7 +44,9 @@ models:
 
 optimize:
   auto: "light"
-  num_threads: 2
+  max_metric_calls: null
+  max_full_evals: null
+  num_threads: 8
   log_dir: "data/gepa_logs"
   seed: 42
   # Where `serf train` writes the program it trained and where the matcher looks
@@ -192,7 +194,7 @@ mlflow:
   port: 5001
   autolog:
     log_traces: true
-    log_traces_from_compile: true
+    log_traces_from_compile: false
     log_traces_from_eval: true
 
 benchmarks:

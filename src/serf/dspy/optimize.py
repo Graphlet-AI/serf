@@ -355,12 +355,15 @@ def optimize_module(
     student_model: str | None = None,
     teacher_model: str | None = None,
     auto: str | None = None,
+    max_metric_calls: int | None = None,
+    max_full_evals: int | None = None,
+    num_threads: int | None = None,
     log_dir: str | None = None,
 ) -> dspy.Module:
     """Optimize a DSPy module with GEPA using student and teacher LMs.
 
     The student LM (GPT OSS 120b by default) executes the task program.
-    The teacher LM (Gemini 3.8 Flash by default) is the GEPA ``reflection_lm``.
+    The teacher LM (Gemini 4 Argon by default) is the GEPA ``reflection_lm``.
 
     Parameters
     ----------
@@ -379,6 +382,12 @@ def optimize_module(
         Override for the teacher/reflection LM
     auto : str | None
         GEPA budget preset (``light``, ``medium``, ``heavy``)
+    max_metric_calls : int | None
+        Explicit cap on total GEPA metric calls (overrides ``auto``)
+    max_full_evals : int | None
+        Explicit cap on full validation passes (overrides ``auto``)
+    num_threads : int | None
+        Worker thread count for parallel GEPA rollouts
     log_dir : str | None
         Directory for GEPA checkpoints
 
@@ -391,16 +400,34 @@ def optimize_module(
     teacher_name = teacher_model or config.get("models.teacher")
     student_lm = create_lm(student_model, role="student")
     teacher_lm = create_lm(teacher_model, role="teacher", temperature=1.0)
-    auto_budget = cast(
-        Literal["light", "medium", "heavy"],
-        auto or config.get("optimize.auto", "light"),
+    cfg_metric_calls = config.get("optimize.max_metric_calls")
+    cfg_full_evals = config.get("optimize.max_full_evals")
+    resolved_metric_calls = (
+        max_metric_calls
+        if max_metric_calls is not None
+        else (int(cfg_metric_calls) if cfg_metric_calls is not None else None)
     )
+    resolved_full_evals = (
+        max_full_evals
+        if max_full_evals is not None
+        else (int(cfg_full_evals) if cfg_full_evals is not None else None)
+    )
+    auto_budget: Literal["light", "medium", "heavy"] | None = None
+    if resolved_metric_calls is None and resolved_full_evals is None:
+        auto_budget = cast(
+            Literal["light", "medium", "heavy"],
+            auto or config.get("optimize.auto", "light"),
+        )
     log_dir = log_dir or config.get("optimize.log_dir", "data/gepa_logs")
-    num_threads = int(config.get("optimize.num_threads", 4))
+    resolved_threads = (
+        num_threads if num_threads is not None else int(config.get("optimize.num_threads", 8))
+    )
 
     logger.info(
         f"GEPA optimize: student={student_name} teacher={teacher_name} "
-        f"auto={auto_budget} train={len(trainset)} val={len(valset) if valset else 0} "
+        f"auto={auto_budget} max_metric_calls={resolved_metric_calls} "
+        f"max_full_evals={resolved_full_evals} num_threads={resolved_threads} "
+        f"train={len(trainset)} val={len(valset) if valset else 0} "
         f"log_dir={log_dir}"
     )
     gepa_metric: GEPAFeedbackMetric = metric or er_metric
@@ -410,7 +437,9 @@ def optimize_module(
         metric=gepa_metric,
         reflection_lm=teacher_lm,
         auto=auto_budget,
-        num_threads=num_threads,
+        max_metric_calls=resolved_metric_calls,
+        max_full_evals=resolved_full_evals,
+        num_threads=resolved_threads,
         track_stats=True,
         log_dir=log_dir,
     )

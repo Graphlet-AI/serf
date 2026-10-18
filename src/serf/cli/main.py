@@ -1193,6 +1193,24 @@ def prompts(
     help="GEPA budget preset (from config.yml optimize.auto)",
 )
 @click.option(
+    "--max-metric-calls",
+    type=int,
+    default=None,
+    help="Explicit cap on total GEPA metric calls",
+)
+@click.option(
+    "--max-full-evals",
+    type=int,
+    default=None,
+    help="Explicit cap on full validation passes",
+)
+@click.option(
+    "--num-threads",
+    type=int,
+    default=None,
+    help="Worker threads for parallel rollouts",
+)
+@click.option(
     "--train-blocks",
     type=int,
     default=None,
@@ -1275,6 +1293,9 @@ def train(
     student_model: str | None,
     teacher_model: str | None,
     auto: str | None,
+    max_metric_calls: int | None,
+    max_full_evals: int | None,
+    num_threads: int | None,
     train_blocks: int | None,
     val_blocks: int | None,
     train_records: int | None,
@@ -1345,6 +1366,9 @@ def train(
             student_model=student_model,
             teacher_model=teacher_model,
             auto=auto,
+            max_metric_calls=max_metric_calls,
+            max_full_evals=max_full_evals,
+            num_threads=num_threads,
             log_dir=log_dir,
             output_dir=output_dir,
             data_dir=data_dir,

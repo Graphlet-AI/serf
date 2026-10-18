@@ -64,6 +64,7 @@ class VertexRefreshingLM(dspy.LM):
         refresh_margin_seconds: int = _DEFAULT_REFRESH_MARGIN_SECONDS,
         **kwargs: Any,
     ) -> None:
+        kwargs.setdefault("num_retries", 0)
         super().__init__(model, **kwargs)
         self.credentials = credentials
         self.refresh_margin_seconds = refresh_margin_seconds

@@ -199,6 +199,7 @@ def test_refreshing_lm_keeps_a_valid_token() -> None:
     """A token far from expiry is reused without a refresh call."""
     credentials = _fake_credentials("first-token", timedelta(hours=1))
     lm = _refreshing_lm(credentials)
+    assert lm.num_retries == 0
     with patch("serf.dspy.lm.Request"):
         lm.refresh_token_if_needed()
     credentials.refresh.assert_not_called()

@@ -9,7 +9,7 @@ models:
   # in-flight calls never returned and the async gather they belonged to could
   # not finish. LiteLLM retries a timeout, so a bounded wait costs a retry
   # where an unbounded one costs the run.
-  request_timeout_seconds: 300
+  request_timeout_seconds: 90
 
   # The blocking embedding. It won `serf blocking-sweep` over the five Leipzig
   # benchmarks against every candidate that fits 3B parameters and 1024
@@ -27,13 +27,13 @@ models:
   # sides get the same prefix. Leave empty for models trained without one.
   embedding_prompt: "Represent this sentence for searching relevant passages: "
   student: "openai/gpt-oss-120b-maas"
-  # Gemini 3.8 Flash is a thinking model: it spent 382 to 423 reasoning tokens
-  # to produce a four-word instruction rewrite in a live probe, and returned
-  # empty content when max_tokens was 64. models.max_tokens below is 65536, so
-  # there is room, but a teacher that silently returns nothing looks exactly
-  # like GEPA failing to propose a candidate, which is the failure this note
-  # exists to prevent anyone diagnosing twice.
-  teacher: "gemini/gemini-3.8-flash"
+  # Gemini 4 Argon (with medium reasoning effort) is the teacher/reflection model.
+  # Thinking models spend reasoning tokens before emitting instruction rewrites,
+  # and return empty content when max_tokens is too small. models.max_tokens
+  # below is 65536, so there is room, and teacher_reasoning_effort sets the
+  # thinking budget to "medium".
+  teacher: "gemini/gemini-4-argon"
+  teacher_reasoning_effort: "medium"
   llm: "${models.student}"
   analyze_llm: "${models.teacher}"
   temperature: 0.0
@@ -44,7 +44,9 @@ models:
 
 optimize:
   auto: "light"
-  num_threads: 2
+  max_metric_calls: null
+  max_full_evals: null
+  num_threads: 16
   log_dir: "data/gepa_logs"
   seed: 42
   # Where `serf train` writes the program it trained and where the matcher looks
@@ -191,9 +193,9 @@ mlflow:
   host: "127.0.0.1"
   port: 5001
   autolog:
-    log_traces: true
-    log_traces_from_compile: true
-    log_traces_from_eval: true
+    log_traces: false
+    log_traces_from_compile: false
+    log_traces_from_eval: false
 
 benchmarks:
   output_dir: "data/benchmarks"

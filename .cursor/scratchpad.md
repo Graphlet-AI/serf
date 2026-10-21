@@ -11,6 +11,7 @@ While general-purpose sentence transformers like `BAAI/bge-small-en-v1.5` provid
 ### Task: GEPA Prompt Optimization Given Improved Semantic Blocking
 
 Contrastive fine-tuning (`serf fine-tune all`) produced a unified embedding checkpoint (`data/models/fine-tuned-all-bge-small-contrastive`) that significantly improves blocking performance across all 5 benchmark datasets:
+
 - +4.99% overall holdout blocking recall lift (1,688 -> 1,782 recovered gold pairs).
 - Amazon-Google experienced a massive +23.58% recall jump (0.6705 -> 0.9062), recovering 83 previously unreachable gold pairs.
 - Downstream candidate pairs presented to the LLM matcher decreased by 13.1% overall (and by 28.2% on DBLP-ACM, 20.8% on DBLP-Scholar), demonstrating much tighter clusters.
@@ -236,23 +237,49 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Unit tests for blocking model/strategy in `tests/test_train.py` and `tests/test_cli.py`
 - [x] Vertex AI rate limit retry handler with exponential backoff and safe token refresh in `VertexRefreshingLM`
 - [x] Launch GEPA training on `amazon-google` and `dblp-acm` with improved blocking in tmux session `gepa-train`
-- [ ] Complete GEPA training with improved blocking model and record validation & holdout metrics in `experiments/gepa-tuning-results.md`
-- [ ] Final verification: linters, typecheck, tests, commit, push, update PR
+- [x] Configure teacher model to `gemini/gemini-4-argon` with `models.teacher_reasoning_effort: "medium"` in `config.yml` and `src/serf/dspy/lm.py`
+- [x] Complete GEPA training with improved blocking model and record validation & holdout metrics in `experiments/gepa-tuning-results.md`
+- [x] Final verification: linters, typecheck, tests, commit, push, update PR
 
 ## Executor's Feedback or Assistance Requests
 
 - **GEPA Prompt Optimization with Improved Contrastive Blocking**:
+
   - Wired `--blocking-model` and `--blocking-strategy` into `serf train` CLI and `train_dataset`.
   - Added `--blocking-model` to `serf benchmark` CLI.
   - Included blocking model and strategy in `run_log_dir` SHA-256 fingerprinting so training cache/logs never collide across different embedding or blocking setups.
   - Implemented exponential backoff retry in `VertexRefreshingLM` for Vertex AI MaaS 429 / ResourceExhausted rate limit errors with up to 6 retry attempts.
   - Strengthened `_is_auth_error` to catch `invalid_api_key` and litellm's client-level token sync.
-  - Tuned `optimize.num_threads: 2` in `config.yml` to prevent burst contention against Vertex quotas while maintaining parallel LM rollouts.
+  - Set `optimize.num_threads: 16` in `config.yml` (`src/serf/dspy/optimize.py`, `src/serf/dspy/train.py`) to run 16 concurrent I/O-bound LLM calls.
   - Fine-tuned `data/models/fine-tuned-dblp-acm-bge-small-contrastive` on `dblp-acm` (holdout blocking recall 0.9961, reducing matcher candidate comparisons by 29% from 26,735 to 18,969).
-  - Raised default `models.request_timeout_seconds` to 300s in `config.yml` and added exponential backoff retry for transport errors, timeouts, and rate limits in `VertexRefreshingLM`.
+  - Set `models.request_timeout_seconds: 90` in `config.yml` and added exponential backoff retry for transport errors, timeouts, and rate limits in `VertexRefreshingLM`.
   - Configured `dspy.settings.configure(max_errors=100)` in `optimize_module`.
-  - Running GEPA training on `dblp-acm` with the fine-tuned contrastive blocking model in tmux session `gepa-train` (PID 6559, logged to `/opt/cursor/artifacts/gepa_train_dblp_acm.log`).
-  - Created draft pull request #25 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
+  - Updated `models.teacher` to `"gemini/gemini-4-argon"` and added `models.teacher_reasoning_effort: "medium"` in `config.yml` and `src/serf/dspy/lm.py`.
+  - Parallelized `score_on_examples` in `src/serf/dspy/train.py` with `ThreadPoolExecutor` (`optimize.num_threads: 16`).
+  - Disabled `mlflow.autolog.log_traces_from_compile` in `config.yml` to eliminate SQLite trace-logging connection pool bottlenecks during multi-threaded GEPA compilation.
+  - Completed GEPA training on `dblp-acm` with the fine-tuned contrastive blocking model (`data/models/fine-tuned-dblp-acm-bge-small-contrastive`), student `openai/gpt-oss-120b-maas`, and teacher `gemini/gemini-4-argon` (`medium` reasoning effort):
+    - Validation F1 improved from **0.9842** (Candidate 0) to **0.9915** (Candidate 2, +0.0073, Pareto frontier **0.9955**, 33 of 35 validation blocks at 1.0000).
+    - Holdout F1 (36 blocks, 1,100 held-out records): `serf train` end-to-end holdout evaluation improved from **0.9803** (Candidate 0) to **0.9849** (Candidate 2, **+0.0046**); a second independent pass scored **0.9836** vs **0.9789** (-0.0048, within ~0.01 LLM run-to-run variance; both prompts scored 1.0000 on 30 of 36 holdout blocks).
+    - Saved winning program to `data/trained_prompts/dblp-acm_gepa.json` and recorded results in `experiments/gepa-tuning-results.md`.
+  - Completed GEPA training on `abt-buy` (`data/models/fine-tuned-abt-buy-bge-small-contrastive`, 22 train / 25 val / 25 holdout examples):
+    - Validation F1 improved from **0.8791** (Candidate 0) to **0.9761** (Candidate 2, **+0.0970**, Pareto frontier **0.9891**).
+    - Disjoint holdout F1 improved from **0.9152** to **0.9517** (**+0.0365**).
+    - Saved winning program to `data/trained_prompts/abt-buy_gepa.json`.
+  - Completed GEPA training on `amazon-google` (`data/models/fine-tuned-amazon-google-bge-small-contrastive`, 66 train / 35 val / 35 holdout examples):
+    - Validation F1 improved from **0.8253** (Candidate 0) to **0.9236** (Candidate 3, **+0.0983**, Pareto frontier **0.9290**).
+    - Disjoint holdout F1 improved from **0.8213** to **0.8982** (**+0.0769**).
+    - Saved winning program to `data/trained_prompts/amazon-google_gepa.json`.
+  - Completed GEPA training on `walmart-amazon` (`data/models/fine-tuned-walmart-amazon-bge-small-contrastive`, 140 train / 35 val / 42 holdout examples):
+    - Validation F1 improved from **0.8745** (Candidate 0) to **0.9471** (Candidate 2, **+0.0726**, Pareto frontier **0.9709**).
+    - Disjoint holdout F1 improved from **0.8785** to **0.9533** (**+0.0748**).
+    - Saved winning program to `data/trained_prompts/walmart-amazon_gepa.json`.
+  - Completed GEPA training on `dblp-scholar` (`data/models/fine-tuned-dblp-scholar-bge-small-contrastive`, 119 train / 35 val / 44 holdout examples):
+    - Validation F1 improved from **0.6016** (Candidate 0) to **0.9685** (Candidate 1, **+0.3669**, Pareto frontier **0.9807**).
+    - Disjoint holdout F1 improved from **0.6661** to **0.9577** (**+0.2916**).
+    - Saved winning program to `data/trained_prompts/dblp-scholar_gepa.json`.
+  - Set `kwargs.setdefault("num_retries", 0)` in `VertexRefreshingLM.__init__` (`src/serf/dspy/lm.py`) so `dspy.LM`'s inner retry loop does not multiply `VertexRefreshingLM.forward`'s outer retry loop (`4 * 7 = 28` attempts).
+  - Disabled `mlflow.autolog.log_traces` and `mlflow.autolog.log_traces_from_eval` in `config.yml` so `serf train` exits immediately after holdout evaluation without hanging in MLflow's `atexit` trace exporter.
+  - Opened pull request #27 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
 
 - **Research & Architecture Documentation Port from PR #19**:
 
@@ -633,3 +660,11 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   PairClassification at 89.9 and raises `Cannot use chat template functions because
 tokenizer.chat_template is not set`, because it is an LLM-based embedder. Load-test a candidate
   before planning a sweep around it.
+- **`/cursor/stores/self/` is a FUSE mount without `mmap` support.** `safetensors` (`model.safetensors`)
+  and `diskcache` (SQLite WAL in `.dspy_cache`) both call `mmap` and fail with `OSError: [Errno 22]
+Invalid argument` if pointed at `/cursor/stores/self/`. Keep `data/models` and `~/.dspy_cache` on
+  local container disk, and symlink only JSON/pickle directories (`data/gepa_logs`,
+  `data/trained_prompts`, `data/benchmarks`) to the persistent store.
+- **GEPA's rollout bar updates per batch, not per block.** `dspy.GEPA` stays at `0/520` until all
+  35 validation blocks finish. Read `len(dspy.cache.disk_cache)` to observe block-by-block student
+  completions during a batch.

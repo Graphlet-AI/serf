@@ -25,6 +25,7 @@ without anyone editing a docstring.
 import hashlib
 import random
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -518,6 +519,7 @@ def score_on_examples(
     examples: list[dspy.Example],
     metric: Callable[..., ScoreWithFeedback],
     student_model: str | None = None,
+    num_threads: int | None = None,
 ) -> float | None:
     """Average the metric over examples, running the program on each.
 
@@ -538,6 +540,8 @@ def score_on_examples(
         Scoring function
     student_model : str | None
         Task LM. Defaults to config ``models.student``.
+    num_threads : int | None
+        Worker thread count. Defaults to config ``optimize.num_threads``.
 
     Returns
     -------
@@ -547,17 +551,28 @@ def score_on_examples(
     if not examples:
         return None
     lm = create_lm(student_model, role="student")
-    total = 0.0
-    failures = 0
-    with dspy.context(lm=lm, adapter=RepairingXMLAdapter()):
-        for example in examples:
+    resolved_threads = max(
+        1,
+        num_threads if num_threads is not None else int(config.get("optimize.num_threads", 16)),
+    )
+
+    def _score_one(example: dspy.Example) -> tuple[float, bool]:
+        with dspy.context(lm=lm, adapter=RepairingXMLAdapter()):
             try:
                 prediction = program(**example.inputs())
             except Exception as error:
-                failures += 1
                 logger.warning(f"Holdout block failed and scores zero: {error}")
-                continue
-            total += float(metric(example, prediction).score)
+                return 0.0, True
+            return float(metric(example, prediction).score), False
+
+    if resolved_threads == 1 or len(examples) == 1:
+        outcomes = [_score_one(example) for example in examples]
+    else:
+        with ThreadPoolExecutor(max_workers=min(resolved_threads, len(examples))) as pool:
+            outcomes = list(pool.map(_score_one, examples))
+
+    total = sum(score for score, _ in outcomes)
+    failures = sum(1 for _, failed in outcomes if failed)
     if failures:
         logger.warning(f"{failures} of {len(examples)} holdout blocks failed their call")
     return total / len(examples)
@@ -573,6 +588,9 @@ def train_dataset(
     student_model: str | None = None,
     teacher_model: str | None = None,
     auto: str | None = None,
+    max_metric_calls: int | None = None,
+    max_full_evals: int | None = None,
+    num_threads: int | None = None,
     log_dir: str | None = None,
     output_dir: str | None = None,
     data_dir: str | None = None,
@@ -606,6 +624,14 @@ def train_dataset(
         Reflection LM. Defaults to config ``models.teacher``.
     auto : str | None
         GEPA budget preset. Defaults to config ``optimize.auto``.
+    max_metric_calls : int | None
+        Explicit cap on total GEPA metric calls. Defaults to config
+        ``optimize.max_metric_calls``.
+    max_full_evals : int | None
+        Explicit cap on full validation passes. Defaults to config
+        ``optimize.max_full_evals``.
+    num_threads : int | None
+        Worker thread count. Defaults to config ``optimize.num_threads``.
     log_dir : str | None
         GEPA checkpoint directory. Defaults to config ``optimize.log_dir``.
     output_dir : str | None
@@ -701,6 +727,9 @@ def train_dataset(
         student_model=student_model,
         teacher_model=teacher_model,
         auto=auto,
+        max_metric_calls=max_metric_calls,
+        max_full_evals=max_full_evals,
+        num_threads=num_threads,
         log_dir=log_dir
         or run_log_dir(
             dataset,
@@ -726,8 +755,12 @@ def train_dataset(
             f"Scoring {dataset} on {len(splits.holdout_records)} held-out records in "
             f"{len(holdout_all)} blocks ({len(holdoutset)} usable examples), which GEPA never saw"
         )
-        holdout_baseline = score_on_examples(module, holdoutset, metric, student_model)
-        holdout_best = score_on_examples(optimized, holdoutset, metric, student_model)
+        holdout_baseline = score_on_examples(
+            module, holdoutset, metric, student_model, num_threads=num_threads
+        )
+        holdout_best = score_on_examples(
+            optimized, holdoutset, metric, student_model, num_threads=num_threads
+        )
         logger.info(f"Holdout {dataset}: baseline={holdout_baseline} trained={holdout_best}")
     elif score_holdout:
         logger.warning(

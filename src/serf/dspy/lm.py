@@ -64,6 +64,7 @@ class VertexRefreshingLM(dspy.LM):
         refresh_margin_seconds: int = _DEFAULT_REFRESH_MARGIN_SECONDS,
         **kwargs: Any,
     ) -> None:
+        kwargs.setdefault("num_retries", 0)
         super().__init__(model, **kwargs)
         self.credentials = credentials
         self.refresh_margin_seconds = refresh_margin_seconds
@@ -346,7 +347,17 @@ def create_lm(
     logger.info(f"Creating {role} LM: {model}")
     if is_vertex_maas_model(model):
         return _create_vertex_maas_lm(model, temperature=temperature, max_tokens=max_tokens)
-    return _create_gemini_lm(model, temperature=temperature, max_tokens=max_tokens)
+    reasoning_effort: str | None = None
+    if role == "teacher":
+        configured_effort = config.get("models.teacher_reasoning_effort")
+        if configured_effort:
+            reasoning_effort = str(configured_effort)
+    return _create_gemini_lm(
+        model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        reasoning_effort=reasoning_effort,
+    )
 
 
 def _parse_service_account_info(raw: str) -> dict[str, Any]:
@@ -509,17 +520,25 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
     return lm
 
 
-def _create_gemini_lm(model: str, *, temperature: float, max_tokens: int) -> dspy.LM:
+def _create_gemini_lm(
+    model: str,
+    *,
+    temperature: float,
+    max_tokens: int,
+    reasoning_effort: str | None = None,
+) -> dspy.LM:
     """Create a DSPy LM for the Gemini Developer API.
 
     Parameters
     ----------
     model : str
-        Gemini model identifier (e.g. ``gemini/gemini-3.8-flash``)
+        Gemini model identifier (e.g. ``gemini/gemini-4-argon``)
     temperature : float
         Sampling temperature
     max_tokens : int
         Max output tokens
+    reasoning_effort : str | None
+        Optional reasoning effort level (e.g. ``low``, ``medium``, ``high``)
 
     Returns
     -------
@@ -534,10 +553,14 @@ def _create_gemini_lm(model: str, *, temperature: float, max_tokens: int) -> dsp
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable required")
+    extra_kwargs: dict[str, Any] = {}
+    if reasoning_effort is not None:
+        extra_kwargs["reasoning_effort"] = reasoning_effort
     return dspy.LM(
         model,
         api_key=api_key,
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=request_timeout(),
+        **extra_kwargs,
     )

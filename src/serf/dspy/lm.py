@@ -259,6 +259,25 @@ def is_vertex_maas_model(model: str) -> bool:
     return "gpt-oss" in model.lower()
 
 
+def is_openai_model(model: str) -> bool:
+    """Return whether a model identifier uses the OpenAI API directly.
+
+    Parameters
+    ----------
+    model : str
+        DSPy/LiteLLM model identifier
+
+    Returns
+    -------
+    bool
+        True when the model targets the OpenAI API (and is not a Vertex AI MaaS model)
+    """
+    lowered = model.lower()
+    if is_vertex_maas_model(lowered):
+        return False
+    return lowered.startswith("openai/") or lowered.startswith("gpt-")
+
+
 def vertex_access_token() -> str:
     """Return a Vertex AI access token from VERTEX_AI_TOKEN.
 
@@ -352,6 +371,13 @@ def create_lm(
         configured_effort = config.get("models.teacher_reasoning_effort")
         if configured_effort:
             reasoning_effort = str(configured_effort)
+    if is_openai_model(model):
+        return _create_openai_lm(
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        )
     return _create_gemini_lm(
         model,
         temperature=temperature,
@@ -518,6 +544,52 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
     )
     lm.refresh_token_if_needed()
     return lm
+
+
+def _create_openai_lm(
+    model: str,
+    *,
+    temperature: float,
+    max_tokens: int,
+    reasoning_effort: str | None = None,
+) -> dspy.LM:
+    """Create a DSPy LM for the OpenAI API.
+
+    Parameters
+    ----------
+    model : str
+        OpenAI model identifier (e.g. ``openai/gpt-6-luna``)
+    temperature : float
+        Sampling temperature
+    max_tokens : int
+        Max output tokens
+    reasoning_effort : str | None
+        Optional reasoning effort level (e.g. ``none``, ``low``, ``medium``, ``high``)
+
+    Returns
+    -------
+    dspy.LM
+        LM configured for the OpenAI API
+
+    Raises
+    ------
+    ValueError
+        If OPENAI_API_KEY is not set
+    """
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise ValueError("OPENAI_API_KEY environment variable required")
+    extra_kwargs: dict[str, Any] = {"drop_params": True}
+    if reasoning_effort is not None:
+        extra_kwargs["reasoning_effort"] = reasoning_effort
+    return dspy.LM(
+        model,
+        api_key=api_key,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=request_timeout(),
+        **extra_kwargs,
+    )
 
 
 def _create_gemini_lm(

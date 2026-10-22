@@ -176,12 +176,15 @@ uv sync --extra dev
 Set your LLM credentials in a `.env` file or export them in your shell:
 
 ```bash
-# Vertex AI / Google Cloud
+# OpenAI API (for GPT 6 Luna student model)
+export OPENAI_API_KEY="your-openai-api-key"
+
+# Gemini API (for Gemini 4 Argon teacher/reflection model)
+export GEMINI_API_KEY="your-gemini-api-key"
+
+# Vertex AI / Google Cloud (optional, for Vertex AI MaaS models such as gpt-oss-120b-maas)
 export GOOGLE_CLOUD_PROJECT="your-gcp-project"
 export VERTEX_AI_TOKEN="your-vertex-token"
-
-# Or Gemini API
-export GEMINI_API_KEY="your-gemini-api-key"
 ```
 
 ### Quick Python Example
@@ -256,7 +259,7 @@ serf profile-benchmark --dataset abt-buy --output data/abt_buy_profile.md
 
 ### 3. Prompt Optimization with DSPy GEPA
 
-SERF uses GEPA to iteratively optimize DSPy matching signatures, using a student LM (`openai/gpt-oss-120b-maas`) guided by a reflection teacher LM (`gemini/gemini-4-argon` at `medium` reasoning effort):
+SERF uses GEPA to iteratively optimize DSPy matching signatures, using a student LM (`openai/gpt-6-luna`) guided by a reflection teacher LM (`gemini/gemini-4-argon` at `medium` reasoning effort):
 
 ```bash
 # Inspect generated DSPy signatures and rendered prompts
@@ -369,7 +372,7 @@ All configuration is centralized in `config.yml` and accessed through `serf.conf
 
 ```yaml
 models:
-  student: "openai/gpt-oss-120b-maas" # Fast open-weight task model
+  student: "openai/gpt-6-luna" # Task / matching model
   teacher: "gemini/gemini-4-argon" # Reflection model for GEPA
   teacher_reasoning_effort: "medium"
   llm: "${models.student}"

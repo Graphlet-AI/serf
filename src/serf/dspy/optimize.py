@@ -362,7 +362,7 @@ def optimize_module(
 ) -> dspy.Module:
     """Optimize a DSPy module with GEPA using student and teacher LMs.
 
-    The student LM (GPT OSS 120b by default) executes the task program.
+    The student LM (GPT 6 Luna by default) executes the task program.
     The teacher LM (Gemini 4 Argon by default) is the GEPA ``reflection_lm``.
 
     Parameters

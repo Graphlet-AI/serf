@@ -26,7 +26,7 @@ models:
   # and lose accuracy without it. Blocking is a symmetric similarity task, so both
   # sides get the same prefix. Leave empty for models trained without one.
   embedding_prompt: "Represent this sentence for searching relevant passages: "
-  student: "openai/gpt-oss-120b-maas"
+  student: "openai/gpt-6-luna"
   # Gemini 4 Argon (with medium reasoning effort) is the teacher/reflection model.
   # Thinking models spend reasoning tokens before emitting instruction rewrites,
   # and return empty content when max_tokens is too small. models.max_tokens

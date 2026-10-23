@@ -244,7 +244,7 @@ class VertexRefreshingLM(dspy.LM):
 
 
 def is_vertex_maas_model(model: str) -> bool:
-    """Return whether a model identifier is a Vertex AI MaaS GPT-OSS endpoint.
+    """Return whether a model identifier explicitly targets a Vertex AI MaaS endpoint.
 
     Parameters
     ----------
@@ -254,9 +254,29 @@ def is_vertex_maas_model(model: str) -> bool:
     Returns
     -------
     bool
-        True when the model is served via Vertex AI MaaS (gpt-oss)
+        True when the model explicitly targets Vertex AI MaaS (``gpt-oss`` or ``-maas``)
     """
-    return "gpt-oss" in model.lower()
+    lowered = model.lower()
+    return "gpt-oss" in lowered or lowered.endswith("-maas") or lowered.startswith("vertex_ai/")
+
+
+def is_openai_model(model: str) -> bool:
+    """Return whether a model identifier is an OpenAI model (direct API or Vertex MaaS).
+
+    Parameters
+    ----------
+    model : str
+        DSPy/LiteLLM model identifier
+
+    Returns
+    -------
+    bool
+        True when the model is an OpenAI model not explicitly suffixed with ``-maas``
+    """
+    lowered = model.lower()
+    if is_vertex_maas_model(lowered):
+        return False
+    return lowered.startswith("openai/") or lowered.startswith("gpt-")
 
 
 def vertex_access_token() -> str:
@@ -352,6 +372,13 @@ def create_lm(
         configured_effort = config.get("models.teacher_reasoning_effort")
         if configured_effort:
             reasoning_effort = str(configured_effort)
+    if is_openai_model(model):
+        return _create_openai_lm(
+            model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            reasoning_effort=reasoning_effort,
+        )
     return _create_gemini_lm(
         model,
         temperature=temperature,
@@ -499,6 +526,7 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=request_timeout(),
+            drop_params=True,
         )
 
     credentials = service_account.Credentials.from_service_account_info(
@@ -515,9 +543,64 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=request_timeout(),
+        drop_params=True,
     )
     lm.refresh_token_if_needed()
     return lm
+
+
+def _create_openai_lm(
+    model: str,
+    *,
+    temperature: float,
+    max_tokens: int,
+    reasoning_effort: str | None = None,
+) -> dspy.LM:
+    """Create a DSPy LM for an OpenAI model via OpenAI API or Vertex AI MaaS.
+
+    Uses ``OPENAI_API_KEY`` against the OpenAI API when present; falls back to
+    ``VERTEX_AI_TOKEN`` against Vertex AI's OpenAI-compatible MaaS endpoint when
+    ``OPENAI_API_KEY`` is unset.
+
+    Parameters
+    ----------
+    model : str
+        OpenAI model identifier (e.g. ``openai/gpt-6-luna``)
+    temperature : float
+        Sampling temperature
+    max_tokens : int
+        Max output tokens
+    reasoning_effort : str | None
+        Optional reasoning effort level (e.g. ``none``, ``low``, ``medium``, ``high``)
+
+    Returns
+    -------
+    dspy.LM
+        LM configured for OpenAI API or Vertex AI MaaS
+
+    Raises
+    ------
+    ValueError
+        If neither OPENAI_API_KEY nor VERTEX_AI_TOKEN is set
+    """
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
+    if not api_key:
+        if os.environ.get("VERTEX_AI_TOKEN", "").strip():
+            return _create_vertex_maas_lm(model, temperature=temperature, max_tokens=max_tokens)
+        raise ValueError(
+            "OPENAI_API_KEY (or VERTEX_AI_TOKEN for Vertex AI MaaS) environment variable required"
+        )
+    extra_kwargs: dict[str, Any] = {"drop_params": True}
+    if reasoning_effort is not None:
+        extra_kwargs["reasoning_effort"] = reasoning_effort
+    return dspy.LM(
+        model,
+        api_key=api_key,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=request_timeout(),
+        **extra_kwargs,
+    )
 
 
 def _create_gemini_lm(

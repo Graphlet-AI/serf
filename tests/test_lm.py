@@ -14,14 +14,15 @@ from serf.config import config
 from serf.dspy.lm import (
     VertexRefreshingLM,
     create_lm,
+    is_openai_model,
     is_vertex_maas_model,
     vertex_access_token,
 )
 
 
-def test_config_student_is_gpt_oss_120b() -> None:
-    """Student/task LM is GPT OSS 120b on Vertex AI MaaS."""
-    assert "gpt-oss-120b" in config.get("models.student")
+def test_config_student_is_gpt_6_luna() -> None:
+    """Student/task LM is GPT 6 Luna."""
+    assert config.get("models.student") == "openai/gpt-6-luna"
     assert config.get("models.llm") == config.get("models.student")
 
 
@@ -33,10 +34,19 @@ def test_config_teacher_is_gemini_35_flash_lite() -> None:
 
 
 def test_is_vertex_maas_model() -> None:
-    """GPT OSS MaaS models route through Vertex; Gemini does not."""
+    """GPT OSS MaaS models route through Vertex; OpenAI and Gemini do not."""
     assert is_vertex_maas_model("openai/gpt-oss-120b-maas") is True
     assert is_vertex_maas_model("gpt-oss-120b-maas") is True
+    assert is_vertex_maas_model("openai/gpt-6-luna") is False
     assert is_vertex_maas_model("gemini/gemini-4-argon") is False
+
+
+def test_is_openai_model() -> None:
+    """Direct OpenAI models route through OpenAI; Vertex MaaS and Gemini do not."""
+    assert is_openai_model("openai/gpt-6-luna") is True
+    assert is_openai_model("gpt-6-luna") is True
+    assert is_openai_model("openai/gpt-oss-120b-maas") is False
+    assert is_openai_model("gemini/gemini-4-argon") is False
 
 
 def test_vertex_access_token_accepts_raw_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -120,14 +130,59 @@ def test_vertex_access_token_missing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @patch("serf.dspy.lm.dspy.LM")
+def test_create_lm_student_uses_openai(mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Student LM uses GPT 6 Luna with OPENAI_API_KEY."""
+    monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
+    create_lm(role="student")
+
+    model = mock_lm.call_args.args[0]
+    kwargs = mock_lm.call_args.kwargs
+    assert model == "openai/gpt-6-luna"
+    assert kwargs["api_key"] == "openai-key"
+    assert kwargs["temperature"] == 0.0
+    assert kwargs["drop_params"] is True
+    assert "api_base" not in kwargs
+
+
+@patch("serf.dspy.lm.dspy.LM")
+def test_create_lm_openai_requires_key(mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
+    """OpenAI models fail fast when neither OPENAI_API_KEY nor VERTEX_AI_TOKEN is set."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("VERTEX_AI_TOKEN", raising=False)
+    with pytest.raises(ValueError, match="OPENAI_API_KEY"):
+        create_lm(model="openai/gpt-6-luna")
+    mock_lm.assert_not_called()
+
+
+@patch("serf.dspy.lm.dspy.LM")
 @patch("serf.dspy.lm.vertex_access_token", return_value="vertex-token")
-def test_create_lm_student_uses_vertex(
+def test_create_lm_openai_falls_back_to_vertex_when_openai_key_unset(
     mock_token: MagicMock, mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Student LM uses GPT OSS 120b via the Vertex OpenAI-compatible endpoint."""
+    """When OPENAI_API_KEY is unset and VERTEX_AI_TOKEN is set, OpenAI models route via Vertex MaaS."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("VERTEX_AI_TOKEN", "ya29.fake-access-token")
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0349392143")
     create_lm(role="student")
+
+    mock_token.assert_called_once()
+    model = mock_lm.call_args.args[0]
+    kwargs = mock_lm.call_args.kwargs
+    assert model == "openai/openai/gpt-6-luna"
+    assert kwargs["api_key"] == "vertex-token"
+    assert "aiplatform.googleapis.com" in kwargs["api_base"]
+    assert kwargs["drop_params"] is True
+
+
+@patch("serf.dspy.lm.dspy.LM")
+@patch("serf.dspy.lm.vertex_access_token", return_value="vertex-token")
+def test_create_lm_vertex_maas_uses_vertex(
+    mock_token: MagicMock, mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Vertex MaaS LM uses GPT OSS 120b via the Vertex OpenAI-compatible endpoint."""
+    monkeypatch.setenv("VERTEX_AI_TOKEN", "ya29.fake-access-token")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0349392143")
+    create_lm(model="openai/gpt-oss-120b-maas", role="student")
 
     mock_token.assert_called_once()
     model = mock_lm.call_args.args[0]
@@ -361,7 +416,7 @@ def test_refreshing_lm_retries_on_timeout_transport_error() -> None:
     mock_sleep.assert_called_once()
 
 
-def test_create_lm_student_uses_refreshing_lm_for_service_account(
+def test_create_lm_vertex_maas_uses_refreshing_lm_for_service_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A service-account VERTEX_AI_TOKEN yields an LM that can refresh itself."""
@@ -384,7 +439,7 @@ def test_create_lm_student_uses_refreshing_lm_for_service_account(
         patch("serf.dspy.lm.Request"),
     ):
         mock_cls.from_service_account_info.return_value = credentials
-        lm = create_lm(role="student")
+        lm = create_lm(model="openai/gpt-oss-120b-maas", role="student")
 
     assert isinstance(lm, VertexRefreshingLM)
     assert lm.credentials is credentials
@@ -393,11 +448,13 @@ def test_create_lm_student_uses_refreshing_lm_for_service_account(
     assert "test-project" in lm.kwargs["api_base"]
 
 
-def test_create_lm_student_raw_token_is_not_refreshable(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_create_lm_vertex_maas_raw_token_is_not_refreshable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A raw ya29. bearer token is used as-is and cannot be refreshed."""
     monkeypatch.setenv("VERTEX_AI_TOKEN", "ya29.fake-access-token")
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "test-project")
-    lm = create_lm(role="student")
+    lm = create_lm(model="openai/gpt-oss-120b-maas", role="student")
     assert not isinstance(lm, VertexRefreshingLM)
     assert lm.kwargs["api_key"] == "ya29.fake-access-token"
 
@@ -424,9 +481,11 @@ def test_every_lm_carries_the_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(lm_module.dspy, "LM", _Recorder)
     monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("OPENAI_API_KEY", "test-openai-key")
     lm_module._create_gemini_lm("gemini/gemini-3.8-flash", temperature=0.0, max_tokens=64)
+    lm_module._create_openai_lm("openai/gpt-6-luna", temperature=0.0, max_tokens=64)
 
-    assert captured, "no LM was constructed"
+    assert len(captured) == 2, "expected both Gemini and OpenAI LMs to be constructed"
     expected_timeout = int(config.get("models.request_timeout_seconds"))
     assert all(kwargs.get("timeout") == expected_timeout for kwargs in captured)
 

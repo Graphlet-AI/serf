@@ -457,6 +457,7 @@ def run_log_dir(
     sizes: SplitSizes | None = None,
     blocking_model: str | None = None,
     blocking_strategy: str | None = None,
+    student_model: str | None = None,
 ) -> str:
     """Return a GEPA state directory unique to this dataset, prompt and splits.
 
@@ -472,11 +473,11 @@ def run_log_dir(
     useful half: an interrupted run of the same prompt resumes, and a changed
     prompt starts clean.
 
-    The split sizes and blocking configuration are in the fingerprint too,
-    because resumable state holds candidate programs *and* their per-example
-    validation scores. Resuming onto a different valset or different blocks
-    would carry scores for examples the new run does not have, so state is only
-    reusable when the prompt and the data are both unchanged.
+    The split sizes, blocking configuration, and student model are in the
+    fingerprint too, because resumable state holds candidate programs *and*
+    their per-example validation scores. Resuming onto a different valset,
+    different blocks, or a different student model would carry scores for
+    examples or models the new run does not have.
 
     Parameters
     ----------
@@ -493,22 +494,26 @@ def run_log_dir(
         Embedding model name. Defaults to config ``models.embedding``.
     blocking_strategy : str | None
         Blocking strategy. Defaults to config ``er.blocking.strategy``.
+    student_model : str | None
+        Student LM identifier. Defaults to config ``models.student``.
 
     Returns
     -------
     str
         Path under the root, namespaced by dataset and a fingerprint of the
-        instructions, split sizes, and blocking configuration
+        instructions, split sizes, blocking configuration, and student model
     """
     root = log_dir or str(config.get("optimize.log_dir", "data/gepa_logs"))
     sizes = sizes or get_split_sizes(dataset)
     b_model = blocking_model or str(config.get("models.embedding"))
     b_strat = blocking_strategy or str(config.get("er.blocking.strategy", "name"))
+    s_model = student_model or str(config.get("models.student"))
     identity = (
         f"{instructions}\n"
         f"{sizes.train_records}/{sizes.val_records}/{sizes.holdout_records}\n"
         f"{b_model}\n"
-        f"{b_strat}"
+        f"{b_strat}\n"
+        f"{s_model}"
     )
     fingerprint = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:12]
     return str(Path(root) / dataset / fingerprint)
@@ -737,6 +742,7 @@ def train_dataset(
             sizes=sizes,
             blocking_model=b_model,
             blocking_strategy=b_strategy,
+            student_model=student_model,
         ),
     )
 

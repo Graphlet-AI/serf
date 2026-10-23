@@ -26,8 +26,8 @@ from serf.match.matcher import EntityMatcher
 logger = get_logger(__name__)
 
 pytestmark = pytest.mark.skipif(
-    not os.environ.get("GEMINI_API_KEY"),
-    reason="GEMINI_API_KEY not set",
+    not os.environ.get("GEMINI_API_KEY") or not os.environ.get("OPENAI_API_KEY"),
+    reason="GEMINI_API_KEY and OPENAI_API_KEY required for live benchmark comparison",
 )
 
 # Use a small subset for speed — 50 entities from each table

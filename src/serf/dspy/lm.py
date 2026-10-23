@@ -244,7 +244,7 @@ class VertexRefreshingLM(dspy.LM):
 
 
 def is_vertex_maas_model(model: str) -> bool:
-    """Return whether a model identifier is a Vertex AI MaaS GPT-OSS endpoint.
+    """Return whether a model identifier explicitly targets a Vertex AI MaaS endpoint.
 
     Parameters
     ----------
@@ -254,13 +254,14 @@ def is_vertex_maas_model(model: str) -> bool:
     Returns
     -------
     bool
-        True when the model is served via Vertex AI MaaS (gpt-oss)
+        True when the model explicitly targets Vertex AI MaaS (``gpt-oss`` or ``-maas``)
     """
-    return "gpt-oss" in model.lower()
+    lowered = model.lower()
+    return "gpt-oss" in lowered or lowered.endswith("-maas") or lowered.startswith("vertex_ai/")
 
 
 def is_openai_model(model: str) -> bool:
-    """Return whether a model identifier uses the OpenAI API directly.
+    """Return whether a model identifier is an OpenAI model (direct API or Vertex MaaS).
 
     Parameters
     ----------
@@ -270,7 +271,7 @@ def is_openai_model(model: str) -> bool:
     Returns
     -------
     bool
-        True when the model targets the OpenAI API (and is not a Vertex AI MaaS model)
+        True when the model is an OpenAI model not explicitly suffixed with ``-maas``
     """
     lowered = model.lower()
     if is_vertex_maas_model(lowered):
@@ -525,6 +526,7 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
             temperature=temperature,
             max_tokens=max_tokens,
             timeout=request_timeout(),
+            drop_params=True,
         )
 
     credentials = service_account.Credentials.from_service_account_info(
@@ -541,6 +543,7 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
         temperature=temperature,
         max_tokens=max_tokens,
         timeout=request_timeout(),
+        drop_params=True,
     )
     lm.refresh_token_if_needed()
     return lm
@@ -553,7 +556,11 @@ def _create_openai_lm(
     max_tokens: int,
     reasoning_effort: str | None = None,
 ) -> dspy.LM:
-    """Create a DSPy LM for the OpenAI API.
+    """Create a DSPy LM for an OpenAI model via OpenAI API or Vertex AI MaaS.
+
+    Uses ``OPENAI_API_KEY`` against the OpenAI API when present; falls back to
+    ``VERTEX_AI_TOKEN`` against Vertex AI's OpenAI-compatible MaaS endpoint when
+    ``OPENAI_API_KEY`` is unset.
 
     Parameters
     ----------
@@ -569,16 +576,20 @@ def _create_openai_lm(
     Returns
     -------
     dspy.LM
-        LM configured for the OpenAI API
+        LM configured for OpenAI API or Vertex AI MaaS
 
     Raises
     ------
     ValueError
-        If OPENAI_API_KEY is not set
+        If neither OPENAI_API_KEY nor VERTEX_AI_TOKEN is set
     """
-    api_key = os.environ.get("OPENAI_API_KEY")
+    api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
-        raise ValueError("OPENAI_API_KEY environment variable required")
+        if os.environ.get("VERTEX_AI_TOKEN", "").strip():
+            return _create_vertex_maas_lm(model, temperature=temperature, max_tokens=max_tokens)
+        raise ValueError(
+            "OPENAI_API_KEY (or VERTEX_AI_TOKEN for Vertex AI MaaS) environment variable required"
+        )
     extra_kwargs: dict[str, Any] = {"drop_params": True}
     if reasoning_effort is not None:
         extra_kwargs["reasoning_effort"] = reasoning_effort

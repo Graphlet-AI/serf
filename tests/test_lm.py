@@ -146,11 +146,32 @@ def test_create_lm_student_uses_openai(mock_lm: MagicMock, monkeypatch: pytest.M
 
 @patch("serf.dspy.lm.dspy.LM")
 def test_create_lm_openai_requires_key(mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    """OpenAI models fail fast without OPENAI_API_KEY."""
+    """OpenAI models fail fast when neither OPENAI_API_KEY nor VERTEX_AI_TOKEN is set."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("VERTEX_AI_TOKEN", raising=False)
     with pytest.raises(ValueError, match="OPENAI_API_KEY"):
         create_lm(model="openai/gpt-6-luna")
     mock_lm.assert_not_called()
+
+
+@patch("serf.dspy.lm.dspy.LM")
+@patch("serf.dspy.lm.vertex_access_token", return_value="vertex-token")
+def test_create_lm_openai_falls_back_to_vertex_when_openai_key_unset(
+    mock_token: MagicMock, mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When OPENAI_API_KEY is unset and VERTEX_AI_TOKEN is set, OpenAI models route via Vertex MaaS."""
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("VERTEX_AI_TOKEN", "ya29.fake-access-token")
+    monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0349392143")
+    create_lm(role="student")
+
+    mock_token.assert_called_once()
+    model = mock_lm.call_args.args[0]
+    kwargs = mock_lm.call_args.kwargs
+    assert model == "openai/openai/gpt-6-luna"
+    assert kwargs["api_key"] == "vertex-token"
+    assert "aiplatform.googleapis.com" in kwargs["api_base"]
+    assert kwargs["drop_params"] is True
 
 
 @patch("serf.dspy.lm.dspy.LM")

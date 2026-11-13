@@ -202,8 +202,8 @@ def run(
     (DSPy BlockMatch). Runs iterative rounds until convergence.
     Writes resolved entities as Parquet and CSV.
 
-    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.8 Flash (teacher/analyze).
+    Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
+    for Gemini 4 Argon (teacher/analyze).
     """
     from serf.pipeline import ERConfig, run_pipeline
 
@@ -1823,8 +1823,8 @@ def benchmark(
     """Run ER pipeline against a benchmark dataset and evaluate.
 
     Uses embeddings for blocking and LLM for matching.
-    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.8 Flash (teacher/analyze).
+    Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
+    for Gemini 4 Argon (teacher/analyze).
 
     With --signature-mode per-dataset the block is matched with the typed DSPy
     signature written for this dataset instead of the shared BlockMatch one.
@@ -2097,8 +2097,8 @@ def benchmark_all(
 ) -> None:
     """Run LLM-based benchmarks on all available datasets.
 
-    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.8 Flash (teacher/analyze).
+    Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
+    for Gemini 4 Argon (teacher/analyze).
     """
     from serf.eval.benchmarks import BenchmarkDataset
 

@@ -20,9 +20,9 @@ from serf.dspy.lm import (
 )
 
 
-def test_config_student_is_gpt_6_luna() -> None:
-    """Student/task LM is GPT 6 Luna."""
-    assert config.get("models.student") == "openai/gpt-6-luna"
+def test_config_student_is_gpt_oss_120b() -> None:
+    """Student/task LM is GPT OSS 120b on Vertex AI MaaS."""
+    assert config.get("models.student") == "openai/gpt-oss-120b-maas"
     assert config.get("models.llm") == config.get("models.student")
 
 
@@ -130,10 +130,12 @@ def test_vertex_access_token_missing(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @patch("serf.dspy.lm.dspy.LM")
-def test_create_lm_student_uses_openai(mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Student LM uses GPT 6 Luna with OPENAI_API_KEY."""
+def test_create_lm_openai_uses_openai_key(
+    mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Direct OpenAI LM uses OPENAI_API_KEY when set."""
     monkeypatch.setenv("OPENAI_API_KEY", "openai-key")
-    create_lm(role="student")
+    create_lm(model="openai/gpt-6-luna", role="student")
 
     model = mock_lm.call_args.args[0]
     kwargs = mock_lm.call_args.kwargs
@@ -159,19 +161,23 @@ def test_create_lm_openai_requires_key(mock_lm: MagicMock, monkeypatch: pytest.M
 def test_create_lm_openai_falls_back_to_vertex_when_openai_key_unset(
     mock_token: MagicMock, mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When OPENAI_API_KEY is unset and VERTEX_AI_TOKEN is set, OpenAI models route via Vertex MaaS."""
+    """When OPENAI_API_KEY is unset and VERTEX_AI_TOKEN is set, OpenAI GPT-6 models route via Vertex OpenAI Responses."""
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     monkeypatch.setenv("VERTEX_AI_TOKEN", "ya29.fake-access-token")
     monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "gen-lang-client-0349392143")
-    create_lm(role="student")
+    create_lm(model="openai/gpt-6-luna", role="student")
 
     mock_token.assert_called_once()
     model = mock_lm.call_args.args[0]
     kwargs = mock_lm.call_args.kwargs
-    assert model == "openai/openai/gpt-6-luna"
+    assert model == "openai/responses/gpt-6-luna"
     assert kwargs["api_key"] == "vertex-token"
-    assert "aiplatform.googleapis.com" in kwargs["api_base"]
+    assert (
+        kwargs["api_base"]
+        == "https://aiplatform.googleapis.com/v1/projects/gen-lang-client-0349392143/locations/global/publishers/openai/v1"
+    )
     assert kwargs["drop_params"] is True
+    assert kwargs["store"] is False
 
 
 @patch("serf.dspy.lm.dspy.LM")

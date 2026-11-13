@@ -462,7 +462,10 @@ def test_each_dataset_and_prompt_gets_its_own_gepa_state_directory() -> None:
     d = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs", blocking_model="other/model")
     e = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs", blocking_strategy="union")
     f = run_log_dir(
-        "dblp-acm", "instructions A", log_dir="/tmp/logs", student_model="openai/gpt-oss-120b-maas"
+        "dblp-acm", "instructions A", log_dir="/tmp/logs", student_model="openai/gpt-6-luna"
+    )
+    g = run_log_dir(
+        "dblp-acm", "instructions A", log_dir="/tmp/logs", teacher_model="gemini/gemini-4-argon"
     )
 
     assert a != b, "two datasets must not share state"
@@ -470,6 +473,7 @@ def test_each_dataset_and_prompt_gets_its_own_gepa_state_directory() -> None:
     assert a != d, "different blocking models must not share state"
     assert a != e, "different blocking strategies must not share state"
     assert a != f, "different student models must not share state"
+    assert a != g, "different teacher models must not share state"
     assert a.startswith("/tmp/logs/dblp-acm/")
 
 

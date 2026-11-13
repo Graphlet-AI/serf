@@ -425,6 +425,100 @@ def training_overlap(
     return len({entity.id for entity in scored} & seen) / len(scored)
 
 
+def training_entity_ids(
+    dataset: str,
+    all_entities: list[Entity],
+    ground_truth: set[tuple[int, int]],
+    seed: int | None = None,
+    sizes: SplitSizes | None = None,
+) -> set[int]:
+    """Return the entity IDs that ``serf train`` puts in ``train`` or ``val``.
+
+    Parameters
+    ----------
+    dataset : str
+        Benchmark dataset name
+    all_entities : list[Entity]
+        Every record in the dataset
+    ground_truth : set[tuple[int, int]]
+        True matching pairs over the full dataset
+    seed : int | None
+        RNG seed. Defaults to config ``optimize.seed``.
+    sizes : SplitSizes | None
+        Record budgets. Defaults to this dataset's configured budgets.
+
+    Returns
+    -------
+    set[int]
+        Entity IDs in ``train`` or ``val``
+    """
+    if not all_entities:
+        return set()
+    sizes = sizes or get_split_sizes(dataset)
+    splits = sample_random_splits(
+        all_entities,
+        ground_truth,
+        train_records=sizes.train_records,
+        val_records=sizes.val_records,
+        holdout_records=sizes.holdout_records,
+        seed=seed,
+    )
+    return {entity.id for entity in splits.train_records} | {
+        entity.id for entity in splits.val_records
+    }
+
+
+def exclude_training_from_eval(
+    dataset: str,
+    all_entities: list[Entity],
+    ground_truth: set[tuple[int, int]],
+    predicted_pairs: set[tuple[int, int]],
+    seed: int | None = None,
+    sizes: SplitSizes | None = None,
+) -> tuple[set[tuple[int, int]], set[tuple[int, int]], set[int]]:
+    """Filter ground-truth and predicted pairs to exclude training and validation records.
+
+    When a benchmark run executes over the full table (``--eval-split all``),
+    scoring on ``train`` or ``val`` records mixes training fit into the
+    reported metric. Excluding any pair that touches a ``train`` or ``val``
+    record scores the whole-table run strictly on unseen records.
+
+    Parameters
+    ----------
+    dataset : str
+        Benchmark dataset name
+    all_entities : list[Entity]
+        Every record in the dataset
+    ground_truth : set[tuple[int, int]]
+        Full ground-truth pairs
+    predicted_pairs : set[tuple[int, int]]
+        Predicted pairs from the full-table run
+    seed : int | None
+        RNG seed. Defaults to config ``optimize.seed``.
+    sizes : SplitSizes | None
+        Record budgets. Defaults to this dataset's configured budgets.
+
+    Returns
+    -------
+    tuple[set[tuple[int, int]], set[tuple[int, int]], set[int]]
+        ``(unseen_ground_truth, unseen_predicted_pairs, unseen_entity_ids)``
+    """
+    trained_ids = training_entity_ids(dataset, all_entities, ground_truth, seed=seed, sizes=sizes)
+    all_ids = {entity.id for entity in all_entities}
+    unseen_ids = all_ids - trained_ids
+    unseen_gt = {
+        (left, right)
+        for left, right in ground_truth
+        if left not in trained_ids and right not in trained_ids
+    }
+    unseen_pred = {
+        (left, right)
+        for left, right in predicted_pairs
+        if left not in trained_ids and right not in trained_ids
+    }
+    return unseen_gt, unseen_pred, unseen_ids
+
+
 def _fit_budgets(total: int, *budgets: int) -> tuple[int, ...]:
     """Trim record budgets to the records available, honouring fill order.
 

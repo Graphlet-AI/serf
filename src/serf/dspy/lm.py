@@ -549,6 +549,97 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
     return lm
 
 
+def _create_vertex_openai_responses_lm(
+    model: str,
+    *,
+    temperature: float,
+    max_tokens: int,
+    reasoning_effort: str | None = None,
+) -> dspy.LM:
+    """Create a DSPy LM pointed at Vertex AI's OpenAI Responses endpoint.
+
+    Follows the official Google Cloud Vertex AI OpenAI GPT specification:
+    ``https://{ENDPOINT}/v1/projects/{PROJECT_ID}/locations/{LOCATION}/publishers/openai/v1``
+    using the OpenAI Responses wire API (``openai/responses/<model>``) with
+    ``store=False``.
+
+    Parameters
+    ----------
+    model : str
+        Model identifier (e.g. ``openai/gpt-6-luna`` or ``gpt-6-luna``)
+    temperature : float
+        Sampling temperature
+    max_tokens : int
+        Max output tokens
+    reasoning_effort : str | None
+        Optional reasoning effort level
+
+    Returns
+    -------
+    dspy.LM
+        LM configured for the Vertex AI OpenAI Responses endpoint
+    """
+    location = str(config.get("models.vertex_ai.openai_location", "global"))
+    endpoint = (
+        "aiplatform.googleapis.com"
+        if location == "global"
+        else f"aiplatform.{location}.rep.googleapis.com"
+    )
+    raw = os.environ.get("VERTEX_AI_TOKEN", "").strip()
+    info: dict[str, Any] | None = None
+    if raw and not raw.startswith("ya29."):
+        info = _parse_service_account_info(raw)
+    project = _vertex_project_id(info)
+    api_base = f"https://{endpoint}/v1/projects/{project}/locations/{location}/publishers/openai/v1"
+    bare_model = model.split("/")[-1]
+    litellm_model = f"openai/responses/{bare_model}"
+    logger.info(
+        f"Using Vertex AI OpenAI Responses endpoint in {location} ({endpoint}) for {litellm_model}"
+    )
+
+    extra_kwargs: dict[str, Any] = {
+        "drop_params": True,
+        "store": False,
+    }
+    if reasoning_effort is not None:
+        extra_kwargs["reasoning_effort"] = reasoning_effort
+
+    if info is None:
+        logger.warning(
+            "VERTEX_AI_TOKEN is a raw bearer token and cannot be refreshed; runs longer "
+            "than the token lifetime (~1 hour) will fail with ACCESS_TOKEN_EXPIRED. "
+            "Set VERTEX_AI_TOKEN to service-account JSON for long runs."
+        )
+        return dspy.LM(
+            litellm_model,
+            api_base=api_base,
+            api_key=vertex_access_token(),
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=request_timeout(),
+            **extra_kwargs,
+        )
+
+    credentials = service_account.Credentials.from_service_account_info(
+        info,
+        scopes=[_CLOUD_PLATFORM_SCOPE],
+    )
+    lm = VertexRefreshingLM(
+        litellm_model,
+        credentials=credentials,
+        refresh_margin_seconds=int(
+            config.get("models.vertex_ai.token_refresh_margin_seconds", 300)
+        ),
+        api_base=api_base,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        timeout=request_timeout(),
+        **extra_kwargs,
+    )
+    lm.refresh_token_if_needed()
+    return lm
+
+
 def _create_openai_lm(
     model: str,
     *,
@@ -556,11 +647,11 @@ def _create_openai_lm(
     max_tokens: int,
     reasoning_effort: str | None = None,
 ) -> dspy.LM:
-    """Create a DSPy LM for an OpenAI model via OpenAI API or Vertex AI MaaS.
+    """Create a DSPy LM for an OpenAI model via OpenAI API or Vertex AI OpenAI Responses endpoint.
 
     Uses ``OPENAI_API_KEY`` against the OpenAI API when present; falls back to
-    ``VERTEX_AI_TOKEN`` against Vertex AI's OpenAI-compatible MaaS endpoint when
-    ``OPENAI_API_KEY`` is unset.
+    ``VERTEX_AI_TOKEN`` against Vertex AI's OpenAI Responses endpoint
+    (``/publishers/openai/v1``) when ``OPENAI_API_KEY`` is unset.
 
     Parameters
     ----------
@@ -576,7 +667,7 @@ def _create_openai_lm(
     Returns
     -------
     dspy.LM
-        LM configured for OpenAI API or Vertex AI MaaS
+        LM configured for OpenAI API or Vertex AI OpenAI Responses endpoint
 
     Raises
     ------
@@ -586,7 +677,12 @@ def _create_openai_lm(
     api_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if not api_key:
         if os.environ.get("VERTEX_AI_TOKEN", "").strip():
-            return _create_vertex_maas_lm(model, temperature=temperature, max_tokens=max_tokens)
+            return _create_vertex_openai_responses_lm(
+                model,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                reasoning_effort=reasoning_effort,
+            )
         raise ValueError(
             "OPENAI_API_KEY (or VERTEX_AI_TOKEN for Vertex AI MaaS) environment variable required"
         )
@@ -636,14 +732,17 @@ def _create_gemini_lm(
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable required")
-    extra_kwargs: dict[str, Any] = {}
+    extra_kwargs: dict[str, Any] = {"engine": "litellm"}
     if reasoning_effort is not None:
         extra_kwargs["reasoning_effort"] = reasoning_effort
+    effective_max_tokens = max_tokens
+    if any(m in model.lower() for m in ("gemini-4-carbon", "gemini-4-argon")):
+        effective_max_tokens = min(max_tokens, 32768)
     return dspy.LM(
         model,
         api_key=api_key,
         temperature=temperature,
-        max_tokens=max_tokens,
+        max_tokens=effective_max_tokens,
         timeout=request_timeout(),
         **extra_kwargs,
     )

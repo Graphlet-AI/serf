@@ -15,11 +15,6 @@ NAME_PATTERNS = (
 EMAIL_PATTERNS = r"^(emails?|e_mails?|mails?|email_address(es)?)$"
 URL_PATTERNS = r"^(urls?|websites?|links?|uris?|homepages?)$"
 PHONE_PATTERNS = r"^(phones?|tels?|mobiles?|fax(es)?|contact_numbers?|phone_numbers?)$"
-ADDRESS_PATTERNS = (
-    r"^(address(es)?|streets?|street_address(es)?|mailing_address(es)?|billing_address(es)?"
-    r"|shipping_address(es)?|home_address(es)?|work_address(es)?|city|cities|states?"
-    r"|zips?|zip_?codes?|postal_?codes?|country|countries|locations?)$"
-)
 IDENTIFIER_PATTERNS = r"^(ids?|uuids?|skus?|eans?|upcs?|isbns?|asins?|identifiers?)$"
 DATE_PATTERNS = r"^(dates?|created|updated|timestamps?|dobs?|birth_dates?)$"
 NUMERIC_PATTERNS = r"^(prices?|revenues?|amounts?|counts?|quantity|quantities|nums?|sizes?)$"
@@ -28,10 +23,6 @@ NUMERIC_PATTERNS = r"^(prices?|revenues?|amounts?|counts?|quantity|quantities|nu
 EMAIL_VALUE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", re.IGNORECASE)
 URL_VALUE = re.compile(r"^https?://|^www\.", re.IGNORECASE)
 PHONE_VALUE = re.compile(r"^[\d\s\-\(\)\.\+]+$")
-ADDRESS_VALUE = re.compile(
-    r"^\d+\s+.*\b(st|street|ave|avenue|rd|road|blvd|boulevard|dr|drive|ln|lane|ct|court|pl|place|sq|square|pkwy|parkway|hwy|highway)\b",
-    re.IGNORECASE,
-)
 DATE_ISO = re.compile(r"^\d{4}-\d{2}-\d{2}")
 DATE_US = re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}")
 NUMERIC_VALUE = re.compile(r"^[\d\.,\-]+$")
@@ -51,15 +42,16 @@ def _flatten_sample_values(values: list[Any]) -> list[Any]:
 def detect_field_type(field_name: str, values: list[Any]) -> str:
     """Detect the type of a field based on its name and sample values.
 
-    Returns one of: "name", "email", "url", "phone", "address",
-    "identifier", "date", "numeric", "text"
+    Returns one of: "name", "email", "url", "phone",
+    "identifier", "date", "numeric", "text".
+    Note: ``"address"`` is selected explicitly via the field type / schema
+    rather than inferred by regex on the field name or value.
 
     Uses both the field name (heuristics) and value patterns (regex):
     - "name", "title", "product_name" etc. -> "name"
     - Contains @ -> "email"
     - Starts with http/www -> "url"
     - Phone patterns (digits, dashes, parens) -> "phone"
-    - Street/city/state patterns -> "address"
     - All numeric -> "numeric"
     - Date patterns (YYYY-MM-DD, MM/DD/YYYY) -> "date"
     - High uniqueness + alphanumeric -> "identifier"
@@ -75,7 +67,7 @@ def detect_field_type(field_name: str, values: list[Any]) -> str:
     Returns
     -------
     str
-        Detected type: name, email, url, phone, address, identifier, date, numeric, text
+        Detected type: name, email, url, phone, identifier, date, numeric, text
     """
     name_lower = field_name.lower().replace(" ", "_")
 
@@ -89,8 +81,6 @@ def detect_field_type(field_name: str, values: list[Any]) -> str:
         return "url"
     if re.match(PHONE_PATTERNS, name_lower):
         return "phone"
-    if re.match(ADDRESS_PATTERNS, name_lower):
-        return "address"
     if re.match(IDENTIFIER_PATTERNS, name_lower):
         return "identifier"
     if re.match(DATE_PATTERNS, name_lower):
@@ -120,10 +110,6 @@ def detect_field_type(field_name: str, values: list[Any]) -> str:
     phone_count = sum(1 for v in str_values if len(v) >= 7 and PHONE_VALUE.match(v))
     if phone_count >= len(str_values) * 0.5:
         return "phone"
-
-    address_count = sum(1 for v in str_values if ADDRESS_VALUE.match(v))
-    if address_count >= len(str_values) * 0.5:
-        return "address"
 
     numeric_count = sum(1 for v in str_values if NUMERIC_VALUE.match(v))
     if numeric_count >= len(str_values) * 0.5:

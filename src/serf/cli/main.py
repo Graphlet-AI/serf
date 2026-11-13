@@ -18,8 +18,10 @@ from serf.dspy.dataset_signatures import (
 )
 from serf.eval.benchmarks import DATASET_REGISTRY
 from serf.eval.splits import (
+    EVAL_SPLIT_ALL,
     EVAL_SPLITS,
     SplitSizes,
+    exclude_training_from_eval,
     get_split_sizes,
     select_eval_split,
 )
@@ -202,8 +204,8 @@ def run(
     (DSPy BlockMatch). Runs iterative rounds until convergence.
     Writes resolved entities as Parquet and CSV.
 
-    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.8 Flash (teacher/analyze).
+    Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
+    for Gemini 4 Carbon (teacher/analyze).
     """
     from serf.pipeline import ERConfig, run_pipeline
 
@@ -1823,8 +1825,8 @@ def benchmark(
     """Run ER pipeline against a benchmark dataset and evaluate.
 
     Uses embeddings for blocking and LLM for matching.
-    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.8 Flash (teacher/analyze).
+    Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
+    for Gemini 4 Carbon (teacher/analyze).
 
     With --signature-mode per-dataset the block is matched with the typed DSPy
     signature written for this dataset instead of the shared BlockMatch one.
@@ -1894,12 +1896,15 @@ def benchmark(
             f"the '{selection.split}' split holds records `serf train` reads or selects on, "
             "so a score on it reports the fit rather than a result"
         )
-        # Only a trained prompt can be reading its own fit back. The shipped
-        # signature was never optimized against these splits, so scoring it
-        # over all the data measures something real - and it is the only way to
-        # get a full-table number to compare against published results, which
-        # are not reported on a holdout of anybody's choosing.
-        if trained_prompts and bool(serf_config.get("benchmarks.require_disjoint_eval", True)):
+        # Only a trained prompt on train or val directly is reading its own fit
+        # back. On --eval-split all, training/validation records are excluded
+        # from the scored pairs at evaluation time so whole-table runs score
+        # strictly on unseen data.
+        if (
+            trained_prompts
+            and selection.split != EVAL_SPLIT_ALL
+            and bool(serf_config.get("benchmarks.require_disjoint_eval", True))
+        ):
             raise click.UsageError(
                 f"Refusing to evaluate a trained prompt on training data: {message}. Use "
                 "--eval-split holdout, or set benchmarks.require_disjoint_eval to false in "
@@ -2005,6 +2010,23 @@ def benchmark(
     current_entities, conservation = recover_dropped_records(
         all_entities, current_entities, minted_uuids
     )
+    scored_entities_count = len(all_entities)
+    if selection.split == EVAL_SPLIT_ALL and not sample_records:
+        unseen_gt, unseen_pred, unseen_ids = exclude_training_from_eval(
+            dataset, all_entities, benchmark_data.ground_truth, predicted_pairs, seed=seed
+        )
+        if unseen_gt:
+            excluded_records = len(all_entities) - len(unseen_ids)
+            excluded_gt = len(benchmark_data.ground_truth) - len(unseen_gt)
+            benchmark_data.ground_truth = unseen_gt
+            predicted_pairs = unseen_pred
+            scored_entities_count = len(unseen_ids)
+            selection.overlaps_training = False
+            click.echo(
+                f"  Excluded training/validation data from whole-run score: "
+                f"scoring {len(unseen_ids)} unseen records ({len(unseen_gt)} gold pairs; "
+                f"excluded {excluded_records} train/val records and {excluded_gt} train/val gold pairs)"
+            )
     metrics = benchmark_data.evaluate(predicted_pairs)
     elapsed = time.time() - start
 
@@ -2041,7 +2063,7 @@ def benchmark(
                     "model": model,
                     "signature_mode": signature_mode,
                     "eval_split": selection.split,
-                    "eval_split_records": len(selection.records),
+                    "eval_split_records": scored_entities_count,
                     "eval_split_overlaps_training": selection.overlaps_training,
                     "sample_records": sample_records,
                     "seed": seed,
@@ -2097,8 +2119,8 @@ def benchmark_all(
 ) -> None:
     """Run LLM-based benchmarks on all available datasets.
 
-    Requires VERTEX_AI_TOKEN for GPT OSS 120b (student) and GEMINI_API_KEY
-    for Gemini 3.8 Flash (teacher/analyze).
+    Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
+    for Gemini 4 Carbon (teacher/analyze).
     """
     from serf.eval.benchmarks import BenchmarkDataset
 

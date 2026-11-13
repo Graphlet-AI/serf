@@ -302,6 +302,14 @@ def flatten_values(values: Iterable[Any]) -> list[Any]:
     return flat
 
 
+def _resolve_active_lm(lm: Any | None, predictor: Any) -> Any | None:
+    """Resolve the active DSPy LM, calling create_lm when predictor is a real dspy.Predict."""
+    active_lm = lm or getattr(dspy.settings, "lm", None)
+    if active_lm is None and isinstance(dspy.Predict, type) and isinstance(predictor, dspy.Predict):
+        active_lm = create_lm(role="student")
+    return active_lm
+
+
 def merge_values(
     values: Iterable[Any],
     field_type: str = FIELD_TYPE_TEXT,
@@ -357,7 +365,6 @@ def merge_values(
         if len(distinct_by_text) == 1:
             return [next(iter(distinct_by_text.values()))]
         try:
-            active_lm = lm or getattr(dspy.settings, "lm", None) or create_lm(role="student")
             instruction = field_merge_instruction(
                 field_type,
                 cardinality=CARDINALITY_LIST,
@@ -365,6 +372,7 @@ def merge_values(
                 description=field_description,
             )
             predictor = cast(dspy.Predict, dspy.Predict(DeduplicateListValues))
+            active_lm = _resolve_active_lm(lm, predictor)
             with dspy.context(lm=active_lm, adapter=RepairingXMLAdapter()):
                 prediction = predictor(
                     field_name=field_name or field_type,
@@ -480,7 +488,6 @@ def select_best_value(
         return fallback
 
     try:
-        active_lm = lm or getattr(dspy.settings, "lm", None) or create_lm(role="student")
         instruction = field_merge_instruction(
             field_type,
             cardinality=CARDINALITY_SINGLE,
@@ -488,6 +495,7 @@ def select_best_value(
             description=field_description,
         )
         predictor = cast(dspy.Predict, dspy.Predict(SelectBestValue))
+        active_lm = _resolve_active_lm(lm, predictor)
         with dspy.context(lm=active_lm, adapter=RepairingXMLAdapter()):
             prediction = predictor(
                 field_name=field_name or field_type,
@@ -596,8 +604,8 @@ def merge_records_with_dspy(
             )
         sig = build_merge_signature("MergeEntityFields", annotations)
 
-    active_lm = lm or getattr(dspy.settings, "lm", None) or create_lm(role="student")
     predictor = cast(dspy.Predict, dspy.Predict(sig))
+    active_lm = _resolve_active_lm(lm, predictor)
     with dspy.context(lm=active_lm, adapter=RepairingXMLAdapter()):
         prediction = predictor(records=records)
 

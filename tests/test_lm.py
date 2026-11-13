@@ -27,8 +27,8 @@ def test_config_student_is_gpt_6_luna() -> None:
 
 
 def test_config_teacher_is_gemini_35_flash_lite() -> None:
-    """Teacher/reflection LM is Gemini 4 Argon with medium reasoning effort."""
-    assert config.get("models.teacher") == "gemini/gemini-4-argon"
+    """Teacher/reflection LM is Gemini 4 Carbon with medium reasoning effort."""
+    assert config.get("models.teacher") == "gemini/gemini-4-carbon"
     assert config.get("models.teacher_reasoning_effort") == "medium"
     assert config.get("models.analyze_llm") == config.get("models.teacher")
 
@@ -38,7 +38,7 @@ def test_is_vertex_maas_model() -> None:
     assert is_vertex_maas_model("openai/gpt-oss-120b-maas") is True
     assert is_vertex_maas_model("gpt-oss-120b-maas") is True
     assert is_vertex_maas_model("openai/gpt-6-luna") is False
-    assert is_vertex_maas_model("gemini/gemini-4-argon") is False
+    assert is_vertex_maas_model("gemini/gemini-4-carbon") is False
 
 
 def test_is_openai_model() -> None:
@@ -46,7 +46,7 @@ def test_is_openai_model() -> None:
     assert is_openai_model("openai/gpt-6-luna") is True
     assert is_openai_model("gpt-6-luna") is True
     assert is_openai_model("openai/gpt-oss-120b-maas") is False
-    assert is_openai_model("gemini/gemini-4-argon") is False
+    assert is_openai_model("gemini/gemini-4-carbon") is False
 
 
 def test_vertex_access_token_accepts_raw_bearer(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -197,13 +197,13 @@ def test_create_lm_vertex_maas_uses_vertex(
 
 @patch("serf.dspy.lm.dspy.LM")
 def test_create_lm_teacher_uses_gemini(mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Teacher LM uses Gemini 4 Argon (medium reasoning effort) with GEMINI_API_KEY."""
+    """Teacher LM uses Gemini 4 Carbon (medium reasoning effort) with GEMINI_API_KEY."""
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
     create_lm(role="teacher", temperature=1.0)
 
     model = mock_lm.call_args.args[0]
     kwargs = mock_lm.call_args.kwargs
-    assert model == "gemini/gemini-4-argon"
+    assert model == "gemini/gemini-4-carbon"
     assert kwargs["api_key"] == "gemini-key"
     assert kwargs["temperature"] == 1.0
     assert kwargs["reasoning_effort"] == "medium"
@@ -215,7 +215,7 @@ def test_create_lm_gemini_requires_key(mock_lm: MagicMock, monkeypatch: pytest.M
     """Gemini models fail fast without GEMINI_API_KEY."""
     monkeypatch.delenv("GEMINI_API_KEY", raising=False)
     with pytest.raises(ValueError, match="GEMINI_API_KEY"):
-        create_lm(model="gemini/gemini-4-argon")
+        create_lm(model="gemini/gemini-4-carbon")
     mock_lm.assert_not_called()
 
 
@@ -491,8 +491,8 @@ def test_every_lm_carries_the_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_the_teacher_is_gemini_38_flash() -> None:
-    """Teacher LM is Gemini 4 Argon with medium reasoning effort."""
-    assert config.get("models.teacher") == "gemini/gemini-4-argon"
+    """Teacher LM is Gemini 4 Carbon with medium reasoning effort."""
+    assert config.get("models.teacher") == "gemini/gemini-4-carbon"
     assert config.get("models.teacher_reasoning_effort") == "medium"
 
 

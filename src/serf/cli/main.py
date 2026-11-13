@@ -203,7 +203,7 @@ def run(
     Writes resolved entities as Parquet and CSV.
 
     Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
-    for Gemini 4 Argon (teacher/analyze).
+    for Gemini 4 Carbon (teacher/analyze).
     """
     from serf.pipeline import ERConfig, run_pipeline
 
@@ -1824,7 +1824,7 @@ def benchmark(
 
     Uses embeddings for blocking and LLM for matching.
     Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
-    for Gemini 4 Argon (teacher/analyze).
+    for Gemini 4 Carbon (teacher/analyze).
 
     With --signature-mode per-dataset the block is matched with the typed DSPy
     signature written for this dataset instead of the shared BlockMatch one.
@@ -2098,7 +2098,7 @@ def benchmark_all(
     """Run LLM-based benchmarks on all available datasets.
 
     Requires OPENAI_API_KEY for GPT 6 Luna (student) and GEMINI_API_KEY
-    for Gemini 4 Argon (teacher/analyze).
+    for Gemini 4 Carbon (teacher/analyze).
     """
     from serf.eval.benchmarks import BenchmarkDataset
 

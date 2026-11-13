@@ -27,12 +27,12 @@ models:
   # sides get the same prefix. Leave empty for models trained without one.
   embedding_prompt: "Represent this sentence for searching relevant passages: "
   student: "openai/gpt-6-luna"
-  # Gemini 4 Argon (with medium reasoning effort) is the teacher/reflection model.
+  # Gemini 4 Carbon (with medium reasoning effort) is the teacher/reflection model.
   # Thinking models spend reasoning tokens before emitting instruction rewrites,
   # and return empty content when max_tokens is too small. models.max_tokens
   # below is 65536, so there is room, and teacher_reasoning_effort sets the
   # thinking budget to "medium".
-  teacher: "gemini/gemini-4-argon"
+  teacher: "gemini/gemini-4-carbon"
   teacher_reasoning_effort: "medium"
   llm: "${models.student}"
   analyze_llm: "${models.teacher}"

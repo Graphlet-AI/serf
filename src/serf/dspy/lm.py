@@ -615,7 +615,7 @@ def _create_gemini_lm(
     Parameters
     ----------
     model : str
-        Gemini model identifier (e.g. ``gemini/gemini-4-argon``)
+        Gemini model identifier (e.g. ``gemini/gemini-4-carbon``)
     temperature : float
         Sampling temperature
     max_tokens : int

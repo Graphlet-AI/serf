@@ -5,8 +5,9 @@ Domain-specific fields live in the Entity `attributes` dict.
 """
 
 import json
-from typing import Any
+from typing import Annotated, Any
 
+import dspy
 from pydantic import BaseModel, Field, field_validator
 
 # XML has no null literal, so a model filling in an optional tag writes a
@@ -46,14 +47,101 @@ class Entity(BaseModel):
         Iteration numbers where this entity was skipped
     """
 
-    id: int
-    uuid: str | None = None
-    name: str
-    description: str = ""
-    entity_type: str = "entity"
-    attributes: dict[str, Any] = Field(default_factory=dict)
-    source_ids: list[int] | None = None
-    source_uuids: list[str] | None = None
+    id: Annotated[
+        int,
+        dspy.OutputField(
+            desc="Master integer identifier. Select the LOWEST input id among the matched entities.",
+            description="Master integer identifier. Select the LOWEST input id among the matched entities.",
+        ),
+    ]
+    uuid: Annotated[
+        str | None,
+        dspy.OutputField(
+            default=None,
+            desc="UUID of the master entity, preserved from the input record with the lowest id.",
+            description="UUID of the master entity, preserved from the input record with the lowest id.",
+        ),
+    ] = None
+    name: Annotated[
+        str,
+        dspy.OutputField(
+            desc=(
+                "Primary canonical name or title of the entity. Compare names across the "
+                "matched records and select the single best, most complete, and accurate name."
+            ),
+            description=(
+                "Primary canonical name or title of the entity. Compare names across the "
+                "matched records and select the single best, most complete, and accurate name."
+            ),
+        ),
+    ]
+    description: Annotated[
+        str,
+        dspy.OutputField(
+            default="",
+            desc=(
+                "Canonical text description of the entity. Compare descriptions across the "
+                "matched records and select the single most complete and informative description."
+            ),
+            description=(
+                "Canonical text description of the entity. Compare descriptions across the "
+                "matched records and select the single most complete and informative description."
+            ),
+        ),
+    ] = ""
+    entity_type: Annotated[
+        str,
+        dspy.OutputField(
+            default="entity",
+            desc="Canonical entity type label (e.g. product, publication, company, person).",
+            description="Canonical entity type label (e.g. product, publication, company, person).",
+        ),
+    ] = "entity"
+    attributes: Annotated[
+        dict[str, Any],
+        dspy.OutputField(
+            default_factory=dict,
+            desc=(
+                "Merged domain-specific attributes. Compare field values across the matched "
+                "records: for singular fields, select the single best and most complete value; "
+                "for list fields (such as addresses or names), deduplicate into a list of "
+                "individual values, collapsing spelling and abbreviation variants while keeping "
+                "distinct values separate."
+            ),
+            description=(
+                "Merged domain-specific attributes. Compare field values across the matched "
+                "records: for singular fields, select the single best and most complete value; "
+                "for list fields (such as addresses or names), deduplicate into a list of "
+                "individual values, collapsing spelling and abbreviation variants while keeping "
+                "distinct values separate."
+            ),
+        ),
+    ] = Field(
+        default_factory=dict,
+        description=(
+            "Merged domain-specific attributes. Compare field values across the matched "
+            "records: for singular fields, select the single best and most complete value; "
+            "for list fields (such as addresses or names), deduplicate into a list of "
+            "individual values, collapsing spelling and abbreviation variants while keeping "
+            "distinct values separate."
+        ),
+    )
+    source_ids: Annotated[
+        list[int] | None,
+        dspy.OutputField(
+            default=None,
+            desc="All other input entity ids and their existing source_ids merged into this entity, excluding the master id.",
+            description="All other input entity ids and their existing source_ids merged into this entity, excluding the master id.",
+        ),
+    ] = None
+    source_uuids: Annotated[
+        list[str] | None,
+        dspy.OutputField(
+            default=None,
+            desc="All other input entity uuids and their existing source_uuids merged into this entity, excluding the master uuid.",
+            description="All other input entity uuids and their existing source_uuids merged into this entity, excluding the master uuid.",
+        ),
+    ] = None
     match_skip: bool | None = None
     match_skip_reason: str | None = None
     match_skip_history: list[int] | None = None

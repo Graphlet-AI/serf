@@ -1449,21 +1449,44 @@ def _score_text(score: float | None) -> str:
     default=None,
     help="JSON file holding records, or a list of groups, to canonicalize against this schema",
 )
-def schema_command(path: str, merge_path: str | None) -> None:
+@click.option(
+    "--use-llm/--no-llm",
+    default=False,
+    help="Select the best value for singular fields with the LLM",
+)
+@click.option(
+    "--model",
+    type=str,
+    default=None,
+    help="LLM model for singular field value selection",
+)
+def schema_command(
+    path: str,
+    merge_path: str | None,
+    use_llm: bool,
+    model: str | None,
+) -> None:
     """Show an entity schema, and optionally merge records against it.
 
     Renders the declared fields with the semantic type and merge policy each
     one resolves to, plus the Pydantic classes generated for DSPy signatures:
-    one source class of scalars for the LLM to read, and one canonical class of
-    lists for what a merge produces.
+    one source class of scalars for the LLM to read, and one canonical class
+    for what a merge produces.
 
     With --merge, reads JSON and prints the canonical records it resolves to,
     so a schema's merge policy can be checked against real values before a run
     depends on it. The file holds either a flat list of records, treated as one
     group, or a list of groups, which is the shape the matcher now returns.
     """
+    from serf.dspy.lm import create_lm
     from serf.merge.canonical import canonicalize_groups
-    from serf.schema import canonical_model, load_schema, source_model
+    from serf.schema import (
+        canonical_model,
+        load_schema,
+        match_and_merge_signature,
+        merge_signature,
+        source_model,
+    )
 
     entity_schema = load_schema(path)
     click.echo(f"Schema: {entity_schema.entity}")
@@ -1484,6 +1507,7 @@ def schema_command(path: str, merge_path: str | None) -> None:
                     if policies[field.name].dedupe == "fuzzy"
                     else ""
                 ),
+                "Cardinality": policies[field.name].cardinality,
             }
             for field in entity_schema.fields
         ]
@@ -1493,8 +1517,12 @@ def schema_command(path: str, merge_path: str | None) -> None:
 
     source = source_model(entity_schema)
     canonical = canonical_model(entity_schema)
-    click.echo(f"\nGenerated classes:\n  source:    {source.__name__}")
-    click.echo(f"  canonical: {canonical.__name__}")
+    merge_sig = merge_signature(entity_schema)
+    match_merge_sig = match_and_merge_signature(entity_schema)
+    click.echo(f"\nGenerated classes:\n  source:          {source.__name__}")
+    click.echo(f"  canonical:       {canonical.__name__}")
+    click.echo(f"  merge signature: {merge_sig.__name__}")
+    click.echo(f"  match signature: {match_merge_sig.__name__}")
 
     if not merge_path:
         return
@@ -1507,11 +1535,13 @@ def schema_command(path: str, merge_path: str | None) -> None:
     groups = payload if isinstance(payload[0], list) else [payload]
     records = [record for group in groups for record in group]
 
+    lm = create_lm(model, role="student") if model else None
     click.echo(f"\nMerging {len(records)} records in {len(groups)} group(s) from {merge_path}")
     merged = canonicalize_groups(
         groups,
-        field_types=entity_schema.field_types(),
-        policies=policies,
+        schema=entity_schema,
+        use_llm=use_llm or lm is not None,
+        lm=lm,
     )
     for record in merged:
         click.echo(f"  {json.dumps(record.to_dict(), ensure_ascii=False)}")

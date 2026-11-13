@@ -1,6 +1,7 @@
 """Tests for canonical records: minted uuids, lineage, and array-valued fields."""
 
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -11,6 +12,7 @@ from serf.merge.canonical import (
     known_uuids,
     mint_uuid,
 )
+from serf.merge.semantics import CARDINALITY_LIST, CARDINALITY_SINGLE, MergePolicy
 
 # The worked example from the specification, with uuids standing in for the
 # integers it was written with. Integer identity lives only inside UUIDMapper.
@@ -189,3 +191,76 @@ def test_covers_includes_the_records_own_identity() -> None:
 
 def test_minted_identities_are_distinct() -> None:
     assert len({mint_uuid() for _ in range(100)}) == 100
+
+
+def test_canonicalize_supports_singular_and_list_fields_together() -> None:
+    """Singular fields resolve to a single scalar while list fields deduplicate into lists."""
+    group = [
+        {
+            "uuid": RUSSELL,
+            "primary_name": "Russell Jurney",
+            "names": ["Russell Jurney", "Russ Jurney"],
+            "addresses": ["123 Main St", "456 Market Ave, Suite 200"],
+            "emails": ["russell@example.com"],
+        },
+        {
+            "uuid": RUSSELL_H,
+            "primary_name": "Russell H Jurney",
+            "names": ["Russell H Jurney", "R. J. Alias"],
+            "addresses": ["123 Main Street", "789 Broadway, New York, NY"],
+            "emails": ["RUSSELL@example.com", "rjurney@work.org"],
+        },
+    ]
+
+    merged = canonicalize(
+        group,
+        field_types={
+            "primary_name": "name",
+            "names": "name",
+            "addresses": "address",
+            "emails": "email",
+        },
+        singular_fields={"primary_name"},
+        list_fields={"names", "addresses", "emails"},
+    )
+
+    rendered = merged.to_dict()
+    assert rendered["primary_name"] == "Russell H Jurney"
+    assert rendered["names"] == ["Russell H Jurney", "R. J. Alias"]
+    assert rendered["addresses"] == [
+        "789 Broadway, New York, NY",
+        "456 Market Ave, Suite 200",
+        "123 Main Street",
+    ]
+    assert rendered["emails"] == ["russell@example.com", "rjurney@work.org"]
+
+
+def test_canonicalize_singular_and_list_fields_use_dspy_annotated_llm_merge() -> None:
+    fake_prediction = MagicMock()
+    fake_prediction.title_name = "Dr. Eleanor Vance"
+    fake_prediction.addresses = ["10 Elm Street", "20 Oak Ave"]
+    fake_predictor = MagicMock(return_value=fake_prediction)
+
+    group = [
+        {"uuid": RUSSELL, "title_name": "Eleanor Vance", "addresses": ["10 Elm St"]},
+        {
+            "uuid": BOB,
+            "title_name": "Dr. Eleanor Vance",
+            "addresses": ["10 Elm Street", "20 Oak Ave"],
+        },
+    ]
+
+    with patch("serf.merge.semantics.dspy.Predict", return_value=fake_predictor):
+        merged = canonicalize_groups(
+            [group],
+            field_types={"title_name": "name", "addresses": "address"},
+            policies={
+                "title_name": MergePolicy(cardinality=CARDINALITY_SINGLE),
+                "addresses": MergePolicy(cardinality=CARDINALITY_LIST),
+            },
+            use_llm=True,
+        )[0]
+
+    assert merged.fields["title_name"] == "Dr. Eleanor Vance"
+    assert merged.fields["addresses"] == ["10 Elm Street", "20 Oak Ave"]
+    fake_predictor.assert_called_once()

@@ -5,44 +5,142 @@ ER operations: block matching, entity merging, edge resolution,
 and dataset analysis.
 """
 
+from typing import Annotated
+
 import dspy
 
 from serf.config import config as _config
+from serf.dspy.schemas.base import (
+    SingularText,
+    TextList,
+    field_guide,
+)
 from serf.dspy.types import BlockResolution, DatasetProfile, Entity
 
 _MATCHING_MODEL = _config.get("models.llm")
+_ENTITY_FIELD_GUIDE = field_guide(Entity)
 
 
 class BlockMatch(dspy.Signature):
-    """Examine all entities in a block, identify duplicates, and merge them.
+    __doc__ = f"""Examine all entities in a block, identify duplicates, and merge them.
 
     For each group of matching entities:
     1. Select the entity with the LOWEST input id as the master record
     2. Collect ALL OTHER input ids into source_ids
     3. Merge all source_ids from inputs into a single output source_ids list
-    4. Choose the most complete field values across all matched records
+    4. Rely on the LLM to make field-level comparisons at the time of match and merge according to each field's merge semantics:
+{chr(10).join(_ENTITY_FIELD_GUIDE.splitlines()[:7])}
     5. Return ALL entities (merged + non-matched)
     """
 
-    block_records: str = dspy.InputField(desc="JSON array of entity records in this block")
-    schema_info: str = dspy.InputField(desc="Description of entity fields and their roles")
-    few_shot_examples: str = dspy.InputField(
-        desc="Examples of correct merge behavior with ID tracking"
-    )
-    resolution: BlockResolution = dspy.OutputField()
+    block_records: Annotated[
+        str,
+        dspy.InputField(desc="JSON array of entity records in this block"),
+    ]
+    schema_info: Annotated[
+        str,
+        dspy.InputField(
+            desc="Field-level schema and merge semantics annotations for singular and list fields"
+        ),
+    ]
+    few_shot_examples: Annotated[
+        str,
+        dspy.InputField(desc="Examples of correct merge behavior with ID tracking"),
+    ]
+    resolution: Annotated[
+        BlockResolution,
+        dspy.OutputField(
+            desc="Block resolution containing match decisions and merged entities following field-level merge annotations"
+        ),
+    ]
 
 
 class EntityMerge(dspy.Signature):
-    """Merge two matched entities into a single canonical record.
+    __doc__ = f"""Merge two matched entities into a single canonical record.
 
-    The entity with the LOWEST id becomes the master. All field values
-    are chosen by selecting the most complete/informative value.
-    The other entity's id goes into source_ids.
+    Rely on the LLM to compare field values across the two entities and merge each
+    field according to its field-level annotation:
+{chr(10).join(_ENTITY_FIELD_GUIDE.splitlines()[:7])}
     """
 
-    entity_a: str = dspy.InputField(desc="First entity as JSON")
-    entity_b: str = dspy.InputField(desc="Second entity as JSON")
-    merged: Entity = dspy.OutputField()
+    entity_a: Annotated[str, dspy.InputField(desc="First entity as JSON")]
+    entity_b: Annotated[str, dspy.InputField(desc="Second entity as JSON")]
+    merged: Annotated[
+        Entity,
+        dspy.OutputField(
+            desc="Canonical merged entity resolved according to the field-level merge annotations"
+        ),
+    ]
+
+
+class SelectBestValue(dspy.Signature):
+    """Select the single best canonical value for a singular entity field.
+
+    Given candidate values collected from matched records that denote the same
+    real-world entity, compare the candidate values and choose the most
+    complete, accurate, and well-formed value according to the field's semantic
+    type and description. Prefer full forms over abbreviations, clean text over
+    corrupted text, and specific values over generic placeholders. Return one
+    of the candidate values verbatim without inventing new facts.
+    """
+
+    field_name: Annotated[
+        str,
+        dspy.InputField(desc="Name of the singular entity field being resolved"),
+    ]
+    field_type: Annotated[
+        str,
+        dspy.InputField(
+            desc="Semantic type of the field (name, address, url, email, phone, identifier, date, numeric, text)"
+        ),
+    ]
+    field_description: Annotated[
+        str,
+        dspy.InputField(
+            desc="Field-level merge annotation describing what the field means and how to select its best value"
+        ),
+    ]
+    candidate_values: Annotated[
+        list[str],
+        dspy.InputField(desc="Distinct candidate values from the matched records"),
+    ]
+    best_value: SingularText
+
+
+class DeduplicateListValues(dspy.Signature):
+    """Deduplicate candidate values of a list field into a list of individual values.
+
+    Given candidate values collected across matched records that denote the
+    same real-world entity, compare the values at the field level according to
+    the field's semantic type and merge annotation. Collapse spelling,
+    formatting, or abbreviation variants that refer to the same individual
+    value (for example, the same physical address or the same person's name)
+    into the single most complete form, while keeping genuinely distinct values
+    (such as different addresses or different names) as separate items in the
+    returned list.
+    """
+
+    field_name: Annotated[
+        str,
+        dspy.InputField(desc="Name of the list entity field being deduplicated"),
+    ]
+    field_type: Annotated[
+        str,
+        dspy.InputField(
+            desc="Semantic type of the field (name, address, url, email, phone, identifier, date, numeric, text)"
+        ),
+    ]
+    field_description: Annotated[
+        str,
+        dspy.InputField(
+            desc="Field-level merge annotation describing how values of this list field should be compared and deduplicated"
+        ),
+    ]
+    candidate_values: Annotated[
+        list[str],
+        dspy.InputField(desc="Candidate values collected across the matched records"),
+    ]
+    deduplicated_values: TextList
 
 
 class EdgeResolve(dspy.Signature):

@@ -19,11 +19,16 @@ from typing import Any
 import yaml
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from serf.dspy.schemas.base import annotated_merge_field, field_merge_instruction
 from serf.logs import get_logger
 from serf.merge.semantics import (
+    CARDINALITIES,
+    CARDINALITY_LIST,
+    CARDINALITY_SINGLE,
     DEDUPE_STRATEGIES,
     FIELD_TYPE_TEXT,
     MergePolicy,
+    normalize_cardinality,
     policy_for,
 )
 
@@ -65,10 +70,14 @@ class FieldMergeSpec(BaseModel):
         omitted.
     threshold : float | None
         Similarity above which two values are one value, for ``fuzzy``
+    cardinality : str | None
+        ``list`` to deduplicate values into a list of individual values, or
+        ``single`` to select one best value
     """
 
     dedupe: str | None = None
     threshold: float | None = None
+    cardinality: str | None = None
 
     @field_validator("dedupe")
     @classmethod
@@ -94,6 +103,17 @@ class FieldMergeSpec(BaseModel):
             raise ValueError(f"dedupe must be one of {DEDUPE_STRATEGIES}, got {value!r}")
         return value
 
+    @field_validator("cardinality", mode="before")
+    @classmethod
+    def _known_cardinality(cls, value: str | None) -> str | None:
+        """Validate and normalise optional field cardinality override."""
+        if value is None:
+            return None
+        normalised = normalize_cardinality(value)
+        if normalised not in CARDINALITIES:
+            raise ValueError(f"cardinality must be one of {CARDINALITIES}, got {value!r}")
+        return normalised
+
 
 class FieldSpec(BaseModel):
     """One field of an entity.
@@ -108,6 +128,10 @@ class FieldSpec(BaseModel):
     python_type : str | None
         Scalar type of a single value: ``str``, ``int``, ``float`` or ``bool``.
         Derived from ``type`` when omitted.
+    cardinality : str
+        ``list`` for fields that deduplicate into a list of individual values
+        (such as addresses or names), or ``single`` for singular fields where
+        a single best value is selected
     description : str
         What the field means, in the words the LLM should read. This reaches
         the prompt, so it is worth writing properly.
@@ -120,9 +144,19 @@ class FieldSpec(BaseModel):
     name: str
     type: str = FIELD_TYPE_TEXT
     python_type: str | None = None
+    cardinality: str = CARDINALITY_LIST
     description: str = ""
     required: bool = False
     merge: FieldMergeSpec | None = None
+
+    @field_validator("cardinality", mode="before")
+    @classmethod
+    def _validate_cardinality(cls, value: str) -> str:
+        """Validate and normalise the field's cardinality."""
+        normalised = normalize_cardinality(value)
+        if normalised not in CARDINALITIES:
+            raise ValueError(f"cardinality must be one of {CARDINALITIES}, got {value!r}")
+        return normalised
 
     @field_validator("type")
     @classmethod
@@ -191,12 +225,55 @@ class FieldSpec(BaseModel):
         MergePolicy
             The field type's configured policy, with any schema override on top
         """
-        base = policy_for(self.type)
+        base = policy_for(self.type, cardinality=self.cardinality)
         if self.merge is None:
             return base
         return MergePolicy(
             dedupe=self.merge.dedupe or base.dedupe,
             threshold=base.threshold if self.merge.threshold is None else self.merge.threshold,
+            cardinality=self.merge.cardinality or base.cardinality,
+        )
+
+    def is_list(self) -> bool:
+        """Return whether this field resolves to a list of values."""
+        return self.merge_policy().cardinality == CARDINALITY_LIST
+
+    def is_singular(self) -> bool:
+        """Return whether this field resolves to a single best value."""
+        return self.merge_policy().cardinality == CARDINALITY_SINGLE
+
+    def merge_description(self) -> str:
+        """Return the field description combined with its LLM merge instruction.
+
+        Returns
+        -------
+        str
+            Field-level merge semantics instruction for DSPy prompts
+        """
+        policy = self.merge_policy()
+        return field_merge_instruction(
+            self.type,
+            cardinality=policy.cardinality,
+            dedupe=policy.dedupe,
+            description=self.description,
+        )
+
+    def dspy_annotation(self) -> Any:
+        """Return the ``Annotated[..., dspy.OutputField(...)]`` type for this field.
+
+        Returns
+        -------
+        Any
+            DSPy annotated field type carrying the merge semantics for this field
+        """
+        policy = self.merge_policy()
+        return annotated_merge_field(
+            self.scalar_type(),
+            self.type,
+            cardinality=policy.cardinality,
+            dedupe=policy.dedupe,
+            description=self.description,
+            required=self.required,
         )
 
 
@@ -272,6 +349,46 @@ class EntitySchema(BaseModel):
             Field name to policy
         """
         return {field.name: field.merge_policy() for field in self.fields}
+
+    def singular_fields(self) -> list[str]:
+        """Return the names of fields that resolve to a single best value.
+
+        Returns
+        -------
+        list[str]
+            Singular field names in schema order
+        """
+        return [field.name for field in self.fields if field.is_singular()]
+
+    def list_fields(self) -> list[str]:
+        """Return the names of fields that resolve to a deduplicated list.
+
+        Returns
+        -------
+        list[str]
+            List field names in schema order
+        """
+        return [field.name for field in self.fields if field.is_list()]
+
+    def field_descriptions(self) -> dict[str, str]:
+        """Return each field's description, for LLM prompts.
+
+        Returns
+        -------
+        dict[str, str]
+            Field name to description
+        """
+        return {field.name: field.description for field in self.fields}
+
+    def dspy_field_annotations(self) -> dict[str, Any]:
+        """Return each field's DSPy ``Annotated[..., dspy.OutputField(...)]`` type.
+
+        Returns
+        -------
+        dict[str, Any]
+            Field name to DSPy annotated output type
+        """
+        return {field.name: field.dspy_annotation() for field in self.fields}
 
 
 def parse_schema(data: dict[str, Any]) -> EntitySchema:

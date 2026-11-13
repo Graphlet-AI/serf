@@ -9,16 +9,15 @@ logger = get_logger(__name__)
 
 # Field name patterns that suggest specific types
 NAME_PATTERNS = (
-    r"^(name|title|product_name|company_name|entity_name|display_name|full_name)$",
-    r"^(first_name|last_name|given_name|surname)$",
+    r"^(names?|titles?|product_names?|company_names?|entity_names?|display_names?|full_names?)$",
+    r"^(first_names?|last_names?|given_names?|surnames?|alias(es)?|aka|alternate_names?)$",
 )
-EMAIL_PATTERNS = r"^(email|e_mail|mail)$"
-URL_PATTERNS = r"^(url|website|link|uri|homepage)$"
-PHONE_PATTERNS = r"^(phone|tel|mobile|fax|contact_number)$"
-ADDRESS_PATTERNS = r"^(address|street|city|state|zip|country|location)$"
-IDENTIFIER_PATTERNS = r"^(id|uuid|sku|ean|upc|isbn|asin|identifier)$"
-DATE_PATTERNS = r"^(date|created|updated|timestamp|dob|birth_date)$"
-NUMERIC_PATTERNS = r"^(price|revenue|amount|count|quantity|num|size)$"
+EMAIL_PATTERNS = r"^(emails?|e_mails?|mails?|email_address(es)?)$"
+URL_PATTERNS = r"^(urls?|websites?|links?|uris?|homepages?)$"
+PHONE_PATTERNS = r"^(phones?|tels?|mobiles?|fax(es)?|contact_numbers?|phone_numbers?)$"
+IDENTIFIER_PATTERNS = r"^(ids?|uuids?|skus?|eans?|upcs?|isbns?|asins?|identifiers?)$"
+DATE_PATTERNS = r"^(dates?|created|updated|timestamps?|dobs?|birth_dates?)$"
+NUMERIC_PATTERNS = r"^(prices?|revenues?|amounts?|counts?|quantity|quantities|nums?|sizes?)$"
 
 # Value patterns (regex)
 EMAIL_VALUE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", re.IGNORECASE)
@@ -29,18 +28,30 @@ DATE_US = re.compile(r"^\d{1,2}/\d{1,2}/\d{2,4}")
 NUMERIC_VALUE = re.compile(r"^[\d\.,\-]+$")
 
 
+def _flatten_sample_values(values: list[Any]) -> list[Any]:
+    """Flatten scalar and list/tuple/set sample values into one list."""
+    flat: list[Any] = []
+    for item in values:
+        if isinstance(item, (list, tuple, set)):
+            flat.extend(_flatten_sample_values(list(item)))
+        else:
+            flat.append(item)
+    return flat
+
+
 def detect_field_type(field_name: str, values: list[Any]) -> str:
     """Detect the type of a field based on its name and sample values.
 
-    Returns one of: "name", "email", "url", "phone", "address",
-    "identifier", "date", "numeric", "text"
+    Returns one of: "name", "email", "url", "phone",
+    "identifier", "date", "numeric", "text".
+    Note: ``"address"`` is selected explicitly via the field type / schema
+    rather than inferred by regex on the field name or value.
 
     Uses both the field name (heuristics) and value patterns (regex):
     - "name", "title", "product_name" etc. -> "name"
     - Contains @ -> "email"
     - Starts with http/www -> "url"
     - Phone patterns (digits, dashes, parens) -> "phone"
-    - Street/city/state patterns -> "address"
     - All numeric -> "numeric"
     - Date patterns (YYYY-MM-DD, MM/DD/YYYY) -> "date"
     - High uniqueness + alphanumeric -> "identifier"
@@ -56,7 +67,7 @@ def detect_field_type(field_name: str, values: list[Any]) -> str:
     Returns
     -------
     str
-        Detected type: name, email, url, phone, address, identifier, date, numeric, text
+        Detected type: name, email, url, phone, identifier, date, numeric, text
     """
     name_lower = field_name.lower().replace(" ", "_")
 
@@ -70,8 +81,6 @@ def detect_field_type(field_name: str, values: list[Any]) -> str:
         return "url"
     if re.match(PHONE_PATTERNS, name_lower):
         return "phone"
-    if re.match(ADDRESS_PATTERNS, name_lower):
-        return "address"
     if re.match(IDENTIFIER_PATTERNS, name_lower):
         return "identifier"
     if re.match(DATE_PATTERNS, name_lower):
@@ -80,7 +89,8 @@ def detect_field_type(field_name: str, values: list[Any]) -> str:
         return "numeric"
 
     # Fall back to value-based detection
-    str_values = [str(v).strip() for v in values if v is not None and str(v).strip()]
+    flat_values = _flatten_sample_values(values)
+    str_values = [str(v).strip() for v in flat_values if v is not None and str(v).strip()]
     if not str_values:
         return "text"
 

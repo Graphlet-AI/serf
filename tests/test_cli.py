@@ -9,6 +9,9 @@ from click.testing import CliRunner
 
 from serf.cli.main import BENCHMARK_DATASETS, cli
 from serf.config import config
+from serf.dspy.types import Entity
+from serf.eval.benchmarks import BenchmarkDataset
+from serf.eval.splits import training_entity_ids
 
 
 def test_cli_help() -> None:
@@ -483,45 +486,47 @@ def test_benchmark_refuses_to_score_a_trained_prompt_on_training_data(
         ],
     )
     assert result.exit_code != 0
-    assert "Refusing to evaluate a trained prompt on training data" in result.output
+    assert "Refusing to evaluate on training data" in result.output
     assert "--eval-split holdout" in result.output
 
 
 def test_the_shipped_prompt_may_be_scored_over_all_the_data(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Nothing was optimized against it, and a full-table number needs every record."""
+    """Whole-run (--eval-split all) always excludes training and validation records."""
+    captured_ids: set[int] = set()
+
+    def fake_matching(
+        entities: list[Entity], *_args: object, **_kwargs: object
+    ) -> tuple[set[tuple[int, int]], list[Entity]]:
+        captured_ids.update(entity.id for entity in entities)
+        return set(), list(entities)
+
     monkeypatch.setattr("serf.cli.main.setup_mlflow", lambda: None)
-    monkeypatch.setattr(
-        "serf.cli.main._benchmark_llm_matching",
-        lambda *args, **kwargs: (set(), []),
-    )
+    monkeypatch.setattr("serf.cli.main._benchmark_llm_matching", fake_matching)
     runner = CliRunner()
     result = runner.invoke(
         cli,
         ["benchmark", "--dataset", "dblp-acm", "--eval-split", "all", "--limit", "1"],
     )
+    assert result.exit_code == 0
     assert "Refusing to evaluate" not in result.output
-    assert "scoring the shipped prompt" in result.output
+    assert "unseen by training" in result.output
+
+    ds = BenchmarkDataset.download("dblp-acm")
+    left, right = ds.to_entities()
+    trained = training_entity_ids("dblp-acm", left + right, ds.ground_truth, seed=42)
+    assert captured_ids
+    assert captured_ids & trained == set()
 
 
-def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Measuring the fit on purpose is allowed; it just has to be asked for."""
-    from serf.cli import main as cli_main
-
+def test_benchmark_always_refuses_training_splits(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Excluding training data from the evaluation loop is always enforced, never optional."""
     monkeypatch.setattr("serf.cli.main.setup_mlflow", lambda: None)
     monkeypatch.setattr(
         "serf.cli.main._benchmark_llm_matching",
         lambda *args, **kwargs: (set(), []),
     )
-    real_get = cli_main.serf_config.get
-
-    def fake_get(key: str, default: object = None) -> object:
-        if key == "benchmarks.require_disjoint_eval":
-            return False
-        return real_get(key, default)
-
-    monkeypatch.setattr(cli_main.serf_config, "get", fake_get)
     runner = CliRunner()
     result = runner.invoke(
         cli,
@@ -529,17 +534,14 @@ def test_benchmark_refusal_can_be_turned_off_deliberately(monkeypatch: pytest.Mo
             "benchmark",
             "--dataset",
             "dblp-acm",
-            "--signature-mode",
-            "per-dataset",
-            "--trained-prompts",
             "--eval-split",
             "val",
             "--limit",
             "1",
         ],
     )
-    assert "Refusing to evaluate" not in result.output
-    assert "WARNING" in result.output
+    assert result.exit_code != 0
+    assert "Refusing to evaluate on training data" in result.output
 
 
 def test_fine_tune_help() -> None:

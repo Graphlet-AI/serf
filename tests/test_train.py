@@ -462,7 +462,7 @@ def test_each_dataset_and_prompt_gets_its_own_gepa_state_directory() -> None:
     d = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs", blocking_model="other/model")
     e = run_log_dir("dblp-acm", "instructions A", log_dir="/tmp/logs", blocking_strategy="union")
     f = run_log_dir(
-        "dblp-acm", "instructions A", log_dir="/tmp/logs", student_model="openai/gpt-6-luna"
+        "dblp-acm", "instructions A", log_dir="/tmp/logs", student_model="other/student"
     )
     g = run_log_dir(
         "dblp-acm", "instructions A", log_dir="/tmp/logs", teacher_model="gemini/gemini-4-argon"

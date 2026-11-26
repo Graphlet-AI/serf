@@ -233,9 +233,9 @@ EVAL_SPLIT_ALL = "all"
 EVAL_SPLITS = (EVAL_SPLIT_HOLDOUT, EVAL_SPLIT_VAL, EVAL_SPLIT_TRAIN, EVAL_SPLIT_ALL)
 
 # The splits a prompt is fitted to. Training reads train, GEPA selects on val,
-# so a score on either is reading the fit back. Only holdout answers the
-# question a benchmark is asked.
-FITTED_SPLITS = (EVAL_SPLIT_VAL, EVAL_SPLIT_TRAIN, EVAL_SPLIT_ALL)
+# so a score on either is reading the fit back. Both holdout and all exclude
+# train and val records by construction.
+FITTED_SPLITS = (EVAL_SPLIT_VAL, EVAL_SPLIT_TRAIN)
 
 
 @dataclass
@@ -326,16 +326,6 @@ def select_eval_split(
     if split not in EVAL_SPLITS:
         raise ValueError(f"Unknown eval split {split!r}. Available: {EVAL_SPLITS}")
 
-    if split == EVAL_SPLIT_ALL:
-        return EvalSelection(
-            split=split,
-            records=sorted(entities, key=lambda entity: entity.id),
-            ground_truth=set(ground_truth),
-            total=len(entities),
-            gold_pairs=count_gold_pairs(entities, ground_truth),
-            overlaps_training=True,
-        )
-
     sizes = sizes or get_split_sizes(dataset)
     splits = sample_random_splits(
         entities,
@@ -345,11 +335,17 @@ def select_eval_split(
         holdout_records=sizes.holdout_records,
         seed=seed,
     )
-    chosen = {
-        EVAL_SPLIT_HOLDOUT: splits.holdout_records,
-        EVAL_SPLIT_VAL: splits.val_records,
-        EVAL_SPLIT_TRAIN: splits.train_records,
-    }[split]
+    trained_ids = {entity.id for entity in splits.train_records} | {
+        entity.id for entity in splits.val_records
+    }
+    if split == EVAL_SPLIT_ALL:
+        chosen = [entity for entity in entities if entity.id not in trained_ids]
+    else:
+        chosen = {
+            EVAL_SPLIT_HOLDOUT: splits.holdout_records,
+            EVAL_SPLIT_VAL: splits.val_records,
+            EVAL_SPLIT_TRAIN: splits.train_records,
+        }[split]
 
     ids = {entity.id for entity in chosen}
     kept = {(left, right) for left, right in ground_truth if left in ids and right in ids}
@@ -359,7 +355,7 @@ def select_eval_split(
         ground_truth=kept,
         total=len(entities),
         gold_pairs=len(kept),
-        overlaps_training=split in FITTED_SPLITS,
+        overlaps_training=split in FITTED_SPLITS or bool(ids & trained_ids),
     )
     logger.info(f"Evaluation split selected for {dataset}: {selection.describe()}")
     if not selection.records:
@@ -475,13 +471,14 @@ def exclude_training_from_eval(
     predicted_pairs: set[tuple[int, int]],
     seed: int | None = None,
     sizes: SplitSizes | None = None,
+    full_ground_truth: set[tuple[int, int]] | None = None,
 ) -> tuple[set[tuple[int, int]], set[tuple[int, int]], set[int]]:
     """Filter ground-truth and predicted pairs to exclude training and validation records.
 
-    When a benchmark run executes over the full table (``--eval-split all``),
-    scoring on ``train`` or ``val`` records mixes training fit into the
-    reported metric. Excluding any pair that touches a ``train`` or ``val``
-    record scores the whole-table run strictly on unseen records.
+    When a benchmark run executes, scoring on ``train`` or ``val`` records
+    mixes training fit into the reported metric. Excluding any pair that
+    touches a ``train`` or ``val`` record scores the run strictly on unseen
+    records.
 
     Parameters
     ----------
@@ -490,20 +487,24 @@ def exclude_training_from_eval(
     all_entities : list[Entity]
         Every record in the dataset
     ground_truth : set[tuple[int, int]]
-        Full ground-truth pairs
+        Ground-truth pairs to score against
     predicted_pairs : set[tuple[int, int]]
-        Predicted pairs from the full-table run
+        Predicted pairs from the run
     seed : int | None
         RNG seed. Defaults to config ``optimize.seed``.
     sizes : SplitSizes | None
         Record budgets. Defaults to this dataset's configured budgets.
+    full_ground_truth : set[tuple[int, int]] | None
+        Full dataset ground-truth pairs used to reconstruct match-group splits.
+        Defaults to ``ground_truth``.
 
     Returns
     -------
     tuple[set[tuple[int, int]], set[tuple[int, int]], set[int]]
         ``(unseen_ground_truth, unseen_predicted_pairs, unseen_entity_ids)``
     """
-    trained_ids = training_entity_ids(dataset, all_entities, ground_truth, seed=seed, sizes=sizes)
+    split_gt = full_ground_truth if full_ground_truth is not None else ground_truth
+    trained_ids = training_entity_ids(dataset, all_entities, split_gt, seed=seed, sizes=sizes)
     all_ids = {entity.id for entity in all_entities}
     unseen_ids = all_ids - trained_ids
     unseen_gt = {

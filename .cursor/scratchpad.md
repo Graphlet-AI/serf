@@ -280,6 +280,9 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   - Set `kwargs.setdefault("num_retries", 0)` in `VertexRefreshingLM.__init__` (`src/serf/dspy/lm.py`) so `dspy.LM`'s inner retry loop does not multiply `VertexRefreshingLM.forward`'s outer retry loop (`4 * 7 = 28` attempts).
   - Disabled `mlflow.autolog.log_traces` and `mlflow.autolog.log_traces_from_eval` in `config.yml` so `serf train` exits immediately after holdout evaluation without hanging in MLflow's `atexit` trace exporter.
   - Opened pull request #27 on branch `cursor/gepa-tuning-contrastive-blocking-66f9`.
+  - Addressed PR #30 review feedback:
+    - Kept `openai/gpt-oss-120b-maas` as student (`models.student`) and updated teacher (`models.teacher`) to `gemini/gemini-4-carbon` (`medium` reasoning effort), removing all `gpt-6-luna` / `OPENAI_API_KEY` additions.
+    - Removed `benchmarks.require_disjoint_eval` and made excluding training and validation records from the evaluation loop unconditional (`select_eval_split` filters out `train` and `val` records before blocking/matching on `--eval-split all`, `serf benchmark` unconditionally rejects any split or sample overlapping `train` or `val`, and `exclude_training_from_eval` always filters evaluation pairs and gold pairs).
 
 - **Research & Architecture Documentation Port from PR #19**:
 

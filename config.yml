@@ -40,7 +40,6 @@ models:
   max_tokens: 65536
   vertex_ai:
     location: "us-central1"
-    openai_location: "global"
     token_refresh_margin_seconds: 300
 
 optimize:
@@ -254,17 +253,10 @@ benchmarks:
   holdout_records: 1100
 
   # Which split `serf benchmark` scores. Training reads `train` and GEPA
-  # selects candidates on `val`, so a score on either reads the fit back
-  # rather than measuring anything. `holdout` is the only split that answers
-  # the question a benchmark is asked, so it is the default and the other
-  # splits have to be asked for by name.
+  # selects candidates on `val`, so training and validation records are always
+  # excluded from the evaluation loop. `holdout` scores the reserved holdout
+  # budget; `all` scores every record in the dataset outside `train` and `val`.
   eval_split: holdout
-
-  # Refuse to score records that training touched, rather than warning about
-  # it. Turning this off is how you deliberately measure the fit - to see how
-  # far a prompt has been bent to its validation set, say - and the run then
-  # says so in its output.
-  require_disjoint_eval: true
   # Candidates for `serf blocking-sweep`. Small CPU-friendly models only, since
   # blocking embeds every record on every ER iteration. The e5 and bge families
   # need their instruction prefix; the others are trained without one.

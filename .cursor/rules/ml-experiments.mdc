@@ -40,9 +40,9 @@ run, not a note.
 
 **How it is enforced.** `serf benchmark` scores the holdout split by default,
 drawing the same partition from the same budgets and seed that `serf train`
-uses, so the records it scores are the ones training reserved. Naming a split
-training read is refused outright rather than warned about, unless
-`benchmarks.require_disjoint_eval` is turned off to measure the fit on purpose.
+uses, so the records it scores are the ones training reserved. Training and
+validation records are always excluded from the evaluation loop, and naming a
+split training read is refused outright.
 `serf train` ends by scoring both prompts on the holdout, and that comparison
 decides whether it reports an improvement.
 

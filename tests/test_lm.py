@@ -26,9 +26,9 @@ def test_config_student_is_gpt_oss_120b() -> None:
 
 
 def test_config_teacher_is_gemini_35_flash_lite() -> None:
-    """Teacher/reflection LM is Gemini 4 Neon with medium reasoning effort."""
+    """Teacher/reflection LM is Gemini 4 Neon with large reasoning effort."""
     assert config.get("models.teacher") == "gemini/gemini-4-neon"
-    assert config.get("models.teacher_reasoning_effort") == "medium"
+    assert config.get("models.teacher_reasoning_effort") == "large"
     assert config.get("models.analyze_llm") == config.get("models.teacher")
 
 
@@ -142,7 +142,7 @@ def test_create_lm_student_uses_vertex(
 
 @patch("serf.dspy.lm.dspy.LM")
 def test_create_lm_teacher_uses_gemini(mock_lm: MagicMock, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Teacher LM uses Gemini 4 Neon (medium reasoning effort) with GEMINI_API_KEY."""
+    """Teacher LM uses Gemini 4 Neon (large/high reasoning effort) with GEMINI_API_KEY."""
     monkeypatch.setenv("GEMINI_API_KEY", "gemini-key")
     create_lm(role="teacher", temperature=1.0)
 
@@ -151,7 +151,7 @@ def test_create_lm_teacher_uses_gemini(mock_lm: MagicMock, monkeypatch: pytest.M
     assert model == "gemini/gemini-4-neon"
     assert kwargs["api_key"] == "gemini-key"
     assert kwargs["temperature"] == 1.0
-    assert kwargs["reasoning_effort"] == "medium"
+    assert kwargs["reasoning_effort"] == "high"
     assert "api_base" not in kwargs
 
 
@@ -432,9 +432,9 @@ def test_every_lm_carries_the_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_the_teacher_is_gemini_38_flash() -> None:
-    """Teacher LM is Gemini 4 Neon with medium reasoning effort."""
+    """Teacher LM is Gemini 4 Neon with large reasoning effort."""
     assert config.get("models.teacher") == "gemini/gemini-4-neon"
-    assert config.get("models.teacher_reasoning_effort") == "medium"
+    assert config.get("models.teacher_reasoning_effort") == "large"
 
 
 def test_the_teacher_has_room_for_its_reasoning_tokens() -> None:

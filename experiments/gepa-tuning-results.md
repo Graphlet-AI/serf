@@ -18,6 +18,19 @@ prompt is actually better on records nothing in the run was allowed to see.
 
 ## Results
 
+### Gemini 4 Neon teacher (`models.teacher_reasoning_effort: "large"`)
+
+| Dataset                              | Train ex | Val ex | Holdout ex | Val: written → trained | Holdout: written → trained | Holdout gain |
+| ------------------------------------ | -------: | -----: | ---------: | ---------------------- | -------------------------- | -----------: |
+| dblp-acm (contrastive, 35-val)       |       90 |     35 |         36 | 0.9845 → 0.9949        | 0.9863 → 0.9891            |  **+0.0028** |
+| abt-buy (contrastive, 25-val)        |       22 |     25 |         25 | 0.9125 → 0.9688        | 0.9075 → 0.9569            |  **+0.0494** |
+| amazon-google (contrastive, 35-val)  |       69 |     35 |         35 | 0.8241 → 0.8430        | 0.8121 → 0.8562            |  **+0.0441** |
+| walmart-amazon (contrastive, 35-val) |      139 |     35 |         42 | 0.8576 → 0.9495        | 0.8528 → 0.9686            |  **+0.1158** |
+| dblp-scholar (contrastive, 35-val)   |      118 |     35 |         44 | 0.5784 → 0.9585        | 0.6671 → 0.9661            |  **+0.2990** |
+| **5-dataset mean (Neon `large`)**    |          |        |            | **0.8314 → 0.9429**    | **0.8452 → 0.9474**        |  **+0.1022** |
+
+### Previous Gemini 4 Argon teacher (`models.teacher_reasoning_effort: "medium"`)
+
 | Dataset                              | Train ex | Val ex | Holdout ex | Val: written → trained | Holdout: written → trained | Holdout gain |
 | ------------------------------------ | -------: | -----: | ---------: | ---------------------- | -------------------------- | -----------: |
 | amazon-google (default BGE, 6-val)   |       33 |      6 |         32 | 0.8997 → 0.9376        | 0.8550 → 0.8566            |  **+0.0016** |
@@ -26,7 +39,63 @@ prompt is actually better on records nothing in the run was allowed to see.
 | amazon-google (contrastive, 35-val)  |       66 |     35 |         35 | 0.8253 → 0.9236        | 0.8213 → 0.8982            |  **+0.0769** |
 | walmart-amazon (contrastive, 35-val) |      140 |     35 |         42 | 0.8745 → 0.9471        | 0.8785 → 0.9533            |  **+0.0748** |
 | dblp-scholar (contrastive, 35-val)   |      119 |     35 |         44 | 0.6016 → 0.9685        | 0.6661 → 0.9577            |  **+0.2916** |
-| **5-dataset mean (contrastive)**     |          |        |            | **0.8329 → 0.9613**    | **0.8523 → 0.9492**        |  **+0.0969** |
+| **5-dataset mean (Argon `medium`)**  |          |        |            | **0.8329 → 0.9613**    | **0.8523 → 0.9492**        |  **+0.0969** |
+
+## Gemini 4 Neon (`large` / `"high"` reasoning effort) across all five datasets
+
+With `models.teacher: "gemini/gemini-4-neon"` and `models.teacher_reasoning_effort: "large"`
+(mapped to LiteLLM `reasoning_effort="high"` and `models.teacher_request_timeout_seconds: 360`),
+the reflection teacher spends 15,000–25,000 reasoning tokens per reflection call before
+emitting detailed instruction rewrites (`8,490` to `24,774` characters). On four of the five
+datasets (`dblp-acm`, `abt-buy`, `walmart-amazon`, and `dblp-scholar`), Gemini 4 Neon (`large`)
+surpassed the previous Gemini 4 Argon (`medium`) disjoint holdout F1:
+
+- **`dblp-acm` (`90` train / `35` val / `36` holdout blocks)**:
+  - **Candidate 0 (shipped baseline)**: validation F1 **0.9845**, holdout F1 **0.9863**.
+  - **Candidate 1 (Iteration 1)**: validation F1 **0.9900**, Pareto frontier **0.9936**.
+  - **Candidate 2 (Iteration 2, winner)**: validation F1 **0.9949** (**+0.0104** over baseline,
+    30 of 35 validation blocks at 1.0000), Pareto frontier **1.0000** (every single one of the
+    35 validation blocks solved at 1.0000 by `{Candidate 0, Candidate 1, Candidate 2}`),
+    disjoint holdout F1 **0.9891** (**+0.0028** over baseline, surpassing Argon's **0.9849**).
+  - **Candidate 3 (Iteration 12)**: validation F1 **0.9887**.
+  - Saved `8,112 → 14,607` character instructions to `data/trained_prompts/dblp-acm_gepa.json`.
+
+- **`abt-buy` (`22` train / `25` val / `25` holdout blocks)**:
+  - **Candidate 0 (shipped baseline)**: validation F1 **0.9125**, holdout F1 **0.9075**.
+  - **Candidate 1 (Iteration 1)**: validation F1 **0.9670**, Pareto frontier **0.9760**.
+  - **Candidate 2 (Iteration 2)**: validation F1 **0.9662**, Pareto frontier **0.9788**.
+  - **Candidate 3 (Iteration 3)**: validation F1 **0.9679**, Pareto frontier **0.9797**.
+  - **Candidate 4 (Iteration 4, winner)**: validation F1 **0.9688** (**+0.0563** over baseline),
+    Pareto frontier **0.9797**, disjoint holdout F1 **0.9569** (**+0.0494** over baseline,
+    surpassing Argon's **0.9517**).
+  - Saved `9,338 → 24,774` character instructions to `data/trained_prompts/abt-buy_gepa.json`.
+
+- **`walmart-amazon` (`139` train / `35` val / `42` holdout blocks, `--max-metric-calls 320`)**:
+  - **Candidate 0 (shipped baseline)**: validation F1 **0.8576**, holdout F1 **0.8528**.
+  - **Candidates 1–5 (Iterations 2, 5, 6, 7, 11)**: climbed steadily `0.8743 → 0.8756 → 0.8792 → 0.8815`
+    (Pareto frontier **0.9188**).
+  - **Candidate 6 (Iteration 12, winner)**: validation F1 **0.9495** (**+0.0919** over baseline,
+    30 of 35 validation blocks at 1.0000), Pareto frontier **0.9654**, disjoint holdout F1
+    **0.9686** (**+0.1158** over baseline, surpassing Argon's **0.9533** by **+0.0153**).
+  - Saved `7,315 → 10,628` character instructions to `data/trained_prompts/walmart-amazon_gepa.json`.
+
+- **`dblp-scholar` (`118` train / `35` val / `44` holdout blocks)**:
+  - **Candidate 0 (shipped baseline)**: validation F1 **0.5784**, holdout F1 **0.6671**.
+  - **Candidate 1 (Iteration 1, winner)**: validation F1 **0.9585** (**+0.3801** over baseline),
+    disjoint holdout F1 **0.9661** (**+0.2990** over baseline, surpassing Argon's **0.9577** by
+    **+0.0084**).
+  - **Candidates 2 and 3 (Iterations 2 and 3)**: validation F1 **0.9528** and **0.9499**,
+    lifting the Pareto frontier aggregate to **0.9675**.
+  - Saved `6,379 → 8,490` character instructions to `data/trained_prompts/dblp-scholar_gepa.json`.
+
+- **`amazon-google` (`69` train / `35` val / `35` holdout blocks, `--max-metric-calls 480`)**:
+  - **Candidate 0 (shipped baseline)**: validation F1 **0.8241**, holdout F1 **0.8121**.
+  - **Candidates 1–8 (Iterations 1–10)**: climbed `0.7907 → 0.8006 → 0.8090 → 0.8151 → 0.8227 → 0.8244`
+    (Pareto frontier **0.8553**).
+  - **Candidate 9 (Iteration 11, winner)**: validation F1 **0.8430** (**+0.0189** over baseline),
+    Pareto frontier **0.8789** (by Iteration 13), disjoint holdout F1 **0.8562** (**+0.0441**
+    over baseline).
+  - Saved `8,993 → 11,768` character instructions to `data/trained_prompts/amazon-google_gepa.json`.
 
 ## Abt-Buy with contrastive fine-tuned blocking (25 validation blocks, 25 holdout blocks)
 
@@ -289,3 +358,28 @@ Two things follow for the setup rather than for the prompt:
   `/opt/cursor/artifacts/gepa_train_dblp_scholar.log`. State:
   `data/gepa_logs/dblp-scholar/6d4a5d87e2d4/gepa_state.bin`. Program:
   `data/trained_prompts/dblp-scholar_gepa.json`.
+- **Gemini 4 Neon (`large`) 5-dataset training run**: Trained on branch
+  `cursor/gepa-neon-training-66f9` (`seed=42`,
+  `student=openai/gpt-oss-120b-maas`, `teacher=gemini/gemini-4-neon` with
+  `teacher_reasoning_effort=large` mapped to `reasoning_effort="high"`):
+  - `dblp-acm` (`--max-metric-calls 155 --num-threads 8`): Log
+    `/opt/cursor/artifacts/gepa_neon_train_dblp-acm.log`, state
+    `data/gepa_logs/dblp-acm/ef1df1cc47de/gepa_state.bin`, program
+    `data/trained_prompts/dblp-acm_gepa.json`.
+  - `abt-buy` (`--max-metric-calls 155 --num-threads 8`): Log
+    `/opt/cursor/artifacts/gepa_neon_train_abt-buy.log`, state
+    `data/gepa_logs/abt-buy/02ebad0eb9a8/gepa_state.bin`, program
+    `data/trained_prompts/abt-buy_gepa.json`.
+  - `amazon-google` (`--max-metric-calls 480 --num-threads 8`): Logs
+    `/opt/cursor/artifacts/gepa_neon_train_amazon-google.log` and
+    `/opt/cursor/artifacts/gepa_neon_train_amazon-google_320.log`, state
+    `data/gepa_logs/amazon-google/797b027ca334/gepa_state.bin`, program
+    `data/trained_prompts/amazon-google_gepa.json`.
+  - `walmart-amazon` (`--max-metric-calls 320 --num-threads 8`): Log
+    `/opt/cursor/artifacts/gepa_neon_train_walmart-amazon.log`, state
+    `data/gepa_logs/walmart-amazon/59a3f3c3fae8/gepa_state.bin`, program
+    `data/trained_prompts/walmart-amazon_gepa.json`.
+  - `dblp-scholar` (`--max-metric-calls 155 --num-threads 6`): Log
+    `/opt/cursor/artifacts/gepa_neon_train_dblp-scholar.log`, state
+    `data/gepa_logs/dblp-scholar/d086b6bcc8ad/gepa_state.bin`, program
+    `data/trained_prompts/dblp-scholar_gepa.json`.

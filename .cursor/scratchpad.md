@@ -239,6 +239,7 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
 - [x] Launch GEPA training on `amazon-google` and `dblp-acm` with improved blocking in tmux session `gepa-train`
 - [x] Configure teacher model to `gemini/gemini-4-argon` with `models.teacher_reasoning_effort: "medium"` in `config.yml` and `src/serf/dspy/lm.py`
 - [x] Complete GEPA training with improved blocking model and record validation & holdout metrics in `experiments/gepa-tuning-results.md`
+- [x] Configure `gemini/gemini-4-neon` teacher with `models.teacher_reasoning_effort: "large"` (`reasoning_effort="high"`) and run 5-dataset GEPA training + disjoint holdout evaluation
 - [x] Final verification: linters, typecheck, tests, commit, push, update PR
 
 ## Executor's Feedback or Assistance Requests
@@ -283,6 +284,13 @@ in `experiments/per-dataset-signature-baseline.md` and summarised in the README.
   - Addressed PR #30 review feedback:
     - Kept `openai/gpt-oss-120b-maas` as student (`models.student`) and updated teacher (`models.teacher`) to `gemini/gemini-4-neon` (`medium` reasoning effort), removing all `gpt-6-luna` / `OPENAI_API_KEY` additions.
     - Removed `benchmarks.require_disjoint_eval` and made excluding training and validation records from the evaluation loop unconditional (`select_eval_split` filters out `train` and `val` records before blocking/matching on `--eval-split all`, `serf benchmark` unconditionally rejects any split or sample overlapping `train` or `val`, and `exclude_training_from_eval` always filters evaluation pairs and gold pairs).
+  - Completed new 5-dataset GEPA training run with `gemini/gemini-4-neon` as teacher configured at `models.teacher_reasoning_effort: "large"` (`reasoning_effort="high"`, `models.teacher_request_timeout_seconds: 360`) on branch `cursor/gepa-neon-training-66f9`:
+    - `dblp-acm`: validation F1 `0.9845 -> 0.9949` (`+0.0104`, Pareto front `1.0000`), disjoint holdout F1 `0.9863 -> 0.9891` (`+0.0028`).
+    - `abt-buy`: validation F1 `0.9125 -> 0.9688` (`+0.0563`, Pareto front `0.9797`), disjoint holdout F1 `0.9075 -> 0.9569` (`+0.0494`).
+    - `amazon-google`: validation F1 `0.8241 -> 0.8430` (`+0.0189`, Pareto front `0.8789`), disjoint holdout F1 `0.8121 -> 0.8562` (`+0.0441`).
+    - `walmart-amazon`: validation F1 `0.8576 -> 0.9495` (`+0.0919`, Pareto front `0.9654`), disjoint holdout F1 `0.8528 -> 0.9686` (`+0.1158`).
+    - `dblp-scholar`: validation F1 `0.5784 -> 0.9585` (`+0.3801`, Pareto front `0.9675`), disjoint holdout F1 `0.6671 -> 0.9661` (`+0.2990`).
+    - 5-dataset mean F1: validation `0.8314 -> 0.9429` (`+0.1115`), disjoint holdout `0.8452 -> 0.9474` (`+0.1022`), surpassing the Argon teacher run on 4 of 5 datasets (`dblp-acm`, `abt-buy`, `walmart-amazon`, and `dblp-scholar`).
 
 - **Research & Architecture Documentation Port from PR #19**:
 

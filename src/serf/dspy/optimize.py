@@ -414,9 +414,17 @@ def optimize_module(
     )
     auto_budget: Literal["light", "medium", "heavy"] | None = None
     if resolved_metric_calls is None and resolved_full_evals is None:
-        auto_budget = cast(
-            Literal["light", "medium", "heavy"],
-            auto or config.get("optimize.auto", "light"),
+        raw_auto = str(auto or config.get("optimize.auto", "light")).lower()
+        auto_aliases: dict[str, Literal["light", "medium", "heavy"]] = {
+            "small": "light",
+            "light": "light",
+            "medium": "medium",
+            "large": "heavy",
+            "heavy": "heavy",
+        }
+        auto_budget = auto_aliases.get(
+            raw_auto,
+            cast(Literal["light", "medium", "heavy"], raw_auto),
         )
     log_dir = log_dir or config.get("optimize.log_dir", "data/gepa_logs")
     resolved_threads = (

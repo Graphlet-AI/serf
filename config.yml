@@ -9,7 +9,8 @@ models:
   # in-flight calls never returned and the async gather they belonged to could
   # not finish. LiteLLM retries a timeout, so a bounded wait costs a retry
   # where an unbounded one costs the run.
-  request_timeout_seconds: 90
+  request_timeout_seconds: 60
+  teacher_request_timeout_seconds: 360
 
   # The blocking embedding. It won `serf blocking-sweep` over the five Leipzig
   # benchmarks against every candidate that fits 3B parameters and 1024
@@ -27,13 +28,13 @@ models:
   # sides get the same prefix. Leave empty for models trained without one.
   embedding_prompt: "Represent this sentence for searching relevant passages: "
   student: "openai/gpt-oss-120b-maas"
-  # Gemini 4 Neon (with medium reasoning effort) is the teacher/reflection model.
+  # Gemini 4 Neon (configured size large) is the teacher/reflection model.
   # Thinking models spend reasoning tokens before emitting instruction rewrites,
   # and return empty content when max_tokens is too small. models.max_tokens
   # below is 65536, so there is room, and teacher_reasoning_effort sets the
-  # thinking budget to "medium".
+  # thinking budget to "large" (normalized to LiteLLM's "high" reasoning effort).
   teacher: "gemini/gemini-4-neon"
-  teacher_reasoning_effort: "medium"
+  teacher_reasoning_effort: "large"
   llm: "${models.student}"
   analyze_llm: "${models.teacher}"
   temperature: 0.0

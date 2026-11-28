@@ -1189,7 +1189,7 @@ def prompts(
 )
 @click.option(
     "--auto",
-    type=click.Choice(["light", "medium", "heavy"], case_sensitive=False),
+    type=click.Choice(["light", "medium", "heavy", "large"], case_sensitive=False),
     default=None,
     help="GEPA budget preset (from config.yml optimize.auto)",
 )

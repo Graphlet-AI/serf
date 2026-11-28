@@ -256,7 +256,7 @@ serf profile-benchmark --dataset abt-buy --output data/abt_buy_profile.md
 
 ### 3. Prompt Optimization with DSPy GEPA
 
-SERF uses GEPA to iteratively optimize DSPy matching signatures, using a student LM (`openai/gpt-oss-120b-maas`) guided by a reflection teacher LM (`gemini/gemini-4-neon` at `medium` reasoning effort):
+SERF uses GEPA to iteratively optimize DSPy matching signatures, using a student LM (`openai/gpt-oss-120b-maas`) guided by a reflection teacher LM (`gemini/gemini-4-neon` at `large` / `"high"` reasoning effort):
 
 ```bash
 # Inspect generated DSPy signatures and rendered prompts
@@ -371,10 +371,11 @@ All configuration is centralized in `config.yml` and accessed through `serf.conf
 models:
   student: "openai/gpt-oss-120b-maas" # Fast open-weight task model
   teacher: "gemini/gemini-4-neon" # Reflection model for GEPA
-  teacher_reasoning_effort: "medium"
+  teacher_reasoning_effort: "large"
   llm: "${models.student}"
   embedding: "BAAI/bge-small-en-v1.5" # Vector blocking model
-  request_timeout_seconds: 90
+  request_timeout_seconds: 60
+  teacher_request_timeout_seconds: 360
 
 optimize:
   auto: "light"

@@ -480,6 +480,7 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
         f"/locations/{location}/endpoints/openapi"
     )
     logger.info(f"Using Vertex AI MaaS endpoint in {location} for {model}")
+    os.environ.setdefault("OPENAI_MAX_RETRIES", "0")
     # LiteLLM treats the first "openai/" as a provider prefix and strips it.
     # Vertex's OpenAI-compatible endpoint requires publisher/model in the body.
     litellm_model = model
@@ -520,6 +521,12 @@ def _create_vertex_maas_lm(model: str, *, temperature: float, max_tokens: int) -
     return lm
 
 
+_REASONING_EFFORT_ALIASES: dict[str, str] = {
+    "small": "low",
+    "large": "high",
+}
+
+
 def _create_gemini_lm(
     model: str,
     *,
@@ -538,7 +545,7 @@ def _create_gemini_lm(
     max_tokens : int
         Max output tokens
     reasoning_effort : str | None
-        Optional reasoning effort level (e.g. ``low``, ``medium``, ``high``)
+        Optional reasoning effort level (e.g. ``low``, ``medium``, ``high``, ``large``)
 
     Returns
     -------
@@ -555,15 +562,21 @@ def _create_gemini_lm(
         raise ValueError("GEMINI_API_KEY environment variable required")
     extra_kwargs: dict[str, Any] = {}
     if reasoning_effort is not None:
-        extra_kwargs["reasoning_effort"] = reasoning_effort
+        normalized_effort = _REASONING_EFFORT_ALIASES.get(
+            reasoning_effort.lower(), reasoning_effort
+        )
+        extra_kwargs["reasoning_effort"] = normalized_effort
     effective_max_tokens = max_tokens
     if any(m in model.lower() for m in ("gemini-4-carbon", "gemini-4-argon")):
         effective_max_tokens = min(max_tokens, 32768)
+    timeout = request_timeout()
+    if reasoning_effort is not None:
+        timeout = max(timeout, int(config.get("models.teacher_request_timeout_seconds", 240)))
     return dspy.LM(
         model,
         api_key=api_key,
         temperature=temperature,
         max_tokens=effective_max_tokens,
-        timeout=request_timeout(),
+        timeout=timeout,
         **extra_kwargs,
     )

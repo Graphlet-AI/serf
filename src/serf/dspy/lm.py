@@ -532,7 +532,7 @@ def _create_gemini_lm(
     Parameters
     ----------
     model : str
-        Gemini model identifier (e.g. ``gemini/gemini-4-argon``)
+        Gemini model identifier (e.g. ``gemini/gemini-4-neon``)
     temperature : float
         Sampling temperature
     max_tokens : int
@@ -556,11 +556,14 @@ def _create_gemini_lm(
     extra_kwargs: dict[str, Any] = {}
     if reasoning_effort is not None:
         extra_kwargs["reasoning_effort"] = reasoning_effort
+    effective_max_tokens = max_tokens
+    if any(m in model.lower() for m in ("gemini-4-carbon", "gemini-4-argon")):
+        effective_max_tokens = min(max_tokens, 32768)
     return dspy.LM(
         model,
         api_key=api_key,
         temperature=temperature,
-        max_tokens=max_tokens,
+        max_tokens=effective_max_tokens,
         timeout=request_timeout(),
         **extra_kwargs,
     )

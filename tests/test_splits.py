@@ -295,7 +295,6 @@ def test_sample_random_splits_uses_config_defaults() -> None:
 def test_the_eval_split_defaults_to_the_one_training_never_reads() -> None:
     """Separation by construction: the default is holdout, not whatever is convenient."""
     assert config.get("benchmarks.eval_split") == EVAL_SPLIT_HOLDOUT
-    assert config.get("benchmarks.require_disjoint_eval") is True
 
 
 def test_selecting_the_holdout_gives_records_training_never_sees() -> None:
@@ -355,20 +354,29 @@ def test_the_fitted_splits_declare_that_training_saw_them() -> None:
     entities = _entities(4000)
     sizes = SplitSizes(train_records=1000, val_records=200, holdout_records=1000)
 
-    for split in (EVAL_SPLIT_TRAIN, EVAL_SPLIT_VAL, EVAL_SPLIT_ALL):
+    for split in (EVAL_SPLIT_TRAIN, EVAL_SPLIT_VAL):
         selection = select_eval_split(
             "dblp-acm", entities, set(), split=split, seed=11, sizes=sizes
         )
         assert selection.overlaps_training is True, split
 
 
-def test_selecting_everything_returns_the_whole_dataset() -> None:
-    entities = _entities(100)
+def test_selecting_everything_always_excludes_training_data() -> None:
+    entities = _entities(4000)
+    sizes = SplitSizes(train_records=1000, val_records=200, holdout_records=1000)
 
-    selection = select_eval_split("dblp-acm", entities, set(), split=EVAL_SPLIT_ALL, seed=1)
+    selection = select_eval_split(
+        "dblp-acm", entities, set(), split=EVAL_SPLIT_ALL, seed=1, sizes=sizes
+    )
+    splits = sample_random_splits(
+        entities, set(), train_records=1000, val_records=200, holdout_records=1000, seed=1
+    )
+    trained = {e.id for e in splits.train_records} | {e.id for e in splits.val_records}
 
-    assert len(selection.records) == 100
-    assert selection.total == 100
+    assert len(selection.records) == 2800
+    assert selection.total == 4000
+    assert {e.id for e in selection.records} & trained == set()
+    assert selection.overlaps_training is False
 
 
 def test_an_unknown_split_name_is_rejected() -> None:
@@ -393,3 +401,24 @@ def test_the_three_splits_partition_the_records_they_cover() -> None:
     assert chosen[EVAL_SPLIT_TRAIN] & chosen[EVAL_SPLIT_VAL] == set()
     assert chosen[EVAL_SPLIT_TRAIN] & chosen[EVAL_SPLIT_HOLDOUT] == set()
     assert chosen[EVAL_SPLIT_VAL] & chosen[EVAL_SPLIT_HOLDOUT] == set()
+
+
+def test_exclude_training_from_eval_removes_train_and_val_pairs() -> None:
+    """Whole-run evaluation excludes all records and pairs from train and val."""
+    from serf.eval.splits import exclude_training_from_eval, training_entity_ids
+
+    entities = _entities(4000)
+    ground_truth = {(i, i + 2000) for i in range(400)}
+    sizes = SplitSizes(train_records=1000, val_records=200, holdout_records=1000)
+    trained_ids = training_entity_ids("dblp-acm", entities, ground_truth, seed=11, sizes=sizes)
+    predicted_pairs = set(ground_truth) | {(0, 2001), (399, 2398)}
+
+    unseen_gt, unseen_pred, unseen_ids = exclude_training_from_eval(
+        "dblp-acm", entities, ground_truth, predicted_pairs, seed=11, sizes=sizes
+    )
+
+    assert unseen_ids & trained_ids == set()
+    assert len(unseen_ids) == 4000 - len(trained_ids)
+    assert unseen_gt
+    assert all(left not in trained_ids and right not in trained_ids for left, right in unseen_gt)
+    assert all(left not in trained_ids and right not in trained_ids for left, right in unseen_pred)

@@ -4,10 +4,9 @@ from unittest.mock import MagicMock, patch
 
 from click.testing import CliRunner, Result
 
-from serf.cli.main import _benchmark_llm_matching, cli, serf_config
+from serf.cli.main import _benchmark_llm_matching, cli
 from serf.dspy.types import BlockResolution, Entity, MatchDecision
-
-_REAL_CONFIG_GET = serf_config.get
+from serf.eval.splits import SplitSizes
 
 
 def _make_entities(n: int, id_offset: int = 0) -> list[Entity]:
@@ -74,35 +73,16 @@ def _run_benchmark_cli(
     mock_bd_cls.download.return_value = _make_benchmark_data()
     mock_config.get.return_value = "test-model"
 
-    # These tests exercise the iteration loop on an eight-record synthetic
-    # dataset, which is far too small to carry a holdout split. They therefore
-    # take the documented escape hatch: score everything, and say so. That is
-    # the only way to evaluate on records training would also read.
+    # Size splits for the eight-record synthetic test dataset so all eight
+    # synthetic records belong to the holdout split.
     runner = CliRunner()
-    with patch.object(serf_config, "get", side_effect=_config_without_split_enforcement):
+    with patch(
+        "serf.eval.splits.get_split_sizes",
+        return_value=SplitSizes(train_records=0, val_records=0, holdout_records=8),
+    ):
         return runner.invoke(
             cli, ["benchmark", "--eval-split", "all"] + args, catch_exceptions=False
         )
-
-
-def _config_without_split_enforcement(key: str, default: object = None) -> object:
-    """Answer config lookups as normal, but allow scoring training data.
-
-    Parameters
-    ----------
-    key : str
-        Dotted config path
-    default : object
-        Fallback the caller supplied
-
-    Returns
-    -------
-    object
-        ``False`` for the disjoint-eval guard, otherwise the configured value
-    """
-    if key == "benchmarks.require_disjoint_eval":
-        return False
-    return _REAL_CONFIG_GET(key, default)
 
 
 # ── 1. --max-iterations argument is accepted and forwarded ──────────────

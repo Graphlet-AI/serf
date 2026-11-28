@@ -532,7 +532,7 @@ def _create_gemini_lm(
     Parameters
     ----------
     model : str
-        Gemini model identifier (e.g. ``gemini/gemini-4-carbon``)
+        Gemini model identifier (e.g. ``gemini/gemini-4-neon``)
     temperature : float
         Sampling temperature
     max_tokens : int
@@ -553,7 +553,7 @@ def _create_gemini_lm(
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable required")
-    extra_kwargs: dict[str, Any] = {"engine": "litellm"}
+    extra_kwargs: dict[str, Any] = {}
     if reasoning_effort is not None:
         extra_kwargs["reasoning_effort"] = reasoning_effort
     effective_max_tokens = max_tokens

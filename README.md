@@ -180,7 +180,7 @@ Set your LLM credentials in a `.env` file or export them in your shell:
 export GOOGLE_CLOUD_PROJECT="your-gcp-project"
 export VERTEX_AI_TOKEN="your-vertex-token"
 
-# Gemini API (for Gemini 4 Carbon teacher/reflection model)
+# Gemini API (for Gemini 4 Neon teacher/reflection model)
 export GEMINI_API_KEY="your-gemini-api-key"
 ```
 
@@ -256,7 +256,7 @@ serf profile-benchmark --dataset abt-buy --output data/abt_buy_profile.md
 
 ### 3. Prompt Optimization with DSPy GEPA
 
-SERF uses GEPA to iteratively optimize DSPy matching signatures, using a student LM (`openai/gpt-oss-120b-maas`) guided by a reflection teacher LM (`gemini/gemini-4-carbon` at `medium` reasoning effort):
+SERF uses GEPA to iteratively optimize DSPy matching signatures, using a student LM (`openai/gpt-oss-120b-maas`) guided by a reflection teacher LM (`gemini/gemini-4-neon` at `medium` reasoning effort):
 
 ```bash
 # Inspect generated DSPy signatures and rendered prompts
@@ -370,7 +370,7 @@ All configuration is centralized in `config.yml` and accessed through `serf.conf
 ```yaml
 models:
   student: "openai/gpt-oss-120b-maas" # Fast open-weight task model
-  teacher: "gemini/gemini-4-carbon" # Reflection model for GEPA
+  teacher: "gemini/gemini-4-neon" # Reflection model for GEPA
   teacher_reasoning_effort: "medium"
   llm: "${models.student}"
   embedding: "BAAI/bge-small-en-v1.5" # Vector blocking model
